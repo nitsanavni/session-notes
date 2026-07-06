@@ -176,6 +176,48 @@ func (b *Board) Section(title string) *Section {
 	return nil
 }
 
+// FindByRawInSection returns the first item within the section titled
+// sectionTitle whose exact source line (Raw) equals raw, searching the whole
+// item tree (nested replies included) in document order, or nil. It is used by
+// the TUI's rebase to relocate a mutation's target in a freshly-reparsed disk
+// tree by its verbatim line — a stable identity across an external edit that did
+// not touch that particular line. An empty raw never matches (it would collide
+// with blank continuation lines), so callers treat "" as "target gone".
+func (b *Board) FindByRawInSection(sectionTitle, raw string) *Item {
+	if raw == "" {
+		return nil
+	}
+	s := b.Section(sectionTitle)
+	if s == nil {
+		return nil
+	}
+	var found *Item
+	var walk func(items []*Item)
+	walk = func(items []*Item) {
+		for _, it := range items {
+			if found != nil {
+				return
+			}
+			if it.Raw() == raw {
+				found = it
+				return
+			}
+			walk(it.Children)
+		}
+	}
+	walk(s.Items)
+	return found
+}
+
+// SectionTitleOf returns the title of the section whose item tree contains
+// target (at any depth), or "" if target is not on the board.
+func (b *Board) SectionTitleOf(target *Item) string {
+	if s := b.sectionOf(target); s != nil {
+		return s.Title
+	}
+	return ""
+}
+
 // UrgentOpenItems returns all recognized items that are urgent and not done,
 // including nested replies, in document order.
 func (b *Board) UrgentOpenItems() []*Item {

@@ -74,7 +74,8 @@ This session has a shared board (markdown) that you and the user both maintain:
     cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp board snap; done
 - Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
 - Preserve any content you don't understand; edit surgically.
-`, path)
+- The user edits this file concurrently, so serialize your writes: take an exclusive flock on the sidecar lock file "%s.lock" (NOT the board), then read → modify → write to a temp file → rename over the board, then release. This is the same lock the TUI uses; it keeps your edits and the user's from clobbering each other. Example: flock "%s.lock" -c 'edit-and-atomically-replace board'.
+`, path, path, path)
 
 	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
 		fmt.Fprintf(stdout, "\nBoards from previous sessions in this project (read them for history/context if useful):\n")
