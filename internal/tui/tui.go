@@ -50,8 +50,13 @@ type model struct {
 	prevMode mode // mode to return to after input/help
 
 	// board view state
-	path      string
-	board     *board.Board
+	path  string
+	board *board.Board
+	// lastDisk is the content the model believes is currently on disk: the exact
+	// bytes it last loaded or last wrote. Save-with-rebase re-reads disk under the
+	// lock and compares against this to tell a genuine concurrent external write
+	// apart from our own echo, so it merges the former instead of clobbering it.
+	lastDisk  string
 	positions []navItem // navigable (parsed) items, in document order
 	cursor    int       // index into positions; -1 when there are none
 	selSec    int       // active section (authoritative for `a` and tab)
@@ -150,6 +155,14 @@ func (m *model) openBoard(path string) error {
 	m.path = path
 	m.board = b
 	m.mode = modeBoard
+	// Seed the last-known-disk state from the exact file bytes so the first save
+	// does not see a phantom external change (Render may differ from source only
+	// in cosmetic whitespace, but starting from the real bytes avoids even that).
+	if data, rerr := os.ReadFile(path); rerr == nil {
+		m.lastDisk = string(data)
+	} else {
+		m.lastDisk = b.Render()
+	}
 	m.rebuildPositions()
 	if m.watch != nil {
 		m.watch.close()
@@ -214,10 +227,46 @@ func (m *model) onHeader() (*board.Section, bool) {
 	return m.board.Sections[p.sec], true
 }
 
+// save is the plain last-writer-wins save: it writes the whole in-memory tree
+// under the board lock. Used by the structural / one-keystroke mutations
+// (status cycle, urgent toggle, archive, delete, add-section) that are cheap to
+// redo and do not rebase. The lock still guarantees the write can't interleave
+// with an external writer; it just does not merge a concurrent external change.
 func (m *model) save() {
 	if err := m.board.Save(); err != nil {
 		m.status = "save failed: " + err.Error()
+		return
 	}
+	m.lastDisk = m.board.Render()
+}
+
+// saveWithRebase persists a text-entry mutation (add/edit/reply/log) without
+// losing a concurrent external write. The caller has already applied the
+// mutation to m.board; op describes it so it can be re-applied onto a fresh disk
+// tree if the file changed underneath us. On a rebase the model adopts the
+// merged board, records the external state for undo coherence, and reports it.
+func (m *model) saveWithRebase(op pendingOp) {
+	var msg string
+	res, err := m.board.SaveRebasing(m.path, m.lastDisk, func(fresh *board.Board) {
+		msg = applyOp(fresh, op)
+	})
+	if err != nil {
+		m.status = "save failed: " + err.Error()
+		return
+	}
+	if res.Rebased {
+		// Record the external write so undo steps back through it (first undo
+		// reverts our re-applied op, revealing the external edit; a second undo
+		// reaches the pre-mutation snapshot taken before this action).
+		m.hist.record(res.DiskPrev)
+		m.board = res.Board
+		m.board.Path = m.path
+		m.rebuildPositions()
+		if msg != "" {
+			m.status = msg
+		}
+	}
+	m.lastDisk = res.Content
 }
 
 // currentContent is the board's current serialized form — the unit of the undo
@@ -292,6 +341,7 @@ func (m *model) doReload(recordExternal bool) {
 	b := board.Parse(content)
 	b.Path = m.path
 	m.board = b
+	m.lastDisk = content
 	m.rebuildPositions()
 }
 
@@ -321,9 +371,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case reloadMsg:
+		// While an inline input is open the model holds a pending mutation: the
+		// input buffer plus m.target, a pointer into the current m.board tree.
+		// Reparsing here would swap m.board for a fresh tree, orphaning m.target
+		// so the pending edit lands on a discarded item — the exact lost-update
+		// this fix targets. So we ignore external writes for the duration of the
+		// input; save-with-rebase re-reads disk under the lock on enter and merges
+		// them (esc resyncs). The picker has its own model and never reloads.
 		if m.mode == modeDash {
 			m.rescanDash()
-		} else if m.mode != modePicker {
+		} else if m.mode != modePicker && !m.isInputMode() {
 			m.reloadExternal()
 		}
 		if m.watch != nil {
@@ -554,6 +611,10 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "ctrl+c":
 		m.mode = modeBoard
 		m.input.Blur()
+		// External writes were ignored while the input was open (see reloadMsg);
+		// now that no pending mutation depends on m.target, resync with disk so a
+		// concurrent edit made during typing becomes visible.
+		m.reloadExternal()
 		return m, nil
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
@@ -566,7 +627,8 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.snapshot() // capture pre-mutation state for undo
 		switch mo {
 		case modeInputAdd:
-			m.board.AddItem(m.sectionTitle(m.selSec), text)
+			sec := m.sectionTitle(m.selSec)
+			m.board.AddItem(sec, text)
 			m.rebuildPositions()
 			// Move cursor to the new item (last parsed item of the section).
 			for i := len(m.positions) - 1; i >= 0; i-- {
@@ -575,12 +637,18 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+			m.saveWithRebase(pendingOp{typ: opAdd, section: sec, payload: text})
 		case modeInputEdit:
 			if m.target != nil {
+				// Capture identity BEFORE mutating: Raw() is the item's original
+				// source line, the key used to relocate it in a fresh disk tree.
+				op := pendingOp{typ: opEdit, section: m.board.SectionTitleOf(m.target), rawLine: m.target.Raw(), payload: text}
 				m.target.Text = text
+				m.saveWithRebase(op)
 			}
 		case modeInputReply:
 			if m.target != nil {
+				op := pendingOp{typ: opReply, section: m.board.SectionTitleOf(m.target), rawLine: m.target.Raw(), payload: text}
 				// Forum-style: the human's reply is authored "user:".
 				m.board.AddReply(m.target, "user: "+text)
 				m.rebuildPositions()
@@ -592,21 +660,79 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
+				m.saveWithRebase(op)
 			}
 		case modeInputLog:
 			m.board.AppendLog("user", text)
 			m.rebuildPositions()
+			m.saveWithRebase(pendingOp{typ: opLog, payload: text})
 		case modeInputCustomSection:
+			// Add-section is structural and one-keystroke redoable; it uses the
+			// plain last-writer save rather than rebasing.
 			m.board.AddSection(text)
 			m.rebuildPositions()
 			m.jumpToSectionByTitle(text)
+			m.save()
 		}
-		m.save()
 		return m, nil
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// opType identifies a text-entry mutation that save-with-rebase can re-apply
+// onto a freshly-reparsed disk tree.
+type opType int
+
+const (
+	opAdd   opType = iota // add a new open item to a section
+	opEdit                // replace an existing item's text
+	opReply               // append a "user:" reply under an existing item
+	opLog                 // append a user log line to Log
+)
+
+// pendingOp captures the one mutation an inline input produced, in a form that
+// can be replayed against a different (freshly-loaded) board when the file
+// changed underneath us. rawLine is the target item's verbatim source line (edit
+// / reply); section is the section title it lives in / is added to; payload is
+// the user's text.
+type pendingOp struct {
+	typ     opType
+	section string
+	rawLine string
+	payload string
+}
+
+// applyOp re-applies op onto fresh (a board just reparsed from disk) and returns
+// a one-line status describing what happened. It never loses the user's text: if
+// the target item vanished from disk, the text is appended as a new item to the
+// section rather than dropped.
+func applyOp(fresh *board.Board, op pendingOp) string {
+	switch op.typ {
+	case opAdd:
+		fresh.AddItem(op.section, op.payload)
+		return "board changed, item re-added"
+	case opLog:
+		fresh.AppendLog("user", op.payload)
+		return "board changed, log re-appended"
+	case opEdit:
+		if it := fresh.FindByRawInSection(op.section, op.rawLine); it != nil && it.IsItem() {
+			it.Text = op.payload
+			return "board changed, edit reapplied"
+		}
+		// Target gone: keep the user's edited text as a new item, never lose it.
+		fresh.AddItem(op.section, op.payload)
+		return "board changed, edited item was gone — kept your text"
+	case opReply:
+		if it := fresh.FindByRawInSection(op.section, op.rawLine); it != nil && it.IsItem() {
+			fresh.AddReply(it, "user: "+op.payload)
+			return "board changed, reply reapplied"
+		}
+		fresh.AddItem(op.section, "user: "+op.payload)
+		return "board changed, reply target was gone — kept your text"
+	}
+	return "board changed, edit reapplied"
 }
 
 // openAddSections builds the add-sections overlay: the canonical section types

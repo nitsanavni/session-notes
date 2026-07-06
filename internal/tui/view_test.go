@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,10 +25,14 @@ func keyPress(s string) tea.KeyMsg {
 }
 
 // newTestModel builds a board-view model over src at the given viewport size.
+// The board path points at a throwaway file in the OS temp dir (not the repo) so
+// that key handlers which persist through the locked save path — and the sidecar
+// lock file they create — do not litter the working tree.
 func newTestModel(src string, w, h int) *model {
 	m := newModel()
 	m.board = board.Parse(src)
-	m.path = "test.md"
+	m.path = filepath.Join(os.TempDir(), "session-notes-tui-test.md")
+	m.board.Path = m.path
 	m.mode = modeBoard
 	m.width, m.height = w, h
 	m.rebuildPositions()

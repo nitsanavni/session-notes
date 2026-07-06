@@ -384,10 +384,21 @@ func TestAtomicSave(t *testing.T) {
 	if string(data) != "## Plan\n- [>] a\n" {
 		t.Errorf("saved content: %q", data)
 	}
-	// No temp files left behind.
+	// No temp files left behind. The board and its sidecar lock file are the only
+	// expected entries (the lock is created by WithLock and intentionally kept).
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 {
-		t.Errorf("leftover files in dir: %v", entries)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	want := map[string]bool{"b.md": true, "b.md.lock": true}
+	for _, n := range names {
+		if !want[n] {
+			t.Errorf("unexpected leftover file %q (all: %v)", n, names)
+		}
+	}
+	if len(names) != len(want) {
+		t.Errorf("dir entries = %v, want board + lock only", names)
 	}
 }
 

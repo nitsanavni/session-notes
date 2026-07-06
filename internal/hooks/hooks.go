@@ -71,13 +71,13 @@ This session has a shared board (markdown) that you and the user both maintain:
 - Answer questions addressed @claude in "Questions"; raise your own with "- [ ] question @user".
 - To answer or react to a specific item, append an indented sub-bullet reply under it, forum-style ("  - claude: text"), instead of rewriting the item's text inline. Replies nest 2 spaces per level.
 - Discussions run FLAT: continue a back-and-forth as sibling bullets at the same level; nest deeper only to fork a sub-topic off one specific message.
-- All your board writes must be concurrency-safe: take an exclusive flock on "<board-path>.lock", re-read the file, apply your change, write atomically (temp file + rename), release the lock. The user edits the same file live.
 - Append milestones to "Log" as "- HH:MM claude: text" (append-only).
 - The user edits the board live in a TUI; consider watching the file with the Monitor tool. Have the watch emit the diff itself so events carry the change and you don't need to re-read the file, e.g.:
     cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp board snap; done
 - Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
 - Preserve any content you don't understand; edit surgically.
-`, path)
+- The user edits this file concurrently, so serialize your writes: take an exclusive flock on the sidecar lock file "%s.lock" (NOT the board), then read → modify → write to a temp file → rename over the board, then release. This is the same lock the TUI uses; it keeps your edits and the user's from clobbering each other. Example: flock "%s.lock" -c 'edit-and-atomically-replace board'.
+`, path, path, path)
 
 	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
 		fmt.Fprintf(stdout, "\nBoards from previous sessions in this project (read them for history/context if useful):\n")

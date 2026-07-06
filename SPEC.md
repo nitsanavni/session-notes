@@ -72,6 +72,34 @@ Item conventions (parse leniently; unknown lines are kept verbatim):
 - Log is append-only, `- HH:MM author: text`.
 - Round-trip rule: the TUI/hooks must never destroy content they don't understand.
 
+## Concurrency (avoiding lost updates)
+
+The board is edited concurrently by the TUI and by external writers (Claude, the
+hooks). Two mechanisms keep a write from silently clobbering another:
+
+- **Advisory locking (both sides).** Every writer takes an exclusive `flock` on a
+  sidecar lock file `<board-path>.lock` — never on the board itself, because the
+  board's inode is replaced by the atomic rename and a lock on it would not
+  exclude a racing writer. The lock is held across the whole read → modify →
+  rename. In this repo, `board.WithLock(path, fn)` is that primitive; `Save`,
+  `SaveTo`, and `SaveRebasing` all acquire it. **Any external writer must follow
+  the same convention:** `flock` `<board>.lock` around its own read-modify-rename.
+  Readers need no lock — the atomic rename keeps reads torn-free.
+
+- **Rebase-before-save (TUI).** The TUI tracks the exact bytes it last loaded or
+  saved. Inside the lock, a save re-reads disk; if disk differs from that
+  last-known state (someone wrote while the user was typing), the TUI reparses the
+  *disk* version and re-applies its one pending mutation onto that fresh tree,
+  then saves the merged result — so both edits survive. The mutation is located in
+  the fresh tree by the target item's exact raw line (first match within the same
+  section); if the target vanished from disk, the user's text is appended as a new
+  item to the section rather than lost. Undo records the external state so a first
+  undo reveals the external write and a second reaches the pre-mutation state.
+  - **Which ops rebase:** the text-entry ops where losing work hurts — `a` add,
+    `e` edit, `R` reply, `L` log. The one-keystroke, trivially-redoable ops —
+    `space` status, `!` urgent, `d`/`D` archive/delete, `A`/custom add-section —
+    fall back to last-writer-wins (still under the lock, so never a torn write).
+
 ## Hooks behavior
 
 - **session-start**: read `{session_id, cwd, ...}` from stdin JSON. Create
@@ -97,7 +125,9 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   `e` edit item inline (textinput) · `E` open board in `$EDITOR` (suspend TUI) ·
   `L` quick log entry · `r` reload · `q`/`esc` quit · `?` help.
 - Live reload: watch the board file (fsnotify) and re-render on external change (Claude's
-  edits appear live). Writes are atomic (temp file + rename) to avoid torn reads.
+  edits appear live). Writes are atomic (temp file + rename) to avoid torn reads. While an
+  inline input is open the reload is deferred (it must not touch the input buffer or the
+  edit target); the change is merged at save time instead (see Concurrency).
 - New items get author `user:` implicitly? No — keep text as typed; author tags optional.
 - Style: dark-friendly, subtle; urgent items highlighted; done items dimmed.
 - Picker mode (fallback/`-l`): list boards (session id, cwd, mtime, first in-progress thread).

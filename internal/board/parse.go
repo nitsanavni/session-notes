@@ -191,13 +191,25 @@ func Load(path string) (*Board, error) {
 	return b, nil
 }
 
-// Save atomically writes the board to its Path (temp file + rename).
+// Save atomically writes the board to its Path (temp file + rename), holding the
+// board's exclusive advisory lock for the duration of the write.
 func (b *Board) Save() error {
 	return b.SaveTo(b.Path)
 }
 
-// SaveTo atomically writes the board to the given path.
+// SaveTo atomically writes the board to the given path under the board lock
+// (WithLock). This last-writer-wins path is used by the hooks and by TUI
+// mutations that do not rebase; the TUI's text-entry mutations use SaveRebasing
+// to merge concurrent external writes instead of clobbering them.
 func (b *Board) SaveTo(path string) error {
+	return WithLock(path, func() error { return b.writeAtomic(path) })
+}
+
+// writeAtomic writes the board to path via a temp file + rename, WITHOUT taking
+// the lock. Callers must already hold WithLock(path) (SaveTo and SaveRebasing
+// do). Splitting the raw write out lets SaveRebasing read, merge, and write all
+// within a single lock acquisition without self-deadlocking on a nested lock.
+func (b *Board) writeAtomic(path string) error {
 	dir := "."
 	if idx := strings.LastIndexByte(path, '/'); idx >= 0 {
 		dir = path[:idx]
@@ -216,4 +228,65 @@ func (b *Board) SaveTo(path string) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// RebaseResult reports the outcome of SaveRebasing.
+type RebaseResult struct {
+	// Board is the board actually written to disk: the receiver when there was
+	// no concurrent external change, or the freshly-reparsed disk board with the
+	// pending mutation re-applied when there was.
+	Board *Board
+	// Content is the exact markdown written to disk (use it as the new
+	// last-known-disk state so a subsequent SaveRebasing does not see a phantom
+	// external change).
+	Content string
+	// Rebased is true when an external write was detected and merged.
+	Rebased bool
+	// DiskPrev is the external disk content that was rebased onto (the state
+	// after the external write but before the merge). Empty unless Rebased. Used
+	// by callers to record the external edit in undo history.
+	DiskPrev string
+}
+
+// SaveRebasing atomically persists b to path, merging any concurrent external
+// write instead of clobbering it. The whole read → merge → write happens inside
+// one WithLock(path), so no external writer can interleave.
+//
+// lastDisk is the content the caller believes is currently on disk (what it last
+// loaded or saved). Under the lock SaveRebasing re-reads disk:
+//   - if disk is missing or equals lastDisk, there was no external change: b is
+//     written as-is (b already carries the caller's mutation);
+//   - otherwise disk is reparsed into a fresh board, reapply(fresh) re-applies
+//     the caller's one pending mutation onto that fresh tree, and the merged
+//     result is written. The caller's stale in-memory tree is discarded in
+//     favour of RebaseResult.Board.
+//
+// reapply must be idempotent w.r.t. the fresh tree and must not lose the user's
+// text (locate the target by its raw source line; if it vanished, append the
+// text as a new item — see the tui package's applyOp).
+func (b *Board) SaveRebasing(path, lastDisk string, reapply func(fresh *Board)) (RebaseResult, error) {
+	var res RebaseResult
+	err := WithLock(path, func() error {
+		data, rerr := os.ReadFile(path)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			return rerr
+		}
+		disk := string(data)
+		if os.IsNotExist(rerr) || disk == lastDisk {
+			res.Board = b
+			res.Content = b.Render()
+			return b.writeAtomic(path)
+		}
+		fresh := Parse(disk)
+		fresh.Path = path
+		if reapply != nil {
+			reapply(fresh)
+		}
+		res.Board = fresh
+		res.Content = fresh.Render()
+		res.Rebased = true
+		res.DiskPrev = disk
+		return fresh.writeAtomic(path)
+	})
+	return res, err
 }

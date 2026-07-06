@@ -298,7 +298,10 @@ hard-deletes it. The `Archive` and `Log` sections themselves can't be archived.
 The board file is watched for external changes and re-rendered live, so edits
 Claude makes mid-session show up in the popup without you doing anything. All
 writes (from the TUI or from Claude) are atomic (temp file + rename) so neither
-side ever reads a torn file.
+side ever reads a torn file, and they are serialized by an advisory lock so
+neither side clobbers the other (see How Claude participates). If Claude writes
+while you're mid-edit in an inline input, the TUI rebases your edit onto Claude's
+change on save instead of overwriting it — your text is never lost.
 
 ## How Claude participates
 
@@ -326,6 +329,18 @@ internal error they exit `0` silently rather than failing the hook.
 Beyond the hooks, Claude is expected to use the `Monitor` tool during the session
 to react promptly when you edit the board live (e.g. you drop a `!!` question or
 reprioritize a thread) — not just at the next prompt boundary.
+
+**Write protocol (avoiding lost updates).** You and Claude edit the same file
+concurrently, so every writer serializes on an advisory lock. Before any
+read-modify-write of the board, take an exclusive `flock` on the sidecar lock
+file `<board-path>.lock` (e.g. `~/.claude/boards/<id>.md.lock`) — *not* on the
+board itself, since the board is replaced by an atomic rename each save and a lock
+on its inode would not exclude a racing writer. Hold the lock across the whole
+read → modify → temp-file → rename, then release it. The TUI's saves and the
+hooks already do this via `board.WithLock`; any external writer (including
+Claude's own file edits) must follow the same convention. Readers need no lock —
+the atomic rename keeps reads torn-free. The TUI additionally rebases an in-flight
+inline edit onto concurrent external writes rather than clobbering them.
 
 ## Footprint — what lives outside this repo
 
