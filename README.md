@@ -261,3 +261,23 @@ internal error they exit `0` silently rather than failing the hook.
 Beyond the hooks, Claude is expected to use the `Monitor` tool during the session
 to react promptly when you edit the board live (e.g. you drop a `!!` question or
 reprioritize a thread) — not just at the next prompt boundary.
+
+## Footprint — what lives outside this repo
+
+Everything the tool creates or touches outside the repo, and why:
+
+| Path | What | Why there |
+|------|------|-----------|
+| `~/.local/bin/session-notes` | the installed binary | on `PATH` for tmux popups and hooks from any directory |
+| `~/.claude/boards/<id>.md` | one board per session | central so boards survive repo moves and the picker can list all sessions |
+| `~/.claude/boards/<id>.notes/` | `[[linked]]` side notes | long-form content stays next to its board, not in your project |
+| `~/.claude/boards/panes/*.json` | tmux pane → session mapping | written by `session-start`, read by `prefix+g`; must be findable from outside any repo |
+| `~/.claude/boards/.state/` | per-session `last-seen` markers | lets `prompt-submit` tell Claude "the board changed" without touching the board |
+| `./.claude/settings.json` (or `~/.claude/settings.json` with `--global`) | the three hooks | this is where Claude Code looks for hooks; project scope by default so only opted-in repos get boards |
+| `settings.json.bak.<timestamp>` | installer backups | written next to the settings file before every merge |
+| `~/.tmux.conf` | one `bind-key` line | added by you (the installer only prints it) |
+| `~/.local/go/` | Go toolchain | build dependency only; not touched at runtime |
+
+Nothing else: no daemons, no databases, no shell profile edits. Uninstall =
+delete the binary, the hooks block in settings.json, the tmux bind line, and
+(if you want the data gone) `~/.claude/boards/`.
