@@ -29,7 +29,7 @@ plain Markdown file that both sides can safely edit at the same time.
 │   21:42 claude: finished thread "fix flaky test"                        │
 ├───────────────────────────────────────────────────────────────────────┤
 │ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
-│ e edit · E $EDITOR · L log · d delete · r reload · q quit · ? help      │
+│ d archive · D delete · enter expand · e edit · E $EDITOR · L log · ? help│
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -148,6 +148,15 @@ destroyed):
   (bullets, replies, log entries) soft-wrap to the viewport width, with wrapped
   rows hanging-indented under where the text starts.
 - **Log**: append-only, one line per entry, `- HH:MM author: text`.
+- **Archive**: a `## Archive` section holds items you've retired with `d` instead
+  of deleting them. It's created on first use, placed just above `## Log` (or at
+  the end if there's no Log). Archiving moves an item — with its whole reply
+  thread and verbatim continuation lines — to the end of Archive, unchanged;
+  archiving a whole section moves all its items there and removes the now-empty
+  section. Nothing is destroyed, so a `d` is always recoverable by editing the
+  file. In the TUI the Archive section is collapsed by default (it shows a
+  `(N archived)` count); `enter`/`l` on its header toggles it open. Use `D` for a
+  true delete that removes content from the file.
 
 ## Session resolution
 
@@ -188,10 +197,16 @@ instead).
 | `e`           | edit item inline (the bullet line only)  |
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
 | `L`           | quick log entry                          |
-| `d`           | delete item (with continuation + replies)|
+| `d`           | archive item / section (into `## Archive`)|
+| `D`           | hard-delete item / section from the file |
+| `enter` / `l` | expand / collapse Archive (on its header)|
 | `r`           | reload from disk                         |
 | `q` / `esc`   | quit                                     |
 | `?`           | help                                     |
+
+Section headers are cursor stops too: pressing `d` on a header archives the whole
+section (its items move to `## Archive` and the empty section is removed); `D`
+hard-deletes it. The `Archive` and `Log` sections themselves can't be archived.
 
 The board file is watched for external changes and re-rendered live, so edits
 Claude makes mid-session show up in the popup without you doing anything. All

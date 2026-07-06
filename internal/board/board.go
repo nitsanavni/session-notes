@@ -334,3 +334,141 @@ func removeItem(items []*Item, target *Item) ([]*Item, bool) {
 	}
 	return items, false
 }
+
+// ArchiveTitle and LogTitle are the sections with special archive semantics:
+// they can never themselves be archived, and Archive is the destination for
+// everything the user archives with `d`.
+const (
+	ArchiveTitle = "Archive"
+	LogTitle     = "Log"
+)
+
+// sectionOf returns the section whose item tree contains target (at any depth),
+// or nil if target is not on the board.
+func (b *Board) sectionOf(target *Item) *Section {
+	var contains func(items []*Item) bool
+	contains = func(items []*Item) bool {
+		for _, it := range items {
+			if it == target || contains(it.Children) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, s := range b.Sections {
+		if contains(s.Items) {
+			return s
+		}
+	}
+	return nil
+}
+
+// shiftLeft reduces the leading indentation of it and its whole subtree by n
+// characters (clamped at 0). Moving a nested item into another section this way
+// re-roots it as a clean top-level entry. For a top-level item (n == 0) it is a
+// no-op, so archived content keeps its exact verbatim spacing.
+func shiftLeft(it *Item, n int) {
+	if n <= 0 {
+		return
+	}
+	if it.parsed {
+		if len(it.indent) >= n {
+			it.indent = it.indent[n:]
+		} else {
+			it.indent = ""
+		}
+	} else {
+		lead := len(it.raw) - len(strings.TrimLeft(it.raw, " \t"))
+		if lead > n {
+			lead = n
+		}
+		it.raw = it.raw[lead:]
+	}
+	for _, c := range it.Children {
+		shiftLeft(c, n)
+	}
+}
+
+// archiveSection returns the Archive section, creating it on first use just
+// above Log (or at the end of the board if there is no Log).
+func (b *Board) archiveSection() *Section {
+	return b.AddSection(ArchiveTitle)
+}
+
+// ArchiveItem moves target — and its whole subtree (replies + verbatim
+// continuation lines) — to the end of the Archive section, preserving its text
+// and status exactly. Archive is created on first use. Returns false if target
+// is not on the board or already lives in Archive (a no-op).
+func (b *Board) ArchiveItem(target *Item) bool {
+	if target == nil {
+		return false
+	}
+	if sec := b.sectionOf(target); sec == nil || sec.Title == ArchiveTitle {
+		return false
+	}
+	d := target.depth()
+	if !b.Remove(target) {
+		return false
+	}
+	shiftLeft(target, d)
+	b.archiveSection().insert(target)
+	return true
+}
+
+// ArchiveSection moves every item of sec to the end of Archive and removes the
+// now-empty section from the board. Blank separator lines are dropped. The
+// Archive and Log sections cannot be archived (returns false), nor can a section
+// that is not on the board.
+func (b *Board) ArchiveSection(sec *Section) bool {
+	if sec == nil || sec.Title == ArchiveTitle || sec.Title == LogTitle {
+		return false
+	}
+	found := false
+	for _, s := range b.Sections {
+		if s == sec {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	arch := b.archiveSection()
+	for _, it := range sec.Items {
+		if it.IsContinuation() && strings.TrimSpace(it.raw) == "" {
+			continue // drop section-separating blank lines
+		}
+		shiftLeft(it, it.depth())
+		arch.insert(it)
+	}
+	sec.Items = nil
+	return b.RemoveSection(sec)
+}
+
+// RemoveSection hard-deletes sec (header + all contents) from the board.
+// Returns false if sec is not on the board.
+func (b *Board) RemoveSection(sec *Section) bool {
+	for i, s := range b.Sections {
+		if s == sec {
+			b.Sections = append(b.Sections[:i], b.Sections[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// ArchivedCount reports the number of top-level archived entries (used by the
+// TUI to render the collapsed Archive header, e.g. "(12 archived)").
+func (b *Board) ArchivedCount() int {
+	s := b.Section(ArchiveTitle)
+	if s == nil {
+		return 0
+	}
+	n := 0
+	for _, it := range s.Items {
+		if it.IsItem() {
+			n++
+		}
+	}
+	return n
+}

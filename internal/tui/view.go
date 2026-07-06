@@ -71,10 +71,22 @@ func (m *model) viewBoard() string {
 		if si == m.selSec {
 			st = styleSectionSel
 		}
-		header := st.Render("## " + s.Title)
+		// The header is itself a cursor stop; posIdx currently addresses it.
+		selectedHeader := posIdx == m.cursor
+		prefix := "  "
+		if selectedHeader {
+			prefix = styleCursor.Render("> ")
+			cursorLine = len(lines)
+		}
+		header := prefix + st.Render("## "+s.Title)
 		// Subtle section-index hint (1..9) so number-key jumps are discoverable.
 		if si < 9 {
 			header += " " + styleDim.Render(fmt.Sprintf("%d", si+1))
+		}
+		// The Archive section collapses to just its header plus a dim count.
+		collapsed := s.Title == board.ArchiveTitle && !m.archiveExpanded
+		if collapsed {
+			header += " " + styleDim.Render(fmt.Sprintf("(%d archived)", m.board.ArchivedCount()))
 		}
 		// Every section header renders, including empty ones, so they stay
 		// visible and reachable. Remember the active header's row for scrolling.
@@ -82,6 +94,10 @@ func (m *model) viewBoard() string {
 			selHeaderLine = len(lines)
 		}
 		lines = append(lines, header)
+		posIdx++
+		if collapsed {
+			continue // items hidden until expanded
+		}
 		// Walk the item tree depth-first; children render indented below their
 		// parent for a threaded, forum-style look. posIdx tracks navigable items
 		// in the same order rebuildPositions uses so the cursor lines up.
@@ -237,7 +253,7 @@ func (m *model) viewFooter() string {
 		}[m.mode]
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d del · e edit · E editor · L log · r reload · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · L log · r reload · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -256,7 +272,9 @@ func (m *model) viewHelp() string {
   R                   reply to item (threaded sub-bullet)
   space               cycle status [ ] -> [>] -> [x]
   !                   toggle urgent (!!)
-  d                   delete item (with its continuation + replies)
+  d                   archive item (or whole section) into ## Archive
+  D                   hard-delete item (or whole section) from the file
+  enter / l           expand / collapse the Archive section (on its header)
   e                   edit item inline (the bullet line only)
   E                   open board in $EDITOR
   L                   quick log entry
@@ -265,6 +283,10 @@ func (m *model) viewHelp() string {
   ?                   close help
 
 Statuses: [ ] open · [>] in progress · [x] done · [?] blocked
+Section headers are cursor stops: d there archives the whole section (its items
+move to ## Archive), D hard-deletes it. Archive and Log can't be archived.
+The Archive section is collapsed by default (shows a count); enter/l on its
+header toggles it open.
 Replies nest under an item as indented "- author: text" sub-bullets.
 Continuation lines (indented text under a bullet, not "- ") render verbatim as
 part of that bullet's block — a single cursor stop. Author them with E ($EDITOR).

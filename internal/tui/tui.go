@@ -31,13 +31,15 @@ const (
 // overlay that prompts for a free-text section name.
 const customSectionLabel = "custom…"
 
-// navItem addresses one navigable (parsed) item on the board, wherever it lives
-// in the section's item tree: the owning section index, the item pointer, and its
-// nesting depth (0 = top level, 1 = reply, …).
+// navItem addresses one navigable stop on the board. A stop is either a section
+// header (header == true, item == nil) or a parsed item somewhere in that
+// section's item tree. It carries the owning section index, the item pointer,
+// and the item's nesting depth (0 = top level, 1 = reply, …).
 type navItem struct {
-	sec   int
-	item  *board.Item
-	depth int
+	sec    int
+	item   *board.Item
+	depth  int
+	header bool // true: this stop is section sec's "## " header line
 }
 
 type model struct {
@@ -52,6 +54,10 @@ type model struct {
 	selSec    int       // active section (authoritative for `a` and tab)
 	scroll    int
 	status    string // transient one-line message
+
+	// archiveExpanded controls whether the Archive section shows its items or
+	// collapses to a one-line header with a count. Collapsed by default.
+	archiveExpanded bool
 
 	input textinput.Model
 	// target is the item acted on by modeInputEdit / modeInputReply, captured
@@ -124,6 +130,13 @@ func (m *model) openBoard(path string) error {
 func (m *model) rebuildPositions() {
 	m.positions = m.positions[:0]
 	for si, s := range m.board.Sections {
+		// Every section header is a cursor stop of its own, so it can be acted
+		// on (archive/remove the whole section) and, for Archive, toggled.
+		m.positions = append(m.positions, navItem{sec: si, header: true})
+		// A collapsed Archive hides its items entirely — they are not navigable.
+		if s.Title == board.ArchiveTitle && !m.archiveExpanded {
+			continue
+		}
 		var walk func(items []*board.Item, depth int)
 		walk = func(items []*board.Item, depth int) {
 			for _, it := range items {
@@ -155,6 +168,19 @@ func (m *model) currentItem() *board.Item {
 		return nil
 	}
 	return m.positions[m.cursor].item
+}
+
+// onHeader reports whether the cursor sits on a section header stop, and if so
+// returns that section. When the cursor is on an item it returns (nil, false).
+func (m *model) onHeader() (*board.Section, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.positions) {
+		return nil, false
+	}
+	p := m.positions[m.cursor]
+	if !p.header || p.sec >= len(m.board.Sections) {
+		return nil, false
+	}
+	return m.board.Sections[p.sec], true
 }
 
 func (m *model) save() {
@@ -276,10 +302,45 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.save()
 		}
 	case "d":
-		if it := m.currentItem(); it != nil {
+		// Archive: move the item (or a whole section) into ## Archive.
+		if sec, ok := m.onHeader(); ok {
+			if m.board.ArchiveSection(sec) {
+				m.rebuildPositions()
+				m.save()
+				m.status = "archived section " + sec.Title
+			} else {
+				m.status = "cannot archive " + sec.Title
+			}
+		} else if it := m.currentItem(); it != nil {
+			if m.board.ArchiveItem(it) { // item + its whole subtree
+				m.rebuildPositions()
+				m.save()
+				m.status = "archived"
+			}
+		}
+	case "D":
+		// Hard delete: remove the item (or whole section) from the file.
+		if sec, ok := m.onHeader(); ok {
+			m.board.RemoveSection(sec)
+			m.rebuildPositions()
+			m.save()
+			m.status = "deleted section " + sec.Title
+		} else if it := m.currentItem(); it != nil {
 			m.board.Remove(it) // removes the item and its whole subtree of replies
 			m.rebuildPositions()
 			m.save()
+		}
+	case "enter", "l", "right":
+		// Toggle the Archive section between collapsed and expanded.
+		if sec, ok := m.onHeader(); ok && sec.Title == board.ArchiveTitle {
+			m.archiveExpanded = !m.archiveExpanded
+			m.rebuildPositions()
+		}
+	case "h", "left":
+		// Collapse the Archive when on its header (symmetric with l/right).
+		if sec, ok := m.onHeader(); ok && sec.Title == board.ArchiveTitle && m.archiveExpanded {
+			m.archiveExpanded = false
+			m.rebuildPositions()
 		}
 	case "e":
 		if it := m.currentItem(); it != nil {

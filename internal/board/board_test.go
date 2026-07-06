@@ -624,6 +624,192 @@ func TestDeleteWithContinuation(t *testing.T) {
 	}
 }
 
+func TestArchiveItem(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		pick    func(b *Board) *Item // choose the item to archive
+		ok      bool
+		want    string
+		wantCnt int
+	}{
+		{
+			name: "top-level item with subtree and continuations, first use creates Archive above Log",
+			src: "## Threads\n" +
+				"- [ ] keep\n" +
+				"- [>] draw\n" +
+				"      +---+\n" +
+				"      | o |\n" +
+				"      +---+\n" +
+				"  a trailing note\n" +
+				"  - user: nice\n" +
+				"\n" +
+				"## Log\n" +
+				"- 08:00 start: hi\n",
+			pick: func(b *Board) *Item { return b.Section("Threads").Items[1] },
+			ok:   true,
+			want: "## Threads\n" +
+				"- [ ] keep\n" +
+				"\n" +
+				"## Archive\n" +
+				"- [>] draw\n" +
+				"      +---+\n" +
+				"      | o |\n" +
+				"      +---+\n" +
+				"  a trailing note\n" +
+				"  - user: nice\n" +
+				"\n" +
+				"## Log\n" +
+				"- 08:00 start: hi\n",
+			wantCnt: 1,
+		},
+		{
+			name: "archive from nested position re-roots into Archive",
+			src: "## Q\n" +
+				"- [ ] parent\n" +
+				"  - [>] child to archive\n" +
+				"    - user: grandchild\n" +
+				"  - claude: sibling stays\n",
+			pick: func(b *Board) *Item { return b.Section("Q").Items[0].Children[0] },
+			ok:   true,
+			want: "## Q\n" +
+				"- [ ] parent\n" +
+				"  - claude: sibling stays\n" +
+				"\n" +
+				"## Archive\n" +
+				"- [>] child to archive\n" +
+				"  - user: grandchild\n",
+			wantCnt: 1,
+		},
+		{
+			name:    "no Log: Archive appended at end",
+			src:     "## Plan\n- [ ] a\n- [ ] b\n",
+			pick:    func(b *Board) *Item { return b.Section("Plan").Items[0] },
+			ok:      true,
+			want:    "## Plan\n- [ ] b\n\n## Archive\n- [ ] a\n",
+			wantCnt: 1,
+		},
+		{
+			name:    "second archive appends to end of existing Archive",
+			src:     "## Plan\n- [ ] a\n- [ ] b\n\n## Archive\n- [x] old\n",
+			pick:    func(b *Board) *Item { return b.Section("Plan").Items[1] },
+			ok:      true,
+			want:    "## Plan\n- [ ] a\n\n## Archive\n- [x] old\n- [ ] b\n",
+			wantCnt: 2,
+		},
+		{
+			name:    "item already in Archive is a no-op",
+			src:     "## Archive\n- [x] already\n",
+			pick:    func(b *Board) *Item { return b.Section("Archive").Items[0] },
+			ok:      false,
+			want:    "## Archive\n- [x] already\n",
+			wantCnt: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Parse(tc.src)
+			if got := b.ArchiveItem(tc.pick(b)); got != tc.ok {
+				t.Fatalf("ArchiveItem returned %v, want %v", got, tc.ok)
+			}
+			if got := b.Render(); got != tc.want {
+				t.Errorf("after archive\n--- got ---\n%q\n--- want ---\n%q", got, tc.want)
+			}
+			if got := b.ArchivedCount(); got != tc.wantCnt {
+				t.Errorf("ArchivedCount = %d, want %d", got, tc.wantCnt)
+			}
+		})
+	}
+}
+
+func TestArchiveItemNotFound(t *testing.T) {
+	b := Parse("## Plan\n- [ ] a\n")
+	if b.ArchiveItem(&Item{parsed: true, Text: "ghost"}) {
+		t.Error("archiving a foreign item should return false")
+	}
+	if b.ArchiveItem(nil) {
+		t.Error("archiving nil should return false")
+	}
+}
+
+// TestArchiveRoundTripVerbatim confirms the archived block (ASCII art +
+// continuation lines) survives a Render→Parse→Render cycle byte-for-byte.
+func TestArchiveRoundTripVerbatim(t *testing.T) {
+	src := "## Threads\n" +
+		"- [>] pipeline\n" +
+		"      +-----+     +-----+\n" +
+		"      | src | --> | dst |\n" +
+		"      +-----+     +-----+\n" +
+		"  the left box is the ingest stage\n"
+	b := Parse(src)
+	if !b.ArchiveItem(b.Section("Threads").Items[0]) {
+		t.Fatal("archive failed")
+	}
+	once := b.Render()
+	twice := Parse(once).Render()
+	if once != twice {
+		t.Errorf("archived content not stable across round-trip\n--- once ---\n%q\n--- twice ---\n%q", once, twice)
+	}
+	if !strings.Contains(once, "## Archive\n- [>] pipeline\n      +-----+     +-----+\n") {
+		t.Errorf("verbatim ASCII art not preserved in Archive:\n%s", once)
+	}
+}
+
+func TestArchiveSection(t *testing.T) {
+	t.Run("moves items and removes section", func(t *testing.T) {
+		src := "## Plan\n- [ ] a\n\n## Threads\n- [>] t1\n  - user: r\n- [x] t2\n\n## Log\n- 08:00 start: hi\n"
+		b := Parse(src)
+		if !b.ArchiveSection(b.Section("Threads")) {
+			t.Fatal("ArchiveSection returned false")
+		}
+		if b.Section("Threads") != nil {
+			t.Error("Threads section still present after archive")
+		}
+		want := "## Plan\n- [ ] a\n\n## Archive\n- [>] t1\n  - user: r\n- [x] t2\n\n## Log\n- 08:00 start: hi\n"
+		if got := b.Render(); got != want {
+			t.Errorf("\n--- got ---\n%q\n--- want ---\n%q", got, want)
+		}
+		if got := b.ArchivedCount(); got != 2 {
+			t.Errorf("ArchivedCount = %d, want 2", got)
+		}
+	})
+
+	t.Run("Archive and Log are un-archivable", func(t *testing.T) {
+		b := Parse("## Archive\n- [x] a\n\n## Log\n- 08:00 start: hi\n")
+		before := b.Render()
+		if b.ArchiveSection(b.Section("Archive")) {
+			t.Error("Archive should not be archivable")
+		}
+		if b.ArchiveSection(b.Section("Log")) {
+			t.Error("Log should not be archivable")
+		}
+		if got := b.Render(); got != before {
+			t.Errorf("un-archivable sections changed board:\n%q", got)
+		}
+	})
+
+	t.Run("section not on board", func(t *testing.T) {
+		b := Parse("## Plan\n- [ ] a\n")
+		if b.ArchiveSection(&Section{Title: "Ghost"}) {
+			t.Error("archiving a foreign section should return false")
+		}
+	})
+}
+
+func TestRemoveSection(t *testing.T) {
+	b := Parse("## Plan\n- [ ] a\n\n## Threads\n- [>] t\n\n## Log\n- 08:00 start: hi\n")
+	if !b.RemoveSection(b.Section("Threads")) {
+		t.Fatal("RemoveSection returned false")
+	}
+	want := "## Plan\n- [ ] a\n\n## Log\n- 08:00 start: hi\n"
+	if got := b.Render(); got != want {
+		t.Errorf("\n--- got ---\n%q\n--- want ---\n%q", got, want)
+	}
+	if b.RemoveSection(&Section{Title: "Ghost"}) {
+		t.Error("removing a foreign section should return false")
+	}
+}
+
 func TestUrgentIncludesChildren(t *testing.T) {
 	b := Parse(`## Questions
 - [ ] parent not urgent
