@@ -298,7 +298,7 @@ func (m *model) viewFooter() string {
 		}[m.mode]
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -314,7 +314,8 @@ func (m *model) viewHelp() string {
 		{"1 - 9", "jump to the Nth section"},
 		{"a", "add item to current section"},
 		{"A", "add sections (multi-select overlay)"},
-		{"R", "reply to item (threaded sub-bullet)"},
+		{"R", "reply in thread (sibling on a reply; starts the thread on an item)"},
+		{"F", "fork a sub-thread under the message at the cursor"},
 		{"space", "cycle status [ ] -> [>] -> [x]"},
 		{"!", "toggle urgent (!!)"},
 		{"d", "archive item (or whole section) into ## Archive"},

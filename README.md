@@ -140,8 +140,10 @@ destroyed):
       - user: thanks
   ```
 
-  In the TUI, `R` replies to the item under the cursor; deleting an item removes
-  its whole reply thread with it.
+  In the TUI, `R` replies **in thread**: on a reply it appends a sibling (the
+  conversation stays flat); on a top-level item it starts the thread. `F` forks
+  a nested sub-thread under the exact message at the cursor. Deleting an item
+  removes its whole reply thread with it.
 - **Continuation lines (multi-line bullets)**: a line indented deeper than a
   bullet but *not* starting with `- ` is continuation content of that bullet —
   extra prose, a code snippet, or an ASCII diagram. It stays attached to its
@@ -275,7 +277,8 @@ items, and the last Log line.
 | `1` … `9`     | jump to the Nth section                   |
 | `a`           | add item to current section              |
 | `A`           | add sections (multi-select overlay)      |
-| `R`           | reply to item (threaded sub-bullet)      |
+| `R`           | reply in thread (flat sibling on a reply) |
+| `F`           | fork a sub-thread under the cursor        |
 | `space`       | cycle status `[ ] → [>] → [x]`           |
 | `!`           | toggle urgent (`!!`)                     |
 | `e`           | edit item inline (the bullet line only)  |

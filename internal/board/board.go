@@ -388,6 +388,31 @@ const (
 	LogTitle     = "Log"
 )
 
+// ParentOf returns the item whose Children contain target, or nil if target is
+// top-level (or not on the board).
+func (b *Board) ParentOf(target *Item) *Item {
+	var find func(items []*Item) *Item
+	find = func(items []*Item) *Item {
+		for _, it := range items {
+			for _, c := range it.Children {
+				if c == target {
+					return it
+				}
+			}
+			if p := find(it.Children); p != nil {
+				return p
+			}
+		}
+		return nil
+	}
+	for _, s := range b.Sections {
+		if p := find(s.Items); p != nil {
+			return p
+		}
+	}
+	return nil
+}
+
 // sectionOf returns the section whose item tree contains target (at any depth),
 // or nil if target is not on the board.
 func (b *Board) sectionOf(target *Item) *Section {

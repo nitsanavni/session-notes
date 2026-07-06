@@ -531,9 +531,21 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.startInput(modeInputEdit, it.DisplayText(), "edit item")
 		}
 	case "R":
+		// Reply in-thread: on a reply the new message continues the conversation
+		// as a sibling (appended to the thread's parent); on a top-level item it
+		// starts the thread. Discussions run flat; use F to fork.
 		if it := m.currentItem(); it != nil {
 			m.target = it
-			m.startInput(modeInputReply, "", "reply to this item")
+			if p := m.board.ParentOf(it); p != nil {
+				m.target = p
+			}
+			m.startInput(modeInputReply, "", "reply in thread")
+		}
+	case "F":
+		// Fork: nest a sub-topic under the exact message at the cursor.
+		if it := m.currentItem(); it != nil {
+			m.target = it
+			m.startInput(modeInputReply, "", "fork a sub-thread")
 		}
 	case "E":
 		m.snapshot() // capture pre-edit state before handing off to $EDITOR
