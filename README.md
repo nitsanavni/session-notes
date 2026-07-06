@@ -1,0 +1,179 @@
+# session-notes
+
+A shared scratchpad for a Claude Code session — one board per session, viewed and
+edited by you in a tmux popup, and read/maintained by Claude during the session via
+hooks. Threads of work, open questions, a plan, ideas, and a running log, kept in a
+plain Markdown file that both sides can safely edit at the same time.
+
+## What it looks like
+
+```
+┌─ session-notes ─ abc-123 ─ ~/code/foo ───────────────────────────────────┐
+│ Plan                                                                     │
+│   [ ] step one                                                          │
+│                                                                          │
+│ ▸ Threads                                                                │
+│   [>] auth refactor — extracting middleware                             │
+│   [x] fix flaky test                                                    │
+│                                                                          │
+│   Questions                                                              │
+│   [ ] !! drop the legacy endpoint? @user                                │
+│                                                                          │
+│   Ideas                                                                  │
+│   - cache invalidation could be event-driven                            │
+│                                                                          │
+│   Log                                                                    │
+│   21:30 start: session started in /home/nitsan/code/foo                 │
+│   21:42 claude: finished thread "fix flaky test"                        │
+├───────────────────────────────────────────────────────────────────────┤
+│ j/k move · tab section · a add · space status · ! urgent · e edit ·     │
+│ E $EDITOR · L log · d delete · r reload · q quit · ? help              │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+The `▸` marks the active section; the highlighted row is the cursor. Urgent
+(`!!`) items are highlighted, done (`[x]`) items are dimmed.
+
+## Install
+
+```
+./install.sh
+```
+
+This will:
+
+1. Build the binary with the Go toolchain at `~/.local/go/bin/go` and install it to
+   `~/.local/bin/session-notes` (warns if `~/.local/bin` isn't on your `PATH`).
+2. Create `~/.claude/boards/{panes,.state}`.
+3. Merge the `SessionStart` / `SessionEnd` / `UserPromptSubmit` hooks into
+   `~/.claude/settings.json`, backing up the existing file first
+   (`settings.json.bak.<timestamp>`). Safe to re-run — it won't duplicate entries.
+
+The installer prints a tmux `bind-key` line for you to add yourself (it never edits
+`~/.tmux.conf` automatically):
+
+```tmux
+bind-key g display-popup -E -w 80% -h 80% "session-notes --pane '#{pane_id}'"
+```
+
+Add that to `~/.tmux.conf`, then reload it:
+
+```
+tmux source-file ~/.tmux.conf
+```
+
+With that in place, `prefix + g` pops open the board for whichever Claude Code
+session is running in the active pane.
+
+## Board format
+
+Each session gets a Markdown file at `~/.claude/boards/<session-id>.md`: YAML
+frontmatter (`session`, `cwd`, `started`) followed by fixed `##` sections — Plan,
+Threads, Questions, Ideas, Log.
+
+```markdown
+---
+session: abc-123
+cwd: /home/nitsan/code/foo
+started: 2026-07-06T21:30:00+03:00
+---
+
+## Plan
+- [ ] step one
+
+## Threads
+- [>] auth refactor — extracting middleware
+- [x] fix flaky test
+
+## Questions
+- [ ] !! drop the legacy endpoint? @user
+
+## Ideas
+- cache invalidation could be event-driven
+
+## Log
+- 21:30 start: session started in /home/nitsan/code/foo
+- 21:42 claude: finished thread "fix flaky test"
+```
+
+Conventions (parsed leniently — lines that don't match are kept verbatim, never
+destroyed):
+
+- **Status**: `[ ]` open, `[>]` in progress, `[x]` done, `[?]` blocked. Plain `- `
+  items are fine in Ideas/Log, which don't track status.
+- **Urgency**: a leading `!!` in the item text. Checking the box or removing `!!`
+  acknowledges it.
+- **Addressing**: `@claude` / `@user` anywhere in the text.
+- **Log**: append-only, one line per entry, `- HH:MM author: text`.
+
+## Session resolution
+
+Because you may have several Claude Code sessions running concurrently (different
+tmux panes, different repos, or several panes in the same repo), `session-notes`
+needs to figure out which board you mean:
+
+1. `--board <path>` — explicit path, always wins.
+2. `--pane <tmux-pane-id>` — looks up `~/.claude/boards/panes/<pane-id>.json`,
+   which maps that pane to the board of the session currently running there. The
+   tmux keybind passes `#{pane_id}` of the active pane, so each pane resolves to
+   its own session independently.
+3. `$TMUX_PANE` — same pane-mapping lookup, using the environment variable
+   instead of a flag (used when running `session-notes` with no `--pane`, inside
+   tmux).
+4. Fallback — if exactly one board's `cwd` matches the current directory, use it.
+5. Otherwise — a picker listing all boards (session id, cwd, mtime, first
+   in-progress thread), newest first.
+
+If you run several sessions sequentially in the same pane, each new session's
+`SessionStart` hook overwrites that pane's mapping, so the popup always shows the
+latest session for that pane. Sessions started outside tmux still get a board;
+they just aren't reachable via `--pane` (use the cwd fallback or the picker
+instead).
+
+## Keybindings (TUI)
+
+| Key           | Action                                  |
+|---------------|------------------------------------------|
+| `j` / `k`     | move cursor down / up                    |
+| `tab` / `shift-tab` | next / previous section             |
+| `a`           | add item to current section              |
+| `space`       | cycle status `[ ] → [>] → [x]`           |
+| `!`           | toggle urgent (`!!`)                     |
+| `e`           | edit item inline                         |
+| `E`           | open board in `$EDITOR` (suspends TUI)   |
+| `L`           | quick log entry                          |
+| `d`           | delete item                              |
+| `r`           | reload from disk                         |
+| `q` / `esc`   | quit                                     |
+| `?`           | help                                     |
+
+The board file is watched for external changes and re-rendered live, so edits
+Claude makes mid-session show up in the popup without you doing anything. All
+writes (from the TUI or from Claude) are atomic (temp file + rename) so neither
+side ever reads a torn file.
+
+## How Claude participates
+
+Claude doesn't run the TUI — it reads and edits the board file directly, driven by
+three hooks that `install.sh` wires up in `~/.claude/settings.json`:
+
+- **`hook session-start`** — creates the board (if this session doesn't have one
+  yet) and, inside tmux, records the pane-to-session mapping. It prints a short
+  protocol blurb to stdout, which Claude Code feeds into the model's context: the
+  board's path, and instructions to keep Plan/Threads up to date as it works,
+  answer or raise items in Questions, append a Log line on milestones, and watch
+  the board for live user edits with the `Monitor` tool.
+- **`hook prompt-submit`** — runs before each prompt is processed. If the board
+  has unacknowledged `!!` (urgent) items, it prints them so they're injected into
+  Claude's context on the spot, rather than waiting for Claude to notice them on
+  its own. It also prints a one-line notice if you've edited the board since
+  Claude last looked (tracked via `~/.claude/boards/.state/<session-id>.last-seen`).
+- **`hook session-end`** — appends an `end` line to the Log and cleans up the pane
+  mapping if it still points at this session.
+
+All three hooks are designed to be fast and never break your session: on any
+internal error they exit `0` silently rather than failing the hook.
+
+Beyond the hooks, Claude is expected to use the `Monitor` tool during the session
+to react promptly when you edit the board live (e.g. you drop a `!!` question or
+reprioritize a thread) — not just at the next prompt boundary.
