@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/nitsanavni/session-notes/internal/board"
 )
 
@@ -56,6 +57,7 @@ func (m *model) viewBoard() string {
 	}
 	var lines []string
 	cursorLine := 0
+	selHeaderLine := 0 // display row of the active section's header
 
 	header := m.path
 	if fm := m.board.Frontmatter; fm.Session != "" {
@@ -74,6 +76,11 @@ func (m *model) viewBoard() string {
 		if si < 9 {
 			header += " " + styleDim.Render(fmt.Sprintf("%d", si+1))
 		}
+		// Every section header renders, including empty ones, so they stay
+		// visible and reachable. Remember the active header's row for scrolling.
+		if si == m.selSec {
+			selHeaderLine = len(lines)
+		}
 		lines = append(lines, header)
 		// Walk the item tree depth-first; children render indented below their
 		// parent for a threaded, forum-style look. posIdx tracks navigable items
@@ -82,12 +89,14 @@ func (m *model) viewBoard() string {
 		walk = func(items []*board.Item, depth int) {
 			for _, it := range items {
 				if !it.IsItem() {
-					// Preserve raw lines in display too, dimmed; skip blank lines'
-					// styling but keep spacing.
-					if strings.TrimSpace(it.DisplayText()) == "" {
+					// Continuation / stray raw lines render verbatim (internal
+					// spacing preserved for ASCII drawings) and are clipped, not
+					// wrapped, at the viewport edge. They are not nav stops, so
+					// they carry no cursor gutter marker.
+					if strings.TrimSpace(it.Raw()) == "" {
 						lines = append(lines, "")
 					} else {
-						lines = append(lines, strings.Repeat("  ", depth+1)+styleDim.Render(it.DisplayText()))
+						lines = append(lines, continuationRow(it.Raw(), m.width))
 					}
 					walk(it.Children, depth+1)
 					continue
@@ -96,7 +105,9 @@ func (m *model) viewBoard() string {
 				if selected {
 					cursorLine = len(lines)
 				}
-				lines = append(lines, m.renderItem(it, selected, depth))
+				// A wrapped item spans several rows; the cursor line points at the
+				// first so scrolling keeps the whole block anchored.
+				lines = append(lines, m.renderItem(it, selected, depth)...)
 				posIdx++
 				walk(it.Children, depth+1)
 			}
@@ -119,6 +130,17 @@ func (m *model) viewBoard() string {
 	if cursorLine >= m.scroll+bodyH {
 		m.scroll = cursorLine - bodyH + 1
 	}
+	// Prefer showing the active section's header when doing so still keeps the
+	// cursor on screen — this reveals empty sections you tab onto without ever
+	// pinning a section taller than the viewport to its header.
+	if selHeaderLine < m.scroll && cursorLine < selHeaderLine+bodyH {
+		m.scroll = selHeaderLine
+	}
+	// At the very first item (or an empty board), scroll fully to the top so the
+	// title and any empty section headers above it become visible.
+	if m.cursor <= 0 {
+		m.scroll = 0
+	}
 	if m.scroll > len(lines)-1 {
 		m.scroll = max(0, len(lines)-1)
 	}
@@ -131,31 +153,76 @@ func (m *model) viewBoard() string {
 	return body + "\n" + footer
 }
 
-func (m *model) renderItem(it *board.Item, selected bool, depth int) string {
+// renderItem renders a bullet as one or more display rows: its text is
+// soft-wrapped to the viewport width, and continuation rows are indented so
+// they align under where the text starts (not column 0). The item's styling —
+// including the selection highlight — is applied to every wrapped row, so the
+// cursor covers the whole block. Wrapping is display-only; the stored text and
+// file content are untouched.
+func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	prefix := "  "
 	if selected {
 		prefix = styleCursor.Render("> ")
 	}
 	// Indent children under their parent for the threaded, forum-style feel.
 	indent := strings.Repeat("  ", depth)
+	head := prefix + indent + statusMarker(it.Status) + " "
+	// Visible column where the text begins: 2 gutter + 2/level indent + 3 marker
+	// + 1 space. Continuation rows hang-indent to this column.
+	hang := 2 + depth*2 + len("[ ]") + 1
+
 	text := it.DisplayText()
 	if it.Urgent {
 		text = "!! " + text
 	}
-	var styled string
+	var style lipgloss.Style
 	switch {
 	case it.Status == board.StatusDone: // dim wins over urgent once done
-		styled = styleDone.Render(text)
+		style = styleDone
 	case it.Urgent:
-		styled = styleUrgent.Render(text)
+		style = styleUrgent
 	case selected:
-		styled = lipgloss.NewStyle().Bold(true).Render(text)
+		style = lipgloss.NewStyle().Bold(true)
 	case depth > 0: // replies read slightly dimmer than top-level items
-		styled = styleDim.Render(text)
+		style = styleDim
 	default:
-		styled = text
+		style = lipgloss.NewStyle()
 	}
-	return prefix + indent + statusMarker(it.Status) + " " + styled
+	return wrapRows(head, text, hang, m.width, style)
+}
+
+// wrapRows word-wraps text to the viewport width and returns one string per
+// visual row. The first row carries head (gutter + marker); continuation rows
+// are padded with hang spaces so wrapped text lines up under the text start.
+// style is applied per row so the whole block reads as one item.
+func wrapRows(head, text string, hang, width int, style lipgloss.Style) []string {
+	avail := width - hang
+	if avail < 1 {
+		avail = 1
+	}
+	rows := strings.Split(ansi.Wrap(text, avail, ""), "\n")
+	out := make([]string, 0, len(rows))
+	pad := strings.Repeat(" ", hang)
+	for i, r := range rows {
+		if i == 0 {
+			out = append(out, head+style.Render(r))
+		} else {
+			out = append(out, pad+style.Render(r))
+		}
+	}
+	return out
+}
+
+// continuationRow renders a continuation (or stray raw) line for display:
+// verbatim after a two-column gutter, horizontally clipped to the viewport
+// width so long ASCII-art lines never wrap or break the layout.
+func continuationRow(raw string, width int) string {
+	const gutter = "  "
+	avail := width - len(gutter)
+	if avail < 1 {
+		avail = 1
+	}
+	return gutter + styleDim.Render(ansi.Truncate(raw, avail, ""))
 }
 
 func (m *model) viewFooter() string {
@@ -189,8 +256,8 @@ func (m *model) viewHelp() string {
   R                   reply to item (threaded sub-bullet)
   space               cycle status [ ] -> [>] -> [x]
   !                   toggle urgent (!!)
-  d                   delete item (and its replies)
-  e                   edit item inline
+  d                   delete item (with its continuation + replies)
+  e                   edit item inline (the bullet line only)
   E                   open board in $EDITOR
   L                   quick log entry
   r                   reload from disk
@@ -199,6 +266,9 @@ func (m *model) viewHelp() string {
 
 Statuses: [ ] open · [>] in progress · [x] done · [?] blocked
 Replies nest under an item as indented "- author: text" sub-bullets.
+Continuation lines (indented text under a bullet, not "- ") render verbatim as
+part of that bullet's block — a single cursor stop. Author them with E ($EDITOR).
+Long lines soft-wrap; ASCII-art continuation lines clip at the edge, not wrap.
 Urgent (!!) open items are injected into Claude's context on your next prompt.
 
 press any key to return`

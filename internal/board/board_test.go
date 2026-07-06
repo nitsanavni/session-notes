@@ -522,6 +522,108 @@ func TestRemoveSubtree(t *testing.T) {
 	})
 }
 
+// TestContinuationLinesAttach verifies that lines indented deeper than a bullet
+// but not starting with "- " become continuation children of that bullet (raw,
+// verbatim) rather than separate top-level items. This is what lets the TUI
+// treat a bullet + its continuation block as one cursor stop.
+func TestContinuationLinesAttach(t *testing.T) {
+	cases := []struct {
+		name      string
+		src       string
+		wantTop   int      // top-level items in the section
+		wantCont  []string // verbatim continuation lines under items[0]
+		bulletTxt string   // parsed text of items[0]
+	}{
+		{
+			name:      "plain continuation under bullet",
+			src:       "## Threads\n- [>] parent\n  continuation one\n  continuation two\n- [x] sibling\n",
+			wantTop:   2,
+			bulletTxt: "parent",
+			wantCont:  []string{"  continuation one", "  continuation two"},
+		},
+		{
+			name: "ascii-art block is verbatim",
+			src: "## Threads\n- [>] pipeline\n" +
+				"      +-----+     +-----+\n" +
+				"      | src | --> | dst |\n" +
+				"      +-----+     +-----+\n" +
+				"- [x] next\n",
+			wantTop:   2,
+			bulletTxt: "pipeline",
+			wantCont: []string{
+				"      +-----+     +-----+",
+				"      | src | --> | dst |",
+				"      +-----+     +-----+",
+			},
+		},
+		{
+			name:      "continuation then reply both attach",
+			src:       "## Q\n- [ ] q\n  a note line\n  - user: a reply\n- [ ] other\n",
+			wantTop:   2,
+			bulletTxt: "q",
+			wantCont:  []string{"  a note line"}, // the "- user:" is a parsed reply, not continuation
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Parse(tc.src)
+			s := b.Sections[0]
+			if len(s.Items) != tc.wantTop {
+				t.Fatalf("top-level items = %d, want %d", len(s.Items), tc.wantTop)
+			}
+			parent := s.Items[0]
+			if parent.Text != tc.bulletTxt {
+				t.Fatalf("items[0].Text = %q, want %q", parent.Text, tc.bulletTxt)
+			}
+			var gotCont []string
+			for _, c := range parent.Children {
+				if c.IsContinuation() {
+					gotCont = append(gotCont, c.Raw())
+				}
+			}
+			if len(gotCont) != len(tc.wantCont) {
+				t.Fatalf("got %d continuation lines %q, want %q", len(gotCont), gotCont, tc.wantCont)
+			}
+			for i := range tc.wantCont {
+				if gotCont[i] != tc.wantCont[i] {
+					t.Errorf("continuation[%d] = %q, want %q", i, gotCont[i], tc.wantCont[i])
+				}
+			}
+			// Round-trip must be byte-identical (ASCII art untouched).
+			if got := b.Render(); got != tc.src {
+				t.Errorf("round trip changed content\n--- want ---\n%q\n--- got ---\n%q", tc.src, got)
+			}
+		})
+	}
+}
+
+// TestDeleteWithContinuation checks that deleting a bullet takes its whole block
+// — continuation lines and reply subtree — with it, leaving siblings intact.
+func TestDeleteWithContinuation(t *testing.T) {
+	src := "## Threads\n" +
+		"- [ ] keep\n" +
+		"- [>] draw\n" +
+		"      +---+\n" +
+		"      | o |\n" +
+		"      +---+\n" +
+		"  a trailing note\n" +
+		"  - user: nice\n" +
+		"- [x] keep too\n"
+	b := Parse(src)
+	s := b.Section("Threads")
+	target := s.Items[1] // the "draw" bullet with continuation + reply
+	if target.Text != "draw" {
+		t.Fatalf("target text = %q", target.Text)
+	}
+	if !b.Remove(target) {
+		t.Fatal("remove returned false")
+	}
+	want := "## Threads\n- [ ] keep\n- [x] keep too\n"
+	if got := b.Render(); got != want {
+		t.Errorf("after delete\n--- got ---\n%q\n--- want ---\n%q", got, want)
+	}
+}
+
 func TestUrgentIncludesChildren(t *testing.T) {
 	b := Parse(`## Questions
 - [ ] parent not urgent

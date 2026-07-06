@@ -124,6 +124,29 @@ destroyed):
 
   In the TUI, `R` replies to the item under the cursor; deleting an item removes
   its whole reply thread with it.
+- **Continuation lines (multi-line bullets)**: a line indented deeper than a
+  bullet but *not* starting with `- ` is continuation content of that bullet —
+  extra prose, a code snippet, or an ASCII diagram. It stays attached to its
+  bullet:
+
+  ```markdown
+  ## Threads
+  - [>] draw the pipeline
+        +---------+      +---------+
+        |  input  | ---> | process |
+        +---------+      +---------+
+    the left box is the ingest stage
+  ```
+
+  In the TUI, a bullet and its continuation lines render together as one visual
+  block and count as a **single cursor stop**. Continuation lines render verbatim
+  (monospace, internal spacing preserved) — ASCII drawings are never re-wrapped or
+  trimmed; lines wider than the viewport clip at the right edge rather than wrap.
+  `d` deletes the bullet together with its continuation block and reply thread;
+  `e` edits only the bullet line itself. Authoring multi-line content is done via
+  `E` (`$EDITOR`); there is no multi-line inline editor. Long single lines
+  (bullets, replies, log entries) soft-wrap to the viewport width, with wrapped
+  rows hanging-indented under where the text starts.
 - **Log**: append-only, one line per entry, `- HH:MM author: text`.
 
 ## Session resolution
@@ -162,10 +185,10 @@ instead).
 | `R`           | reply to item (threaded sub-bullet)      |
 | `space`       | cycle status `[ ] → [>] → [x]`           |
 | `!`           | toggle urgent (`!!`)                     |
-| `e`           | edit item inline                         |
+| `e`           | edit item inline (the bullet line only)  |
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
 | `L`           | quick log entry                          |
-| `d`           | delete item (and its replies)            |
+| `d`           | delete item (with continuation + replies)|
 | `r`           | reload from disk                         |
 | `q` / `esc`   | quit                                     |
 | `?`           | help                                     |

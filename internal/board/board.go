@@ -112,6 +112,17 @@ func (it *Item) DisplayText() string {
 // IsItem reports whether the line is a recognized bullet item (vs. preserved raw).
 func (it *Item) IsItem() bool { return it.parsed }
 
+// Raw returns the item's verbatim source line. For continuation lines (raw,
+// non-bullet content indented under a bullet) this preserves internal spacing
+// exactly, so ASCII drawings render unmodified rather than being trimmed.
+func (it *Item) Raw() string { return it.raw }
+
+// IsContinuation reports whether this item is a continuation line: an
+// unrecognized (non-bullet) raw line. When such a line is indented deeper than a
+// preceding bullet, the parser attaches it to that bullet as a child, and it
+// renders as part of the bullet's visual block rather than as its own nav stop.
+func (it *Item) IsContinuation() bool { return !it.parsed }
+
 // Render produces the exact line for this item.
 func (it *Item) render() string {
 	if !it.parsed {
