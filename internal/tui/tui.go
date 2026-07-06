@@ -21,8 +21,14 @@ const (
 	modeInputAdd
 	modeInputEdit
 	modeInputLog
+	modeInputCustomSection
+	modeAddSections
 	modeHelp
 )
+
+// customSectionLabel is the final, always-present entry in the add-sections
+// overlay that prompts for a free-text section name.
+const customSectionLabel = "custom…"
 
 // pos addresses one item on the board: section index + index within that
 // section's Items slice.
@@ -43,6 +49,11 @@ type model struct {
 
 	input   textinput.Model
 	editPos pos // item being edited in modeInputEdit
+
+	// add-sections overlay state (modeAddSections)
+	addOpts []string     // offered section names; last entry is customSectionLabel
+	addSel  map[int]bool // selected indices into addOpts
+	addCur  int          // cursor within addOpts
 
 	// picker state
 	entries   []pickerEntry
@@ -185,7 +196,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
-	if m.mode == modeInputAdd || m.mode == modeInputEdit || m.mode == modeInputLog {
+	if m.isInputMode() {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
@@ -193,12 +204,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// isInputMode reports whether the model is currently capturing textinput.
+func (m *model) isInputMode() bool {
+	switch m.mode {
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputCustomSection:
+		return true
+	}
+	return false
+}
+
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modePicker:
 		return m.handlePickerKey(msg)
-	case modeInputAdd, modeInputEdit, modeInputLog:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputCustomSection:
 		return m.handleInputKey(msg)
+	case modeAddSections:
+		return m.handleAddSectionsKey(msg)
 	case modeHelp:
 		m.mode = m.prevMode
 		return m, nil
@@ -225,8 +247,12 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveSection(1)
 	case "shift+tab":
 		m.moveSection(-1)
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		m.jumpToSection(int(msg.String()[0] - '1'))
 	case "a":
 		m.startInput(modeInputAdd, "", "add to "+m.sectionTitle(m.selSec))
+	case "A":
+		m.openAddSections()
 	case " ":
 		if it := m.currentItem(); it != nil {
 			it.CycleStatus()
@@ -278,6 +304,22 @@ func (m *model) moveSection(delta int) {
 	// Section has no items: keep cursor where it is; header highlight moves.
 }
 
+// jumpToSection moves the cursor straight to the given section (0-based): to its
+// first navigable item, or, if the section is empty, just onto its header (the
+// header highlight moves; the cursor stays put).
+func (m *model) jumpToSection(idx int) {
+	if idx < 0 || idx >= len(m.board.Sections) {
+		return
+	}
+	m.selSec = idx
+	for i, p := range m.positions {
+		if p.sec == idx {
+			m.cursor = i
+			return
+		}
+	}
+}
+
 func (m *model) sectionTitle(i int) string {
 	if i >= 0 && i < len(m.board.Sections) {
 		return m.board.Sections[i].Title
@@ -327,6 +369,10 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case modeInputLog:
 			m.board.AppendLog("user", text)
 			m.rebuildPositions()
+		case modeInputCustomSection:
+			m.board.AddSection(text)
+			m.rebuildPositions()
+			m.jumpToSectionByTitle(text)
 		}
 		m.save()
 		return m, nil
@@ -334,6 +380,86 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// openAddSections builds the add-sections overlay: the canonical section types
+// not already on the board, plus a final "custom…" entry.
+func (m *model) openAddSections() {
+	m.addOpts = m.addOpts[:0]
+	for _, name := range board.CanonicalSections {
+		if m.board.Section(name) == nil {
+			m.addOpts = append(m.addOpts, name)
+		}
+	}
+	m.addOpts = append(m.addOpts, customSectionLabel)
+	m.addSel = make(map[int]bool)
+	m.addCur = 0
+	m.mode = modeAddSections
+}
+
+func (m *model) handleAddSectionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "ctrl+c", "q":
+		m.mode = modeBoard
+	case "j", "down":
+		if m.addCur < len(m.addOpts)-1 {
+			m.addCur++
+		}
+	case "k", "up":
+		if m.addCur > 0 {
+			m.addCur--
+		}
+	case " ", "x":
+		m.addSel[m.addCur] = !m.addSel[m.addCur]
+	case "enter":
+		return m.confirmAddSections()
+	}
+	return m, nil
+}
+
+// confirmAddSections appends the selected canonical sections, then either
+// prompts for a custom section name (if "custom…" was selected) or returns to
+// the board, jumping to the first section added.
+func (m *model) confirmAddSections() (tea.Model, tea.Cmd) {
+	var first string
+	custom := false
+	for i, name := range m.addOpts {
+		if !m.addSel[i] {
+			continue
+		}
+		if name == customSectionLabel {
+			custom = true
+			continue
+		}
+		m.board.AddSection(name)
+		if first == "" {
+			first = name
+		}
+	}
+	if first != "" {
+		m.rebuildPositions()
+		m.save()
+	}
+	if custom {
+		// Prompt for the free-text name; canonical picks (if any) are already saved.
+		m.startInput(modeInputCustomSection, "", "custom section name")
+		return m, nil
+	}
+	m.mode = modeBoard
+	if first != "" {
+		m.jumpToSectionByTitle(first)
+	}
+	return m, nil
+}
+
+// jumpToSectionByTitle moves the cursor to the section with the given title.
+func (m *model) jumpToSectionByTitle(title string) {
+	for i, s := range m.board.Sections {
+		if s.Title == title {
+			m.jumpToSection(i)
+			return
+		}
+	}
 }
 
 func (m *model) openEditor() tea.Cmd {

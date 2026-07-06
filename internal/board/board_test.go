@@ -257,6 +257,70 @@ func TestAddItem(t *testing.T) {
 	}
 }
 
+func TestAddSection(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		title string
+		want  string
+	}{
+		{
+			name:  "insert before Log",
+			src:   "## Plan\n- [ ] a\n\n## Log\n- 08:00 start: hi\n",
+			title: "Ideas",
+			want:  "## Plan\n- [ ] a\n\n## Ideas\n\n## Log\n- 08:00 start: hi\n",
+		},
+		{
+			name:  "append at end when no Log",
+			src:   "## Plan\n- [ ] a\n",
+			title: "Ideas",
+			want:  "## Plan\n- [ ] a\n\n## Ideas\n",
+		},
+		{
+			name:  "adding Log goes at the very end",
+			src:   "## Plan\n- [ ] a\n",
+			title: "Log",
+			want:  "## Plan\n- [ ] a\n\n## Log\n",
+		},
+		{
+			name:  "empty board",
+			src:   "",
+			title: "Plan",
+			want:  "## Plan\n",
+		},
+		{
+			name:  "custom title before Log among many",
+			src:   "## Plan\n\n## Threads\n\n## Log\n- 08:00 start: hi\n",
+			title: "Design",
+			want:  "## Plan\n\n## Threads\n\n## Design\n\n## Log\n- 08:00 start: hi\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Parse(tc.src)
+			b.AddSection(tc.title)
+			if got := b.Render(); got != tc.want {
+				t.Errorf("AddSection(%q)\n--- got ---\n%q\n--- want ---\n%q", tc.title, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAddSectionExistingIsNoOp(t *testing.T) {
+	b := Parse("## Plan\n- [ ] a\n\n## Log\n- 08:00 start: hi\n")
+	before := b.Render()
+	s := b.AddSection("Plan")
+	if s == nil || s.Title != "Plan" {
+		t.Fatalf("AddSection returned %+v", s)
+	}
+	if got := b.Render(); got != before {
+		t.Errorf("adding existing section changed board:\n%q", got)
+	}
+	if n := len(b.Sections); n != 2 {
+		t.Errorf("got %d sections, want 2 (no duplicate)", n)
+	}
+}
+
 func TestFrontmatter(t *testing.T) {
 	b := Parse(`---
 session: abc

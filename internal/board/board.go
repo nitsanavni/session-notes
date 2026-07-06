@@ -59,6 +59,10 @@ type Section struct {
 	Items []*Item
 }
 
+// CanonicalSections are the section types a fresh board ships with, in template
+// order. Used by the TUI's "add sections" overlay to offer the canonical set.
+var CanonicalSections = []string{"Plan", "Threads", "Questions", "Ideas", "Log"}
+
 // Board is the whole parsed document.
 type Board struct {
 	Path        string
@@ -202,6 +206,52 @@ func (b *Board) AddItem(sectionTitle, text string) *Item {
 	it := &Item{parsed: true, Status: status, Text: text}
 	s.insert(it)
 	return it
+}
+
+// AddSection appends a new empty section with the given title and returns it.
+// If a section with that title already exists it is returned unchanged (no
+// duplicate). New sections are added at the end of the board, except that a
+// "Log" section, if present, is kept last: new sections are inserted just before
+// it. Blank-line spacing between sections is kept consistent with the template
+// (every section but the last ends with a trailing blank line).
+func (b *Board) AddSection(title string) *Section {
+	if s := b.Section(title); s != nil {
+		return s
+	}
+	sec := &Section{Title: title}
+	// Insert before Log if Log exists and we are not adding Log itself.
+	idx := len(b.Sections)
+	if title != "Log" {
+		for i, s := range b.Sections {
+			if s.Title == "Log" {
+				idx = i
+				break
+			}
+		}
+	}
+	// The section that will precede the new one must end with a blank line so
+	// the two are visually separated.
+	if idx > 0 {
+		ensureTrailingBlank(b.Sections[idx-1])
+	}
+	// The new section needs its own trailing blank line only if another section
+	// will follow it (i.e. it is not becoming the last section).
+	if idx < len(b.Sections) {
+		sec.Items = append(sec.Items, &Item{raw: ""})
+	}
+	b.Sections = append(b.Sections, nil)
+	copy(b.Sections[idx+1:], b.Sections[idx:])
+	b.Sections[idx] = sec
+	return sec
+}
+
+// ensureTrailingBlank appends a blank raw line to a section unless it already
+// ends with one.
+func ensureTrailingBlank(s *Section) {
+	if n := len(s.Items); n > 0 && !s.Items[n-1].parsed && strings.TrimSpace(s.Items[n-1].raw) == "" {
+		return
+	}
+	s.Items = append(s.Items, &Item{raw: ""})
 }
 
 // DeleteItem removes the item at index i from the section. Returns false if out

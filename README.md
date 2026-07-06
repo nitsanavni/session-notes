@@ -139,7 +139,9 @@ instead).
 |---------------|------------------------------------------|
 | `j` / `k`     | move cursor down / up                    |
 | `tab` / `shift-tab` | next / previous section             |
+| `1` … `9`     | jump to the Nth section                   |
 | `a`           | add item to current section              |
+| `A`           | add sections (multi-select overlay)      |
 | `space`       | cycle status `[ ] → [>] → [x]`           |
 | `!`           | toggle urgent (`!!`)                     |
 | `e`           | edit item inline                         |

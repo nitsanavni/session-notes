@@ -44,6 +44,8 @@ func (m *model) View() string {
 		return m.viewPicker()
 	case modeHelp:
 		return m.viewHelp()
+	case modeAddSections:
+		return m.viewAddSections()
 	}
 	return m.viewBoard()
 }
@@ -67,7 +69,12 @@ func (m *model) viewBoard() string {
 		if si == m.selSec {
 			st = styleSectionSel
 		}
-		lines = append(lines, st.Render("## "+s.Title))
+		header := st.Render("## " + s.Title)
+		// Subtle section-index hint (1..9) so number-key jumps are discoverable.
+		if si < 9 {
+			header += " " + styleDim.Render(fmt.Sprintf("%d", si+1))
+		}
+		lines = append(lines, header)
 		for _, it := range s.Items {
 			if !it.IsItem() {
 				// Preserve raw lines in display too, dimmed; skip blank lines'
@@ -140,15 +147,16 @@ func (m *model) renderItem(it *board.Item, selected bool) string {
 
 func (m *model) viewFooter() string {
 	switch m.mode {
-	case modeInputAdd, modeInputEdit, modeInputLog:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputCustomSection:
 		label := map[mode]string{
-			modeInputAdd:  "add",
-			modeInputEdit: "edit",
-			modeInputLog:  "log",
+			modeInputAdd:           "add",
+			modeInputEdit:          "edit",
+			modeInputLog:           "log",
+			modeInputCustomSection: "section",
 		}[m.mode]
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · a add · space status · ! urgent · d del · e edit · E editor · L log · r reload · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · space status · ! urgent · d del · e edit · E editor · L log · r reload · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -161,7 +169,9 @@ func (m *model) viewHelp() string {
 
   j / k, up / down    move cursor
   tab / shift-tab     next / previous section
+  1 - 9               jump to the Nth section
   a                   add item to current section
+  A                   add sections (multi-select overlay)
   space               cycle status [ ] -> [>] -> [x]
   !                   toggle urgent (!!)
   d                   delete item
@@ -177,4 +187,28 @@ Urgent (!!) open items are injected into Claude's context on your next prompt.
 
 press any key to return`
 	return lipgloss.NewStyle().Padding(1, 2).Render(help)
+}
+
+func (m *model) viewAddSections() string {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("add sections") + "\n")
+	b.WriteString(styleDim.Render("select section types to append to the board") + "\n\n")
+	for i, name := range m.addOpts {
+		mark := styleMarker.Render("[ ]")
+		if m.addSel[i] {
+			mark = styleInProg.Render("[x]")
+		}
+		label := name
+		if name == customSectionLabel {
+			label = styleDim.Render(name)
+		}
+		prefix := "  "
+		if i == m.addCur {
+			prefix = styleCursor.Render("> ")
+			label = lipgloss.NewStyle().Bold(true).Render(name)
+		}
+		b.WriteString(prefix + mark + " " + label + "\n")
+	}
+	b.WriteString("\n" + styleHelpBar.Render("j/k move · space/x toggle · enter add · esc cancel"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
