@@ -69,7 +69,9 @@ This session has a shared board (markdown) that you and the user both maintain:
 - Early on, set a short "title:" in the board frontmatter describing the task (e.g. "auth refactor") so dashboards/pickers show a name instead of a uuid.
 - Keep "Threads" and "Plan" up to date as you work (statuses: [ ] open, [>] in progress, [x] done, [?] blocked).
 - Answer questions addressed @claude in "Questions"; raise your own with "- [ ] question @user".
-- To answer or react to a specific item, append an indented sub-bullet reply under it, forum-style ("  - claude: text"), instead of rewriting the item's text inline. Replies nest 2 spaces per level; you can reply to a reply.
+- To answer or react to a specific item, append an indented sub-bullet reply under it, forum-style ("  - claude: text"), instead of rewriting the item's text inline. Replies nest 2 spaces per level.
+- Discussions run FLAT: continue a back-and-forth as sibling bullets at the same level; nest deeper only to fork a sub-topic off one specific message.
+- All your board writes must be concurrency-safe: take an exclusive flock on "<board-path>.lock", re-read the file, apply your change, write atomically (temp file + rename), release the lock. The user edits the same file live.
 - Append milestones to "Log" as "- HH:MM claude: text" (append-only).
 - The user edits the board live in a TUI; consider watching the file with the Monitor tool. Have the watch emit the diff itself so events carry the change and you don't need to re-read the file, e.g.:
     cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp board snap; done
