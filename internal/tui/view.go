@@ -54,6 +54,8 @@ func (m *model) View() string {
 		return m.viewHelp()
 	case modeAddSections:
 		return m.viewAddSections()
+	case modeLinkPick:
+		return m.viewLinkPick()
 	}
 	return m.viewBoard()
 }
@@ -298,46 +300,74 @@ func (m *model) viewFooter() string {
 }
 
 func (m *model) viewHelp() string {
-	help := `session-notes — keys
+	styleKey := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
+	keys := [][2]string{
+		{"j / k, up / down", "move cursor"},
+		{"tab / shift-tab", "next / previous section"},
+		{"1 - 9", "jump to the Nth section"},
+		{"a", "add item to current section"},
+		{"A", "add sections (multi-select overlay)"},
+		{"R", "reply to item (threaded sub-bullet)"},
+		{"space", "cycle status [ ] -> [>] -> [x]"},
+		{"!", "toggle urgent (!!)"},
+		{"d", "archive item (or whole section) into ## Archive"},
+		{"D", "hard-delete item (or whole section) from the file"},
+		{"enter / l", "expand / collapse the Archive section (on its header)"},
+		{"e", "edit item inline (the bullet line only)"},
+		{"E", "open board in $EDITOR"},
+		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
+		{"L", "quick log entry"},
+		{"u", "undo last change"},
+		{"ctrl+r", "redo"},
+		{"r", "reload from disk"},
+		{"q / esc", "quit"},
+		{"?", "close help"},
+	}
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("session-notes — keys") + "\n\n")
+	for _, k := range keys {
+		b.WriteString(fmt.Sprintf("  %s%s\n", styleKey.Render(fmt.Sprintf("%-20s", k[0])), k[1]))
+	}
+	b.WriteString("\n" + styleSection.Render("Statuses") + ": " +
+		styleMarker.Render("[ ]") + " open · " + styleInProg.Render("[>]") + " in progress · " +
+		styleDone.Render("[x]") + " done · " + styleBlocked.Render("[?]") + " blocked\n")
+	notes := []string{
+		"Section headers are cursor stops: " + styleKey.Render("d") + " there archives the whole section (its items",
+		"move to ## Archive), " + styleKey.Render("D") + " hard-deletes it. Archive and Log can't be archived.",
+		"The Archive section is collapsed by default (shows a count); " + styleKey.Render("enter") + "/" + styleKey.Render("l") + " on its",
+		"header toggles it open.",
+		"Replies nest under an item as indented \"- author: text\" sub-bullets.",
+		"Continuation lines (indented text under a bullet, not \"- \") render verbatim as",
+		"part of that bullet's block — a single cursor stop. Author them with " + styleKey.Render("E") + " ($EDITOR).",
+		"Long lines soft-wrap; ASCII-art continuation lines clip at the edge, not wrap.",
+		styleUrgent.Render("Urgent (!!)") + " open items are injected into Claude's context on your next prompt.",
+		styleLink.Render("[[name]]") + " in an item's text links to a side notes file; " + styleKey.Render("o") + " opens it in",
+		"$EDITOR, creating it (with a \"# name\" heading) if missing.",
+		"Undo/redo track the last 100 changes; an external edit is kept in history too,",
+		"so undo steps back over it rather than clobbering the other party's write.",
+	}
+	for _, n := range notes {
+		b.WriteString(styleDim.Render("") + n + "\n")
+	}
+	b.WriteString("\n" + styleHelpBar.Render("press any key to return"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+}
 
-  j / k, up / down    move cursor
-  tab / shift-tab     next / previous section
-  1 - 9               jump to the Nth section
-  a                   add item to current section
-  A                   add sections (multi-select overlay)
-  R                   reply to item (threaded sub-bullet)
-  space               cycle status [ ] -> [>] -> [x]
-  !                   toggle urgent (!!)
-  d                   archive item (or whole section) into ## Archive
-  D                   hard-delete item (or whole section) from the file
-  enter / l           expand / collapse the Archive section (on its header)
-  e                   edit item inline (the bullet line only)
-  E                   open board in $EDITOR
-  o                   open item's first [[linked note]] in $EDITOR
-  L                   quick log entry
-  u                   undo last change
-  ctrl+r              redo
-  r                   reload from disk
-  q / esc             quit
-  ?                   close help
-
-Statuses: [ ] open · [>] in progress · [x] done · [?] blocked
-Section headers are cursor stops: d there archives the whole section (its items
-move to ## Archive), D hard-deletes it. Archive and Log can't be archived.
-The Archive section is collapsed by default (shows a count); enter/l on its
-header toggles it open.
-Replies nest under an item as indented "- author: text" sub-bullets.
-Continuation lines (indented text under a bullet, not "- ") render verbatim as
-part of that bullet's block — a single cursor stop. Author them with E ($EDITOR).
-Long lines soft-wrap; ASCII-art continuation lines clip at the edge, not wrap.
-Urgent (!!) open items are injected into Claude's context on your next prompt.
-[[name]] in an item's text links to a side notes file; o opens the first
-link's file in $EDITOR, creating it (with a "# name" heading) if missing.
-Undo/redo track the last 100 changes; an external edit is kept in history too,
-so undo steps back over it rather than clobbering the other party's write.
-
-press any key to return`
-	return lipgloss.NewStyle().Padding(1, 2).Render(help)
+func (m *model) viewLinkPick() string {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("open link") + "\n")
+	b.WriteString(styleDim.Render("several links on this item — pick one") + "\n\n")
+	for i, name := range m.linkOpts {
+		cursor := "  "
+		st := styleLink
+		if i == m.linkCur {
+			cursor = styleCursor.Render("> ")
+			st = st.Bold(true)
+		}
+		b.WriteString(cursor + st.Render("[["+name+"]]") + "\n")
+	}
+	b.WriteString("\n" + styleHelpBar.Render("j/k move · enter open · esc cancel"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 
 func (m *model) viewAddSections() string {

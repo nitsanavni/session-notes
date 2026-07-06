@@ -25,6 +25,7 @@ const (
 	modeInputReply
 	modeInputCustomSection
 	modeAddSections
+	modeLinkPick
 	modeHelp
 )
 
@@ -64,6 +65,10 @@ type model struct {
 	// target is the item acted on by modeInputEdit / modeInputReply, captured
 	// when the input opens (the cursor may not move, but this is robust to it).
 	target *board.Item
+
+	// link-chooser overlay state (modeLinkPick)
+	linkOpts []string // links found on the current item
+	linkCur  int      // cursor within linkOpts
 
 	// add-sections overlay state (modeAddSections)
 	addOpts []string     // offered section names; last entry is customSectionLabel
@@ -324,6 +329,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInputKey(msg)
 	case modeAddSections:
 		return m.handleAddSectionsKey(msg)
+	case modeLinkPick:
+		return m.handleLinkPickKey(msg)
 	case modeHelp:
 		m.mode = m.prevMode
 		return m, nil
@@ -648,20 +655,30 @@ func (m *model) openEditor() tea.Cmd {
 	return tea.ExecProcess(c, func(error) tea.Msg { return editorDoneMsg{} })
 }
 
-// openLink opens the FIRST [[wiki-link]] found in the current item's text in
-// $EDITOR (same suspend-and-resume pattern as openEditor), creating the
-// linked notes file — and its directory — if it doesn't exist yet. A no-op if
-// there is no current item or its text has no links.
+// openLink opens the [[wiki-link]] in the current item's text in $EDITOR
+// (same suspend-and-resume pattern as openEditor), creating the linked notes
+// file — and its directory — if it doesn't exist yet. With several links on
+// the item, a chooser overlay picks which one. A no-op if there is no current
+// item or its text has no links.
 func (m *model) openLink() tea.Cmd {
 	it := m.currentItem()
 	if it == nil {
 		return nil
 	}
 	links := board.ExtractLinks(it.DisplayText())
-	if len(links) == 0 {
+	switch len(links) {
+	case 0:
 		return nil
+	case 1:
+		return m.openLinkByName(links[0])
 	}
-	name := links[0]
+	m.linkOpts = links
+	m.linkCur = 0
+	m.mode = modeLinkPick
+	return nil
+}
+
+func (m *model) openLinkByName(name string) tea.Cmd {
 	path := board.ResolveLink(m.board, name)
 	if err := ensureNoteFile(path, name); err != nil {
 		m.status = "open link failed: " + err.Error()
@@ -673,6 +690,26 @@ func (m *model) openLink() tea.Cmd {
 	}
 	c := exec.Command(editor, path) // #nosec G204 -- user's own $EDITOR
 	return tea.ExecProcess(c, func(error) tea.Msg { return editorDoneMsg{} })
+}
+
+func (m *model) handleLinkPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc", "ctrl+c":
+		m.mode = modeBoard
+	case "j", "down":
+		if m.linkCur < len(m.linkOpts)-1 {
+			m.linkCur++
+		}
+	case "k", "up":
+		if m.linkCur > 0 {
+			m.linkCur--
+		}
+	case "enter", "o":
+		name := m.linkOpts[m.linkCur]
+		m.mode = modeBoard
+		return m, m.openLinkByName(name)
+	}
+	return m, nil
 }
 
 // ensureNoteFile makes sure the linked note file exists: creates its parent
