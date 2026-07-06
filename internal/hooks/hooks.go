@@ -68,7 +68,8 @@ This session has a shared board (markdown) that you and the user both maintain:
 - Keep "Threads" and "Plan" up to date as you work (statuses: [ ] open, [>] in progress, [x] done, [?] blocked).
 - Answer questions addressed @claude in "Questions"; raise your own with "- [ ] question @user".
 - Append milestones to "Log" as "- HH:MM claude: text" (append-only).
-- The user edits the board live in a TUI; consider watching the file for changes (e.g. with the Monitor tool) and re-reading it when it changes.
+- The user edits the board live in a TUI; consider watching the file with the Monitor tool. Have the watch emit the diff itself so events carry the change and you don't need to re-read the file, e.g.:
+    cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-][^+-]'; cp board snap; done
 - Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
 - Preserve any content you don't understand; edit surgically.
 `, path)
