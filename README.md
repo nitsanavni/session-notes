@@ -37,17 +37,20 @@ The `▸` marks the active section; the highlighted row is the cursor. Urgent
 ## Install
 
 ```
-./install.sh
+./install.sh            # hooks scoped to the current project (./.claude/settings.json)
+./install.sh --global   # hooks for all sessions (~/.claude/settings.json)
 ```
 
 This will:
 
 1. Build the binary with the Go toolchain at `~/.local/go/bin/go` and install it to
    `~/.local/bin/session-notes` (warns if `~/.local/bin` isn't on your `PATH`).
-2. Create `~/.claude/boards/{panes,.state}`.
-3. Merge the `SessionStart` / `SessionEnd` / `UserPromptSubmit` hooks into
-   `~/.claude/settings.json`, backing up the existing file first
-   (`settings.json.bak.<timestamp>`). Safe to re-run — it won't duplicate entries.
+2. Create `~/.claude/boards/{panes,.state}` (board data is always kept centrally).
+3. Merge the `SessionStart` / `SessionEnd` / `UserPromptSubmit` hooks into the chosen
+   settings.json — project-level `./.claude/settings.json` by default, so only sessions
+   in that repo get boards; `--global` for `~/.claude/settings.json`. The existing file
+   is backed up first (`settings.json.bak.<timestamp>`). Safe to re-run — it won't
+   duplicate entries.
 
 The installer prints a tmux `bind-key` line for you to add yourself (it never edits
 `~/.tmux.conf` automatically):
@@ -155,7 +158,8 @@ side ever reads a torn file.
 ## How Claude participates
 
 Claude doesn't run the TUI — it reads and edits the board file directly, driven by
-three hooks that `install.sh` wires up in `~/.claude/settings.json`:
+three hooks that `install.sh` wires up in a Claude Code settings.json (project or
+global, see Install):
 
 - **`hook session-start`** — creates the board (if this session doesn't have one
   yet) and, inside tmux, records the pane-to-session mapping. It prints a short

@@ -3,19 +3,35 @@
 #
 # - Builds the session-notes binary and installs it to ~/.local/bin.
 # - Creates the ~/.claude/boards state directories.
-# - Merges the SessionStart / SessionEnd / UserPromptSubmit hooks into
-#   ~/.claude/settings.json (creating it if needed, backing it up first).
+# - Merges the SessionStart / SessionEnd / UserPromptSubmit hooks into a
+#   Claude Code settings.json (creating it if needed, backing it up first).
+#   By default hooks go to ./.claude/settings.json (project scope — only
+#   sessions in the current directory get boards). Pass --global to install
+#   them in ~/.claude/settings.json for all sessions.
 #
 # Safe to re-run: every step is idempotent.
 set -euo pipefail
+
+SCOPE=project
+for arg in "$@"; do
+  case "$arg" in
+    --global) SCOPE=global ;;
+    *) echo "usage: install.sh [--global]" >&2; exit 1 ;;
+  esac
+done
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GO_BIN="$HOME/.local/go/bin/go"
 INSTALL_BIN_DIR="$HOME/.local/bin"
 BINARY_PATH="$INSTALL_BIN_DIR/session-notes"
 CLAUDE_DIR="$HOME/.claude"
-SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 BOARDS_DIR="$CLAUDE_DIR/boards"
+if [ "$SCOPE" = global ]; then
+  SETTINGS_DIR="$CLAUDE_DIR"
+else
+  SETTINGS_DIR="$PWD/.claude"
+fi
+SETTINGS_FILE="$SETTINGS_DIR/settings.json"
 
 log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -52,7 +68,8 @@ log "Created $BOARDS_DIR/{panes,.state}"
 
 # --- 3. Merge hooks into settings.json ---------------------------------------
 
-mkdir -p "$CLAUDE_DIR"
+log "Hook scope: $SCOPE ($SETTINGS_FILE)"
+mkdir -p "$SETTINGS_DIR"
 
 HOOK_CMD_START="\$HOME/.local/bin/session-notes hook session-start"
 HOOK_CMD_END="\$HOME/.local/bin/session-notes hook session-end"
