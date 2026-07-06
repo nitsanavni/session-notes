@@ -30,7 +30,7 @@ plain Markdown file that both sides can safely edit at the same time.
 ├───────────────────────────────────────────────────────────────────────┤
 │ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
 │ d archive · D delete · enter expand · e edit · E $EDITOR · o open link ·│
-│ L log · r reload · ? help · q quit                                       │
+│ u undo · ctrl+r redo · L log · r reload · ? help · q quit                │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -220,6 +220,8 @@ instead).
 | `d`           | archive item / section (into `## Archive`)|
 | `D`           | hard-delete item / section from the file |
 | `enter` / `l` | expand / collapse Archive (on its header)|
+| `u`           | undo last change (up to 100)             |
+| `ctrl+r`      | redo                                     |
 | `r`           | reload from disk                         |
 | `q` / `esc`   | quit                                     |
 | `?`           | help                                     |
