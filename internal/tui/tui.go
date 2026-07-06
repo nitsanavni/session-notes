@@ -67,6 +67,8 @@ type model struct {
 	entries   []pickerEntry
 	pickerCur int
 
+	hist *history // bounded undo/redo of full board snapshots
+
 	watch  *watcher
 	width  int
 	height int
@@ -102,7 +104,7 @@ func newModel() *model {
 	ti := textinput.New()
 	ti.CharLimit = 500
 	ti.Prompt = "> "
-	return &model{cursor: -1, input: ti, width: 80, height: 24}
+	return &model{cursor: -1, input: ti, width: 80, height: 24, hist: newHistory(100)}
 }
 
 func (m *model) openBoard(path string) error {
@@ -163,15 +165,77 @@ func (m *model) save() {
 	}
 }
 
-func (m *model) reload() {
+// currentContent is the board's current serialized form — the unit of the undo
+// history and the value compared against disk to tell our own atomic-save echoes
+// apart from genuine external edits.
+func (m *model) currentContent() string {
+	if m.board == nil {
+		return ""
+	}
+	return m.board.Render()
+}
+
+// snapshot records the board's current state before a mutating action. All TUI
+// mutations funnel through here so undo/redo (and any future mutation) has one
+// obvious place to hook in.
+func (m *model) snapshot() {
+	m.hist.snapshot(m.currentContent())
+}
+
+// restore replaces the board with content and writes it back through the atomic
+// save path so Claude's file watcher observes the change.
+func (m *model) restore(content string) {
+	b := board.Parse(content)
+	b.Path = m.path
+	m.board = b
+	m.rebuildPositions()
+	m.save()
+}
+
+// undo reverts to the snapshot taken before the last mutation.
+func (m *model) undo() {
+	if prev, ok := m.hist.undoTo(m.currentContent()); ok {
+		m.restore(prev)
+		m.status = "undo"
+	} else {
+		m.status = "nothing to undo"
+	}
+}
+
+// redo re-applies the most recently undone state.
+func (m *model) redo() {
+	if next, ok := m.hist.redoTo(m.currentContent()); ok {
+		m.restore(next)
+		m.status = "redo"
+	} else {
+		m.status = "nothing to redo"
+	}
+}
+
+// reload re-reads the board from disk with no history side effects. Used after
+// $EDITOR returns, where the pre-launch snapshot already covers the change.
+func (m *model) reload() { m.doReload(false) }
+
+// reloadExternal re-reads the board from disk and, if the file differs from what
+// we hold, records the state we are leaving so undo steps back over the external
+// write. Our own atomic-save echoes match what we hold and so are ignored.
+func (m *model) reloadExternal() { m.doReload(true) }
+
+func (m *model) doReload(recordExternal bool) {
 	if m.path == "" {
 		return
 	}
-	b, err := board.Load(m.path)
+	data, err := os.ReadFile(m.path)
 	if err != nil {
 		m.status = "reload failed: " + err.Error()
 		return
 	}
+	content := string(data)
+	if recordExternal && m.board != nil && content != m.board.Render() {
+		m.hist.record(m.board.Render())
+	}
+	b := board.Parse(content)
+	b.Path = m.path
 	m.board = b
 	m.rebuildPositions()
 }
@@ -196,7 +260,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case reloadMsg:
 		if m.mode != modePicker {
-			m.reload()
+			m.reloadExternal()
 		}
 		if m.watch != nil {
 			return m, m.watch.wait()
@@ -266,17 +330,22 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "A":
 		m.openAddSections()
 	case " ":
-		if it := m.currentItem(); it != nil {
+		// StatusNone (plain bullets in Ideas/Log) has no cycle, so skip it rather
+		// than record a no-op undo entry.
+		if it := m.currentItem(); it != nil && it.Status != board.StatusNone {
+			m.snapshot()
 			it.CycleStatus()
 			m.save()
 		}
 	case "!":
 		if it := m.currentItem(); it != nil {
+			m.snapshot()
 			it.ToggleUrgent()
 			m.save()
 		}
 	case "d":
 		if it := m.currentItem(); it != nil {
+			m.snapshot()
 			m.board.Remove(it) // removes the item and its whole subtree of replies
 			m.rebuildPositions()
 			m.save()
@@ -292,11 +361,16 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.startInput(modeInputReply, "", "reply to this item")
 		}
 	case "E":
+		m.snapshot() // capture pre-edit state before handing off to $EDITOR
 		return m, m.openEditor()
 	case "L":
 		m.startInput(modeInputLog, "", "log entry")
+	case "u":
+		m.undo()
+	case "ctrl+r":
+		m.redo()
 	case "r":
-		m.reload()
+		m.reloadExternal()
 		m.status = "reloaded"
 	case "?":
 		m.prevMode = m.mode
@@ -366,6 +440,7 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
+		m.snapshot() // capture pre-mutation state for undo
 		switch mo {
 		case modeInputAdd:
 			m.board.AddItem(m.sectionTitle(m.selSec), text)
@@ -450,7 +525,7 @@ func (m *model) handleAddSectionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // prompts for a custom section name (if "custom…" was selected) or returns to
 // the board, jumping to the first section added.
 func (m *model) confirmAddSections() (tea.Model, tea.Cmd) {
-	var first string
+	var toAdd []string
 	custom := false
 	for i, name := range m.addOpts {
 		if !m.addSel[i] {
@@ -460,12 +535,15 @@ func (m *model) confirmAddSections() (tea.Model, tea.Cmd) {
 			custom = true
 			continue
 		}
-		m.board.AddSection(name)
-		if first == "" {
-			first = name
-		}
+		toAdd = append(toAdd, name)
 	}
-	if first != "" {
+	var first string
+	if len(toAdd) > 0 {
+		m.snapshot() // before mutating; a following custom-name entry snapshots again
+		for _, name := range toAdd {
+			m.board.AddSection(name)
+		}
+		first = toAdd[0]
 		m.rebuildPositions()
 		m.save()
 	}

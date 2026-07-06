@@ -237,7 +237,7 @@ func (m *model) viewFooter() string {
 		}[m.mode]
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d del · e edit · E editor · L log · r reload · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d del · e edit · E editor · L log · u undo · ctrl+r redo · r reload · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -260,6 +260,8 @@ func (m *model) viewHelp() string {
   e                   edit item inline (the bullet line only)
   E                   open board in $EDITOR
   L                   quick log entry
+  u                   undo last change
+  ctrl+r              redo
   r                   reload from disk
   q / esc             quit
   ?                   close help
@@ -270,6 +272,8 @@ Continuation lines (indented text under a bullet, not "- ") render verbatim as
 part of that bullet's block — a single cursor stop. Author them with E ($EDITOR).
 Long lines soft-wrap; ASCII-art continuation lines clip at the edge, not wrap.
 Urgent (!!) open items are injected into Claude's context on your next prompt.
+Undo/redo track the last 100 changes; an external edit is kept in history too,
+so undo steps back over it rather than clobbering the other party's write.
 
 press any key to return`
 	return lipgloss.NewStyle().Padding(1, 2).Render(help)

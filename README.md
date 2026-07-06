@@ -29,7 +29,8 @@ plain Markdown file that both sides can safely edit at the same time.
 │   21:42 claude: finished thread "fix flaky test"                        │
 ├───────────────────────────────────────────────────────────────────────┤
 │ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
-│ e edit · E $EDITOR · L log · d delete · r reload · q quit · ? help      │
+│ e edit · E $EDITOR · L log · d delete · u undo · ctrl+r redo · r reload  │
+│ q quit · ? help                                                          │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -189,6 +190,8 @@ instead).
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
 | `L`           | quick log entry                          |
 | `d`           | delete item (with continuation + replies)|
+| `u`           | undo last change (up to 100)             |
+| `ctrl+r`      | redo                                     |
 | `r`           | reload from disk                         |
 | `q` / `esc`   | quit                                     |
 | `?`           | help                                     |
