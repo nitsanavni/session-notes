@@ -158,9 +158,12 @@ cat <<EOF
 
 session-notes installed.
 
-Add this to your ~/.tmux.conf to open the board popup with prefix+g:
+Add these to your ~/.tmux.conf — popup on prefix+g, persistent split pane on
+prefix+G (right) / prefix+C-g (below):
 
   bind-key g display-popup -E -w 80% -h 80% "session-notes --pane '#{pane_id}'"
+  bind-key G split-window -h -l 40% "session-notes --pane '#{pane_id}'"
+  bind-key C-g split-window -v -l 30% "session-notes --pane '#{pane_id}'"
 
 Then reload tmux's config:
 

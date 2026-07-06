@@ -59,17 +59,24 @@ The installer prints a tmux `bind-key` line for you to add yourself (it never ed
 `~/.tmux.conf` automatically):
 
 ```tmux
+# popup (dismiss with q)
 bind-key g display-popup -E -w 80% -h 80% "session-notes --pane '#{pane_id}'"
+# persistent side pane: board on the right of the claude pane
+bind-key G split-window -h -l 40% "session-notes --pane '#{pane_id}'"
+# ...or below it
+bind-key C-g split-window -v -l 30% "session-notes --pane '#{pane_id}'"
 ```
 
-Add that to `~/.tmux.conf`, then reload it:
+Add those to `~/.tmux.conf`, then reload it:
 
 ```
 tmux source-file ~/.tmux.conf
 ```
 
-With that in place, `prefix + g` pops open the board for whichever Claude Code
-session is running in the active pane.
+`prefix + g` pops open the board for whichever Claude Code session is running in
+the active pane. `prefix + G` (or `C-g`) opens the same board as a real split
+pane instead — it live-reloads on Claude's edits, so you can keep it open beside
+the session as a permanent dashboard; `q` closes it and returns the space.
 
 ## Board format
 
