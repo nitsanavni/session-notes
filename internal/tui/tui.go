@@ -488,6 +488,9 @@ func (m *model) startInput(mo mode, value, placeholder string) {
 	m.prevMode = m.mode
 	m.mode = mo
 	m.input.Placeholder = placeholder
+	// Bound the input to the viewport so long entries horizontally scroll,
+	// keeping the cursor visible, instead of overflowing off the right edge.
+	m.input.Width = max(20, m.width-14) // leave room for the "label: > " prefix
 	m.input.SetValue(value)
 	m.input.CursorEnd()
 	m.input.Focus()
