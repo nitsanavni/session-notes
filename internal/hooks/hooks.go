@@ -69,7 +69,7 @@ This session has a shared board (markdown) that you and the user both maintain:
 - Answer questions addressed @claude in "Questions"; raise your own with "- [ ] question @user".
 - Append milestones to "Log" as "- HH:MM claude: text" (append-only).
 - The user edits the board live in a TUI; consider watching the file with the Monitor tool. Have the watch emit the diff itself so events carry the change and you don't need to re-read the file, e.g.:
-    cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-][^+-]'; cp board snap; done
+    cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp board snap; done
 - Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
 - Preserve any content you don't understand; edit surgically.
 `, path)
