@@ -159,11 +159,12 @@ cat <<EOF
 session-notes installed.
 
 Add these to your ~/.tmux.conf — popup on prefix+g, persistent split pane on
-prefix+G (right) / prefix+C-g (below):
+prefix+G (right) / prefix+C-g (below), multi-session dashboard on prefix+D:
 
   bind-key g display-popup -E -w 80% -h 80% "session-notes --pane '#{pane_id}'"
   bind-key G split-window -h -l 40% "session-notes --pane '#{pane_id}'"
   bind-key C-g split-window -v -l 30% "session-notes --pane '#{pane_id}'"
+  bind-key D display-popup -E -w 90% -h 90% "session-notes --dash"
 
 Then reload tmux's config:
 

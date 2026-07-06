@@ -27,6 +27,7 @@ const (
 	modeAddSections
 	modeLinkPick
 	modeHelp
+	modeDash
 )
 
 // customSectionLabel is the final, always-present entry in the add-sections
@@ -79,6 +80,13 @@ type model struct {
 	entries   []pickerEntry
 	pickerCur int
 
+	// dashboard state (modeDash)
+	cards        []dashCard
+	dashCur      int    // selected card
+	dashAll      bool   // --all: every project, not just this cwd
+	dashCwd      string // cwd whose boards are shown when !dashAll
+	cameFromDash bool   // board view was opened from the dashboard; q/esc returns there
+
 	hist *history // bounded undo/redo of full board snapshots
 
 	watch  *watcher
@@ -100,6 +108,21 @@ func RunPicker() error {
 	m := newModel()
 	m.mode = modePicker
 	m.entries = listBoards()
+	return runProgram(m)
+}
+
+// RunDash opens the full-screen live dashboard of all boards. When all is
+// false only boards whose frontmatter cwd matches the current working directory
+// are shown; all==true shows every project's boards.
+func RunDash(all bool) error {
+	m := newModel()
+	m.mode = modeDash
+	m.dashAll = all
+	if cwd, err := os.Getwd(); err == nil {
+		m.dashCwd = cwd
+	}
+	m.rescanDash()
+	m.watch, _ = newDirWatcher(board.BoardsDir()) // nil is tolerated (tick still refreshes)
 	return runProgram(m)
 }
 
@@ -279,10 +302,17 @@ type reloadMsg struct{}
 type editorDoneMsg struct{}
 
 func (m *model) Init() tea.Cmd {
+	var cmds []tea.Cmd
 	if m.watch != nil {
-		return m.watch.wait()
+		cmds = append(cmds, m.watch.wait())
 	}
-	return nil
+	if m.mode == modeDash {
+		// A single perpetual tick chain drives the 2s dashboard refresh. It is
+		// re-issued on every dashTickMsg (see Update) so it survives dipping into
+		// a board and back, and never spawns a second chain.
+		cmds = append(cmds, dashTick())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -291,13 +321,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case reloadMsg:
-		if m.mode != modePicker {
+		if m.mode == modeDash {
+			m.rescanDash()
+		} else if m.mode != modePicker {
 			m.reloadExternal()
 		}
 		if m.watch != nil {
 			return m, m.watch.wait()
 		}
 		return m, nil
+	case dashTickMsg:
+		if m.mode == modeDash {
+			m.rescanDash()
+		}
+		return m, dashTick()
 	case editorDoneMsg:
 		m.reload()
 		return m, nil
@@ -323,6 +360,8 @@ func (m *model) isInputMode() bool {
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
+	case modeDash:
+		return m.handleDashKey(msg)
 	case modePicker:
 		return m.handlePickerKey(msg)
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
@@ -341,7 +380,14 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	switch msg.String() {
-	case "q", "esc", "ctrl+c":
+	case "q", "esc":
+		// When the board was opened from the dashboard, q/esc returns there
+		// rather than quitting the program (ctrl+c always quits).
+		if m.cameFromDash {
+			return m, m.enterDash()
+		}
+		return m, tea.Quit
+	case "ctrl+c":
 		return m, tea.Quit
 	case "j", "down":
 		if m.cursor < len(m.positions)-1 {

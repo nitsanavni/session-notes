@@ -2,6 +2,7 @@ package tui
 
 import (
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fsnotify/fsnotify"
@@ -10,9 +11,14 @@ import (
 // watcher wraps fsnotify. It watches the board file's directory (not the file
 // itself) because atomic writes replace the inode via rename; directory
 // watching keeps working across replacements.
+//
+// In directory mode (path == "") it instead fires on any *.md change within the
+// watched directory — used by the dashboard to notice boards being created,
+// updated, or removed.
 type watcher struct {
 	fw   *fsnotify.Watcher
-	path string // absolute board path we care about
+	path string // absolute board path we care about; "" means directory mode
+	dir  bool   // true: fire on any *.md event in the watched dir
 	ch   chan struct{}
 	done chan struct{}
 }
@@ -35,6 +41,26 @@ func newWatcher(path string) (*watcher, error) {
 	return w, nil
 }
 
+// newDirWatcher watches a directory and fires on any *.md create/write/rename/
+// remove event within it. Used by the dashboard to react to boards changing.
+func newDirWatcher(dir string) (*watcher, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	fw, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	if err := fw.Add(abs); err != nil {
+		fw.Close()
+		return nil, err
+	}
+	w := &watcher{fw: fw, dir: true, ch: make(chan struct{}, 1), done: make(chan struct{})}
+	go w.loop()
+	return w, nil
+}
+
 func (w *watcher) loop() {
 	for {
 		select {
@@ -44,11 +70,20 @@ func (w *watcher) loop() {
 			if !ok {
 				return
 			}
-			if ev.Name != w.path {
-				continue
-			}
-			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
-				continue
+			if w.dir {
+				if !strings.HasSuffix(ev.Name, ".md") {
+					continue
+				}
+				if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) == 0 {
+					continue
+				}
+			} else {
+				if ev.Name != w.path {
+					continue
+				}
+				if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+					continue
+				}
 			}
 			select {
 			case w.ch <- struct{}{}:

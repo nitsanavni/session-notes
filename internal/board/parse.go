@@ -47,6 +47,8 @@ func Parse(src string) *Board {
 					b.Frontmatter.Cwd = val
 				case "started":
 					b.Frontmatter.Started = val
+				case "title":
+					b.Frontmatter.Title = val
 				default:
 					b.Frontmatter.extra = append(b.Frontmatter.extra, l)
 				}
@@ -151,6 +153,9 @@ func (b *Board) Render() string {
 		}
 		if b.Frontmatter.Started != "" {
 			sb.WriteString("started: " + b.Frontmatter.Started + "\n")
+		}
+		if b.Frontmatter.Title != "" {
+			sb.WriteString("title: " + b.Frontmatter.Title + "\n")
 		}
 		for _, l := range b.Frontmatter.extra {
 			sb.WriteString(l + "\n")

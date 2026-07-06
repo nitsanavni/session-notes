@@ -65,6 +65,8 @@ bind-key g display-popup -E -w 80% -h 80% "session-notes --pane '#{pane_id}'"
 bind-key G split-window -h -l 40% "session-notes --pane '#{pane_id}'"
 # ...or below it
 bind-key C-g split-window -v -l 30% "session-notes --pane '#{pane_id}'"
+# dashboard: every live session for this project on one screen
+bind-key D display-popup -E -w 90% -h 90% "session-notes --dash"
 ```
 
 Add those to `~/.tmux.conf`, then reload it:
@@ -77,18 +79,21 @@ tmux source-file ~/.tmux.conf
 the active pane. `prefix + G` (or `C-g`) opens the same board as a real split
 pane instead — it live-reloads on Claude's edits, so you can keep it open beside
 the session as a permanent dashboard; `q` closes it and returns the space.
+`prefix + D` opens the multi-session **Dashboard** (see below): every live
+session in the current project on one screen.
 
 ## Board format
 
 Each session gets a Markdown file at `~/.claude/boards/<session-id>.md`: YAML
-frontmatter (`session`, `cwd`, `started`) followed by fixed `##` sections — Plan,
-Threads, Questions, Ideas, Log.
+frontmatter (`session`, `cwd`, `started`, and an optional `title`) followed by
+fixed `##` sections — Plan, Threads, Questions, Ideas, Log.
 
 ```markdown
 ---
 session: abc-123
 cwd: /home/nitsan/code/foo
 started: 2026-07-06T21:30:00+03:00
+title: auth refactor
 ---
 
 ## Plan
@@ -112,6 +117,11 @@ started: 2026-07-06T21:30:00+03:00
 Conventions (parsed leniently — lines that don't match are kept verbatim, never
 destroyed):
 
+- **Title** (`title:` in the frontmatter): an optional short human name for the
+  session — "auth refactor", not a uuid. When set, the board header and the
+  dashboard/picker show it in place of the session id. Claude is nudged (by the
+  `session-start` blurb) to set one early. Any frontmatter keys the tool doesn't
+  model are still preserved round-trip.
 - **Status**: `[ ]` open, `[>]` in progress, `[x]` done, `[?]` blocked. Plain `- `
   items are fine in Ideas/Log, which don't track status.
 - **Urgency**: a leading `!!` in the item text. Checking the box or removing `!!`
@@ -208,6 +218,54 @@ latest session for that pane. Sessions started outside tmux still get a board;
 they just aren't reachable via `--pane` (use the cwd fallback or the picker
 instead).
 
+## Dashboard
+
+When you run **many** Claude Code sessions in parallel on one project — several
+panes, background agents, a couple of experiments — picking one board from a list
+is the wrong tool. The dashboard puts every live session on a single screen:
+
+```
+session-notes --dash        # this project (boards whose cwd == current dir)
+session-notes -d            # same, short flag
+session-notes --dash --all  # every project's sessions
+```
+
+Or bind it in tmux (`prefix + D`, see Install).
+
+One card per board, sorted most-recently-active first:
+
+```
+session dashboard   this project · 3 live
+
+> ● auth refactor        16s
+      [>] extracting middleware
+      !! drop the legacy endpoint? @user
+      21:42 claude: finished thread "fix flaky test"
+
+  ○ flaky-test hunt      7m
+      [>] bisecting CI failures
+
+  ✗ old spike            3h
+      12:01 end: session ended
+```
+
+Each card shows a **liveness dot**, the session's **title** (or a short session
+id — set `title:` in the frontmatter, see below), and a **relative activity
+time**; beneath it, up to three in-progress `[>]` threads, any open `!!` urgent
+items, and the last Log line.
+
+- **Liveness** comes from the session's transcript. Every Claude Code session
+  appends to `~/.claude/projects/<munged-cwd>/<session-id>.jsonl` as it works, so
+  that file's mtime is a reliable "still alive" signal without any cooperation
+  from the session itself. The dashboard classifies it: `●` **active** (touched
+  in the last 2 minutes), `○` **idle** (last 2 hours), `✗` **gone** (older, or no
+  transcript). The projects root is read-only to this tool; it is never written.
+- **Live**: the dashboard rescans boards and liveness every 2 seconds, and also
+  reacts to board-file changes via the filesystem watcher.
+- **Keys**: `j`/`k` move between cards · `enter` opens that board in the normal
+  board view (`q`/`esc` there returns to the dashboard, not quit) · `r` rescans ·
+  `q`/`esc` quits.
+
 ## Keybindings (TUI)
 
 | Key           | Action                                  |
@@ -280,6 +338,9 @@ Everything the tool creates or touches outside the repo, and why:
 | `~/.claude/boards/<id>.notes/` | `[[linked]]` side notes | long-form content stays next to its board, not in your project |
 | `~/.claude/boards/panes/*.json` | tmux pane → session mapping | written by `session-start`, read by `prefix+g`; must be findable from outside any repo |
 | `~/.claude/boards/.state/` | per-session `last-seen` markers | lets `prompt-submit` tell Claude "the board changed" without touching the board |
+| `~/.claude/projects/<munged-cwd>/*.jsonl` | Claude Code session transcripts | **read-only** — the dashboard uses each transcript's mtime as its liveness signal; never written or modified |
+| `$SESSION_NOTES_PROJECTS_DIR` | env override for the transcripts root above | defaults to `~/.claude/projects`; point it elsewhere for tests or non-standard installs |
+| `$SESSION_NOTES_DIR` | env override for the boards directory | defaults to `~/.claude/boards` |
 | `./.claude/settings.json` (or `~/.claude/settings.json` with `--global`) | the three hooks | this is where Claude Code looks for hooks; project scope by default so only opted-in repos get boards |
 | `settings.json.bak.<timestamp>` | installer backups | written next to the settings file before every merge |
 | `~/.tmux.conf` | one `bind-key` line | added by you (the installer only prints it) |

@@ -24,6 +24,8 @@ func main() {
 
 	var boardPath, paneID string
 	picker := false
+	dash := false
+	all := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--board":
@@ -38,6 +40,10 @@ func main() {
 			}
 		case "-l", "--list":
 			picker = true
+		case "-d", "--dash":
+			dash = true
+		case "--all":
+			all = true
 		case "-h", "--help":
 			usage(os.Stdout)
 			return
@@ -48,6 +54,10 @@ func main() {
 		}
 	}
 
+	if dash {
+		exitIf(tui.RunDash(all))
+		return
+	}
 	if picker {
 		exitIf(tui.RunPicker())
 		return
@@ -142,6 +152,8 @@ Usage:
   session-notes                       open the TUI for the current session's board
   session-notes --pane <tmux-pane>    resolve board via pane mapping
   session-notes --board <path>        open a specific board file
+  session-notes -d, --dash            live dashboard of this project's sessions
+  session-notes --dash --all          dashboard across every project
   session-notes -l                    board picker (all boards, newest first)
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook

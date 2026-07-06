@@ -66,6 +66,7 @@ func SessionStart(stdin io.Reader, stdout io.Writer) {
 	fmt.Fprintf(stdout, `Session board: %s
 
 This session has a shared board (markdown) that you and the user both maintain:
+- Early on, set a short "title:" in the board frontmatter describing the task (e.g. "auth refactor") so dashboards/pickers show a name instead of a uuid.
 - Keep "Threads" and "Plan" up to date as you work (statuses: [ ] open, [>] in progress, [x] done, [?] blocked).
 - Answer questions addressed @claude in "Questions"; raise your own with "- [ ] question @user".
 - To answer or react to a specific item, append an indented sub-bullet reply under it, forum-style ("  - claude: text"), instead of rewriting the item's text inline. Replies nest 2 spaces per level; you can reply to a reply.

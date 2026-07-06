@@ -48,6 +48,8 @@ func statusMarker(s board.Status) string {
 
 func (m *model) View() string {
 	switch m.mode {
+	case modeDash:
+		return m.viewDash()
 	case modePicker:
 		return m.viewPicker()
 	case modeHelp:
@@ -69,7 +71,9 @@ func (m *model) viewBoard() string {
 	selHeaderLine := 0 // display row of the active section's header
 
 	header := m.path
-	if fm := m.board.Frontmatter; fm.Session != "" {
+	if fm := m.board.Frontmatter; fm.Title != "" {
+		header = fmt.Sprintf("%s  %s", fm.Title, styleDim.Render(fm.Cwd))
+	} else if fm.Session != "" {
 		header = fmt.Sprintf("%s  %s", fm.Session, styleDim.Render(fm.Cwd))
 	}
 	lines = append(lines, styleTitle.Render(header), "")

@@ -97,7 +97,10 @@ type Frontmatter struct {
 	Session string
 	Cwd     string
 	Started string
-	extra   []string // raw "key: value" lines for keys we don't model
+	// Title is an optional short human name for the session, shown by the TUI
+	// board header and the dashboard/picker in place of the raw session id.
+	Title string
+	extra []string // raw "key: value" lines for keys we don't model
 }
 
 // DisplayText returns the display text of an item (without marker/urgency), or
