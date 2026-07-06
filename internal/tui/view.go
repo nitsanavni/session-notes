@@ -75,24 +75,33 @@ func (m *model) viewBoard() string {
 			header += " " + styleDim.Render(fmt.Sprintf("%d", si+1))
 		}
 		lines = append(lines, header)
-		for _, it := range s.Items {
-			if !it.IsItem() {
-				// Preserve raw lines in display too, dimmed; skip blank lines'
-				// styling but keep spacing.
-				if strings.TrimSpace(it.DisplayText()) == "" {
-					lines = append(lines, "")
-				} else {
-					lines = append(lines, "  "+styleDim.Render(it.DisplayText()))
+		// Walk the item tree depth-first; children render indented below their
+		// parent for a threaded, forum-style look. posIdx tracks navigable items
+		// in the same order rebuildPositions uses so the cursor lines up.
+		var walk func(items []*board.Item, depth int)
+		walk = func(items []*board.Item, depth int) {
+			for _, it := range items {
+				if !it.IsItem() {
+					// Preserve raw lines in display too, dimmed; skip blank lines'
+					// styling but keep spacing.
+					if strings.TrimSpace(it.DisplayText()) == "" {
+						lines = append(lines, "")
+					} else {
+						lines = append(lines, strings.Repeat("  ", depth+1)+styleDim.Render(it.DisplayText()))
+					}
+					walk(it.Children, depth+1)
+					continue
 				}
-				continue
+				selected := posIdx == m.cursor
+				if selected {
+					cursorLine = len(lines)
+				}
+				lines = append(lines, m.renderItem(it, selected, depth))
+				posIdx++
+				walk(it.Children, depth+1)
 			}
-			selected := posIdx == m.cursor
-			if selected {
-				cursorLine = len(lines)
-			}
-			lines = append(lines, m.renderItem(it, selected))
-			posIdx++
 		}
+		walk(s.Items, 0)
 	}
 
 	// Footer: input line or key hints, plus status.
@@ -122,11 +131,13 @@ func (m *model) viewBoard() string {
 	return body + "\n" + footer
 }
 
-func (m *model) renderItem(it *board.Item, selected bool) string {
+func (m *model) renderItem(it *board.Item, selected bool, depth int) string {
 	prefix := "  "
 	if selected {
 		prefix = styleCursor.Render("> ")
 	}
+	// Indent children under their parent for the threaded, forum-style feel.
+	indent := strings.Repeat("  ", depth)
 	text := it.DisplayText()
 	if it.Urgent {
 		text = "!! " + text
@@ -139,24 +150,27 @@ func (m *model) renderItem(it *board.Item, selected bool) string {
 		styled = styleUrgent.Render(text)
 	case selected:
 		styled = lipgloss.NewStyle().Bold(true).Render(text)
+	case depth > 0: // replies read slightly dimmer than top-level items
+		styled = styleDim.Render(text)
 	default:
 		styled = text
 	}
-	return prefix + statusMarker(it.Status) + " " + styled
+	return prefix + indent + statusMarker(it.Status) + " " + styled
 }
 
 func (m *model) viewFooter() string {
 	switch m.mode {
-	case modeInputAdd, modeInputEdit, modeInputLog, modeInputCustomSection:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
 		label := map[mode]string{
 			modeInputAdd:           "add",
 			modeInputEdit:          "edit",
 			modeInputLog:           "log",
+			modeInputReply:         "reply",
 			modeInputCustomSection: "section",
 		}[m.mode]
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · space status · ! urgent · d del · e edit · E editor · L log · r reload · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d del · e edit · E editor · L log · r reload · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -172,9 +186,10 @@ func (m *model) viewHelp() string {
   1 - 9               jump to the Nth section
   a                   add item to current section
   A                   add sections (multi-select overlay)
+  R                   reply to item (threaded sub-bullet)
   space               cycle status [ ] -> [>] -> [x]
   !                   toggle urgent (!!)
-  d                   delete item
+  d                   delete item (and its replies)
   e                   edit item inline
   E                   open board in $EDITOR
   L                   quick log entry
@@ -183,6 +198,7 @@ func (m *model) viewHelp() string {
   ?                   close help
 
 Statuses: [ ] open · [>] in progress · [x] done · [?] blocked
+Replies nest under an item as indented "- author: text" sub-bullets.
 Urgent (!!) open items are injected into Claude's context on your next prompt.
 
 press any key to return`

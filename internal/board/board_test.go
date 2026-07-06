@@ -78,6 +78,32 @@ random trailing text
 - !! plain urgent
 - text with !! in the middle stays
 `},
+		{"threaded replies", `## Questions
+- [ ] drop the legacy endpoint? @user
+  - user: yes let's drop it
+  - claude: done in abc123
+- [>] next thread
+`},
+		{"reply with checkbox", `## Threads
+- [>] parent thread
+  - [ ] claude: sub-task to do
+  - user: looks good
+`},
+		{"deep nesting", `## Threads
+- [ ] a
+  - b: one
+    - c: two
+      - d: three
+- [ ] e
+`},
+		{"nested with blank between threads", `## Questions
+- [ ] q1
+  - user: r1
+  - claude: r2
+
+- [ ] q2
+  - user: r3
+`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -376,5 +402,145 @@ func TestDeleteItem(t *testing.T) {
 	}
 	if s.DeleteItem(5) {
 		t.Error("out-of-range delete should return false")
+	}
+}
+
+func TestParseTree(t *testing.T) {
+	b := Parse(`## Questions
+- [ ] drop the legacy endpoint? @user
+  - user: yes let's drop it
+  - claude: done in abc123
+    - user: thanks
+- [>] unrelated
+`)
+	s := b.Section("Questions")
+	if len(s.Items) != 2 {
+		t.Fatalf("got %d top-level items, want 2", len(s.Items))
+	}
+	parent := s.Items[0]
+	if parent.Text != "drop the legacy endpoint? @user" {
+		t.Fatalf("parent text = %q", parent.Text)
+	}
+	if len(parent.Children) != 2 {
+		t.Fatalf("parent has %d children, want 2", len(parent.Children))
+	}
+	if got := parent.Children[0].Text; got != "user: yes let's drop it" {
+		t.Errorf("child[0] = %q", got)
+	}
+	claude := parent.Children[1]
+	if claude.Text != "claude: done in abc123" {
+		t.Errorf("child[1] = %q", claude.Text)
+	}
+	if len(claude.Children) != 1 || claude.Children[0].Text != "user: thanks" {
+		t.Errorf("grandchild wrong: %+v", claude.Children)
+	}
+	if s.Items[1].Text != "unrelated" {
+		t.Errorf("second top-level = %q", s.Items[1].Text)
+	}
+}
+
+func TestAddReply(t *testing.T) {
+	t.Run("into empty thread", func(t *testing.T) {
+		b := Parse("## Questions\n- [ ] drop legacy endpoint? @user\n")
+		parent := b.Section("Questions").Items[0]
+		b.AddReply(parent, "claude: done in abc123")
+		want := "## Questions\n- [ ] drop legacy endpoint? @user\n  - claude: done in abc123\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("into existing thread appends last", func(t *testing.T) {
+		b := Parse("## Questions\n- [ ] q? @user\n  - user: first\n")
+		parent := b.Section("Questions").Items[0]
+		b.AddReply(parent, "claude: second")
+		want := "## Questions\n- [ ] q? @user\n  - user: first\n  - claude: second\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("reply to a reply nests deeper", func(t *testing.T) {
+		b := Parse("## Q\n- [ ] q\n  - user: r1\n")
+		reply := b.Section("Q").Items[0].Children[0]
+		b.AddReply(reply, "claude: r2")
+		want := "## Q\n- [ ] q\n  - user: r1\n    - claude: r2\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("reply before section-separating blank", func(t *testing.T) {
+		b := Parse("## Q\n- [ ] q\n\n## Log\n")
+		parent := b.Section("Q").Items[0]
+		b.AddReply(parent, "user: hi")
+		want := "## Q\n- [ ] q\n  - user: hi\n\n## Log\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
+func TestRemoveSubtree(t *testing.T) {
+	t.Run("delete parent removes children", func(t *testing.T) {
+		b := Parse(`## Q
+- [ ] keep me
+- [ ] delete me
+  - user: reply one
+  - claude: reply two
+    - user: nested
+- [ ] keep me too
+`)
+		s := b.Section("Q")
+		target := s.Items[1]
+		if !b.Remove(target) {
+			t.Fatal("remove returned false")
+		}
+		want := "## Q\n- [ ] keep me\n- [ ] keep me too\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("delete nested reply keeps siblings and parent", func(t *testing.T) {
+		b := Parse("## Q\n- [ ] q\n  - user: a\n  - claude: b\n")
+		parent := b.Section("Q").Items[0]
+		if !b.Remove(parent.Children[0]) {
+			t.Fatal("remove returned false")
+		}
+		want := "## Q\n- [ ] q\n  - claude: b\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		b := Parse("## Q\n- [ ] q\n")
+		if b.Remove(&Item{parsed: true, Text: "ghost"}) {
+			t.Error("removing a foreign item should return false")
+		}
+	})
+}
+
+func TestUrgentIncludesChildren(t *testing.T) {
+	b := Parse(`## Questions
+- [ ] parent not urgent
+  - [ ] !! urgent reply
+  - [x] !! urgent but done reply
+    - !! deep urgent claude: text
+`)
+	urgent := b.UrgentOpenItems()
+	var texts []string
+	for _, it := range urgent {
+		texts = append(texts, it.Text)
+	}
+	want := []string{"urgent reply", "deep urgent claude: text"}
+	if len(texts) != len(want) {
+		t.Fatalf("got %d urgent %v, want %d", len(texts), texts, len(want))
+	}
+	for i := range want {
+		if texts[i] != want[i] {
+			t.Errorf("urgent[%d] = %q, want %q", i, texts[i], want[i])
+		}
 	}
 }

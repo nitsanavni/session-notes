@@ -44,13 +44,29 @@ func (s Status) marker() string {
 }
 
 // Item is a single list line within a section.
+//
+// Items form a tree: a line indented under another item (2 spaces per level) is
+// a child of it, giving forum-style threaded replies. Children render depth-first
+// immediately below their parent, so the flat source order is preserved exactly.
 type Item struct {
-	Status Status
-	Urgent bool   // leading "!!" in the text
-	Text   string // item text with status marker and "!!" stripped
-	indent string // leading whitespace before the bullet
-	raw    string // original line, used when the line is not a recognized item
-	parsed bool   // true if this line was recognized as a structured item
+	Status   Status
+	Urgent   bool    // leading "!!" in the text
+	Text     string  // item text with status marker and "!!" stripped
+	Children []*Item // nested items (replies), in document order
+	indent   string  // leading whitespace before the bullet
+	raw      string  // original line, used when the line is not a recognized item
+	parsed   bool    // true if this line was recognized as a structured item
+}
+
+// depth reports the item's indentation width in characters, used to reconstruct
+// the tree from a flat line list. For recognized items this is the leading
+// whitespace before the bullet; for raw lines it is the leading whitespace of
+// the original text (blank lines are depth 0).
+func (it *Item) depth() int {
+	if it.parsed {
+		return len(it.indent)
+	}
+	return len(it.raw) - len(strings.TrimLeft(it.raw, " \t"))
 }
 
 // Section is a "## Heading" and the lines beneath it (until the next heading).
@@ -149,15 +165,21 @@ func (b *Board) Section(title string) *Section {
 	return nil
 }
 
-// UrgentOpenItems returns all recognized items that are urgent and not done.
+// UrgentOpenItems returns all recognized items that are urgent and not done,
+// including nested replies, in document order.
 func (b *Board) UrgentOpenItems() []*Item {
 	var out []*Item
-	for _, s := range b.Sections {
-		for _, it := range s.Items {
+	var walk func(items []*Item)
+	walk = func(items []*Item) {
+		for _, it := range items {
 			if it.parsed && it.Urgent && it.Status != StatusDone {
 				out = append(out, it)
 			}
+			walk(it.Children)
 		}
+	}
+	for _, s := range b.Sections {
+		walk(s.Items)
 	}
 	return out
 }
@@ -254,12 +276,50 @@ func ensureTrailingBlank(s *Section) {
 	s.Items = append(s.Items, &Item{raw: ""})
 }
 
-// DeleteItem removes the item at index i from the section. Returns false if out
-// of range.
+// DeleteItem removes the item at index i from the section's top-level items.
+// Returns false if out of range. Any children of the removed item go with it.
 func (s *Section) DeleteItem(i int) bool {
 	if i < 0 || i >= len(s.Items) {
 		return false
 	}
 	s.Items = append(s.Items[:i], s.Items[i+1:]...)
 	return true
+}
+
+// AddReply appends a forum-style reply as the last child of parent and returns
+// it. The reply is a plain bullet (no checkbox) indented one level (2 spaces)
+// deeper than its parent; text is typically "author: message". Nesting is
+// arbitrary — replying to a reply just nests one level further.
+func (b *Board) AddReply(parent *Item, text string) *Item {
+	child := &Item{parsed: true, Status: StatusNone, Text: text, indent: parent.indent + "  "}
+	parent.Children = append(parent.Children, child)
+	return child
+}
+
+// Remove deletes target from anywhere in the board — a top-level item or a
+// nested reply — taking its whole subtree with it. Returns false if not found.
+func (b *Board) Remove(target *Item) bool {
+	for _, s := range b.Sections {
+		if items, ok := removeItem(s.Items, target); ok {
+			s.Items = items
+			return true
+		}
+	}
+	return false
+}
+
+// removeItem returns items with target removed (searching descendants), and
+// whether it was found. Only the slice at the level where target lives is
+// rebuilt; other levels are mutated in place via their Children field.
+func removeItem(items []*Item, target *Item) ([]*Item, bool) {
+	for i, it := range items {
+		if it == target {
+			return append(items[:i:i], items[i+1:]...), true
+		}
+		if newCh, ok := removeItem(it.Children, target); ok {
+			it.Children = newCh
+			return items, true
+		}
+	}
+	return items, false
 }

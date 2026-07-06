@@ -21,6 +21,7 @@ const (
 	modeInputAdd
 	modeInputEdit
 	modeInputLog
+	modeInputReply
 	modeInputCustomSection
 	modeAddSections
 	modeHelp
@@ -30,9 +31,14 @@ const (
 // overlay that prompts for a free-text section name.
 const customSectionLabel = "custom…"
 
-// pos addresses one item on the board: section index + index within that
-// section's Items slice.
-type pos struct{ sec, item int }
+// navItem addresses one navigable (parsed) item on the board, wherever it lives
+// in the section's item tree: the owning section index, the item pointer, and its
+// nesting depth (0 = top level, 1 = reply, …).
+type navItem struct {
+	sec   int
+	item  *board.Item
+	depth int
+}
 
 type model struct {
 	mode     mode
@@ -41,14 +47,16 @@ type model struct {
 	// board view state
 	path      string
 	board     *board.Board
-	positions []pos // navigable (parsed) items, in document order
-	cursor    int   // index into positions; -1 when there are none
-	selSec    int   // active section (authoritative for `a` and tab)
+	positions []navItem // navigable (parsed) items, in document order
+	cursor    int       // index into positions; -1 when there are none
+	selSec    int       // active section (authoritative for `a` and tab)
 	scroll    int
 	status    string // transient one-line message
 
-	input   textinput.Model
-	editPos pos // item being edited in modeInputEdit
+	input textinput.Model
+	// target is the item acted on by modeInputEdit / modeInputReply, captured
+	// when the input opens (the cursor may not move, but this is robust to it).
+	target *board.Item
 
 	// add-sections overlay state (modeAddSections)
 	addOpts []string     // offered section names; last entry is customSectionLabel
@@ -116,11 +124,16 @@ func (m *model) openBoard(path string) error {
 func (m *model) rebuildPositions() {
 	m.positions = m.positions[:0]
 	for si, s := range m.board.Sections {
-		for ii, it := range s.Items {
-			if it.IsItem() {
-				m.positions = append(m.positions, pos{si, ii})
+		var walk func(items []*board.Item, depth int)
+		walk = func(items []*board.Item, depth int) {
+			for _, it := range items {
+				if it.IsItem() {
+					m.positions = append(m.positions, navItem{sec: si, item: it, depth: depth})
+				}
+				walk(it.Children, depth+1)
 			}
 		}
+		walk(s.Items, 0)
 	}
 	if len(m.positions) == 0 {
 		m.cursor = -1
@@ -141,8 +154,7 @@ func (m *model) currentItem() *board.Item {
 	if m.cursor < 0 || m.cursor >= len(m.positions) {
 		return nil
 	}
-	p := m.positions[m.cursor]
-	return m.board.Sections[p.sec].Items[p.item]
+	return m.positions[m.cursor].item
 }
 
 func (m *model) save() {
@@ -207,7 +219,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // isInputMode reports whether the model is currently capturing textinput.
 func (m *model) isInputMode() bool {
 	switch m.mode {
-	case modeInputAdd, modeInputEdit, modeInputLog, modeInputCustomSection:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
 		return true
 	}
 	return false
@@ -217,7 +229,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modePicker:
 		return m.handlePickerKey(msg)
-	case modeInputAdd, modeInputEdit, modeInputLog, modeInputCustomSection:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
 		return m.handleInputKey(msg)
 	case modeAddSections:
 		return m.handleAddSectionsKey(msg)
@@ -264,16 +276,20 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.save()
 		}
 	case "d":
-		if m.cursor >= 0 {
-			p := m.positions[m.cursor]
-			m.board.Sections[p.sec].DeleteItem(p.item)
+		if it := m.currentItem(); it != nil {
+			m.board.Remove(it) // removes the item and its whole subtree of replies
 			m.rebuildPositions()
 			m.save()
 		}
 	case "e":
 		if it := m.currentItem(); it != nil {
-			m.editPos = m.positions[m.cursor]
+			m.target = it
 			m.startInput(modeInputEdit, it.DisplayText(), "edit item")
+		}
+	case "R":
+		if it := m.currentItem(); it != nil {
+			m.target = it
+			m.startInput(modeInputReply, "", "reply to this item")
 		}
 	case "E":
 		return m, m.openEditor()
@@ -362,9 +378,22 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case modeInputEdit:
-			p := m.editPos
-			if p.sec < len(m.board.Sections) && p.item < len(m.board.Sections[p.sec].Items) {
-				m.board.Sections[p.sec].Items[p.item].Text = text
+			if m.target != nil {
+				m.target.Text = text
+			}
+		case modeInputReply:
+			if m.target != nil {
+				// Forum-style: the human's reply is authored "user:".
+				m.board.AddReply(m.target, "user: "+text)
+				m.rebuildPositions()
+				// Move the cursor onto the freshly added reply.
+				for i, p := range m.positions {
+					if p.item == m.target.Children[len(m.target.Children)-1] {
+						m.cursor = i
+						m.selSec = p.sec
+						break
+					}
+				}
 			}
 		case modeInputLog:
 			m.board.AppendLog("user", text)

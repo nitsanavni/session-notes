@@ -69,7 +69,41 @@ func Parse(src string) *Board {
 		}
 		cur.Items = append(cur.Items, parseLine(line))
 	}
+	// Fold each section's flat line list into a tree by indentation. This is a
+	// pure regrouping: depth-first traversal reproduces the original order, so
+	// the round-trip stays lossless.
+	for _, s := range b.Sections {
+		s.Items = buildTree(s.Items)
+	}
 	return b
+}
+
+// buildTree turns a flat, in-order list of items into a forest using a stack
+// keyed on each line's indentation depth. A line becomes a child of the nearest
+// preceding line with strictly smaller depth, else a root. Because nodes are
+// only ever appended (never inserted mid-list), a depth-first walk of the result
+// yields the exact original order.
+func buildTree(flat []*Item) []*Item {
+	var roots []*Item
+	type frame struct {
+		item  *Item
+		depth int
+	}
+	var stack []frame
+	for _, it := range flat {
+		d := it.depth()
+		for len(stack) > 0 && stack[len(stack)-1].depth >= d {
+			stack = stack[:len(stack)-1]
+		}
+		if len(stack) == 0 {
+			roots = append(roots, it)
+		} else {
+			parent := stack[len(stack)-1].item
+			parent.Children = append(parent.Children, it)
+		}
+		stack = append(stack, frame{it, d})
+	}
+	return roots
 }
 
 // parseLine turns one line into an Item. Non-bullet lines become raw items.
@@ -128,11 +162,17 @@ func (b *Board) Render() string {
 	}
 	for _, s := range b.Sections {
 		sb.WriteString("## " + s.Title + "\n")
-		for _, it := range s.Items {
-			sb.WriteString(it.render() + "\n")
-		}
+		renderItems(&sb, s.Items)
 	}
 	return sb.String()
+}
+
+// renderItems writes items depth-first: each item's line, then its children.
+func renderItems(sb *strings.Builder, items []*Item) {
+	for _, it := range items {
+		sb.WriteString(it.render() + "\n")
+		renderItems(sb, it.Children)
+	}
 }
 
 // Load reads and parses a board file.

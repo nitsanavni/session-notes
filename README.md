@@ -18,6 +18,8 @@ plain Markdown file that both sides can safely edit at the same time.
 │                                                                          │
 │   Questions                                                              │
 │   [ ] !! drop the legacy endpoint? @user                                │
+│     - user: yes, let's drop it                                          │
+│     - claude: done in abc123                                            │
 │                                                                          │
 │   Ideas                                                                  │
 │   - cache invalidation could be event-driven                            │
@@ -26,8 +28,8 @@ plain Markdown file that both sides can safely edit at the same time.
 │   21:30 start: session started in /home/nitsan/code/foo                 │
 │   21:42 claude: finished thread "fix flaky test"                        │
 ├───────────────────────────────────────────────────────────────────────┤
-│ j/k move · tab section · a add · space status · ! urgent · e edit ·     │
-│ E $EDITOR · L log · d delete · r reload · q quit · ? help              │
+│ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
+│ e edit · E $EDITOR · L log · d delete · r reload · q quit · ? help      │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -107,6 +109,21 @@ destroyed):
 - **Urgency**: a leading `!!` in the item text. Checking the box or removing `!!`
   acknowledges it.
 - **Addressing**: `@claude` / `@user` anywhere in the text.
+- **Replies (threads)**: an item indented two spaces under another item is a
+  forum-style reply to it. Rather than editing an item's text to answer it, add a
+  sub-bullet reply — usually `- author: text` — beneath it. Replies can nest
+  arbitrarily deep (two spaces per level) and may themselves carry checkboxes:
+
+  ```markdown
+  ## Questions
+  - [ ] drop the legacy endpoint? @user
+    - user: yes, let's drop it
+    - claude: done in abc123
+      - user: thanks
+  ```
+
+  In the TUI, `R` replies to the item under the cursor; deleting an item removes
+  its whole reply thread with it.
 - **Log**: append-only, one line per entry, `- HH:MM author: text`.
 
 ## Session resolution
@@ -142,12 +159,13 @@ instead).
 | `1` … `9`     | jump to the Nth section                   |
 | `a`           | add item to current section              |
 | `A`           | add sections (multi-select overlay)      |
+| `R`           | reply to item (threaded sub-bullet)      |
 | `space`       | cycle status `[ ] → [>] → [x]`           |
 | `!`           | toggle urgent (`!!`)                     |
 | `e`           | edit item inline                         |
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
 | `L`           | quick log entry                          |
-| `d`           | delete item                              |
+| `d`           | delete item (and its replies)            |
 | `r`           | reload from disk                         |
 | `q` / `esc`   | quit                                     |
 | `?`           | help                                     |
