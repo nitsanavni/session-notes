@@ -29,7 +29,8 @@ plain Markdown file that both sides can safely edit at the same time.
 │   21:42 claude: finished thread "fix flaky test"                        │
 ├───────────────────────────────────────────────────────────────────────┤
 │ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
-│ e edit · E $EDITOR · L log · d delete · r reload · q quit · ? help      │
+│ e edit · E $EDITOR · o open link · L log · d delete · r reload · q quit │
+│ ? help                                                                   │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -149,6 +150,24 @@ destroyed):
   rows hanging-indented under where the text starts.
 - **Log**: append-only, one line per entry, `- HH:MM author: text`.
 
+### Linked notes
+
+An item's text can contain `[[name]]` to link to a side markdown file for
+longer-form content that doesn't belong inline in the board — a design writeup,
+a full error dump, Claude's detailed answer to a question. `[[name]]` renders
+in a distinct color in the TUI (display only; the file text is untouched).
+
+Linked files live at `~/.claude/boards/<session-id>.notes/name.md` (next to the
+board itself, scoped to the session). In the TUI, `o` opens the item's first
+link in `$EDITOR` (same suspend-and-resume as `E`), creating the notes
+directory and the file — seeded with a `# name` heading — if it doesn't exist
+yet. `o` is a no-op on items with no links.
+
+Claude is expected to write its long-form answers into these files rather than
+bloating the board itself — e.g. drop `[[legacy-endpoint-audit]]` into a
+Questions item and put the full analysis in
+`~/.claude/boards/<session-id>.notes/legacy-endpoint-audit.md`.
+
 ## Session resolution
 
 Because you may have several Claude Code sessions running concurrently (different
@@ -187,6 +206,7 @@ instead).
 | `!`           | toggle urgent (`!!`)                     |
 | `e`           | edit item inline (the bullet line only)  |
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
+| `o`           | open item's first `[[link]]` in `$EDITOR` (suspends TUI) |
 | `L`           | quick log entry                          |
 | `d`           | delete item (with continuation + replies)|
 | `r`           | reload from disk                         |

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -293,6 +294,8 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "E":
 		return m, m.openEditor()
+	case "o":
+		return m, m.openLink()
 	case "L":
 		m.startInput(modeInputLog, "", "log entry")
 	case "r":
@@ -498,4 +501,46 @@ func (m *model) openEditor() tea.Cmd {
 	}
 	c := exec.Command(editor, m.path) // #nosec G204 -- user's own $EDITOR
 	return tea.ExecProcess(c, func(error) tea.Msg { return editorDoneMsg{} })
+}
+
+// openLink opens the FIRST [[wiki-link]] found in the current item's text in
+// $EDITOR (same suspend-and-resume pattern as openEditor), creating the
+// linked notes file — and its directory — if it doesn't exist yet. A no-op if
+// there is no current item or its text has no links.
+func (m *model) openLink() tea.Cmd {
+	it := m.currentItem()
+	if it == nil {
+		return nil
+	}
+	links := board.ExtractLinks(it.DisplayText())
+	if len(links) == 0 {
+		return nil
+	}
+	name := links[0]
+	path := board.ResolveLink(m.board, name)
+	if err := ensureNoteFile(path, name); err != nil {
+		m.status = "open link failed: " + err.Error()
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	c := exec.Command(editor, path) // #nosec G204 -- user's own $EDITOR
+	return tea.ExecProcess(c, func(error) tea.Msg { return editorDoneMsg{} })
+}
+
+// ensureNoteFile makes sure the linked note file exists: creates its parent
+// notes directory and, if the file itself is missing, seeds it with a
+// "# name" heading. Existing files are left untouched.
+func ensureNoteFile(path, name string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte("# "+name+"\n"), 0o644)
 }
