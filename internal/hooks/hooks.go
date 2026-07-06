@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
@@ -74,6 +75,52 @@ This session has a shared board (markdown) that you and the user both maintain:
 - Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
 - Preserve any content you don't understand; edit surgically.
 `, path)
+
+	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
+		fmt.Fprintf(stdout, "\nBoards from previous sessions in this project (read them for history/context if useful):\n")
+		for _, p := range prev {
+			fmt.Fprintf(stdout, "- %s\n", p)
+		}
+	}
+}
+
+// previousBoards returns up to max paths of other sessions' boards whose
+// frontmatter cwd matches this session's cwd, newest first.
+func previousBoards(sessionID, cwd string, max int) []string {
+	if cwd == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(board.BoardsDir())
+	if err != nil {
+		return nil
+	}
+	type cand struct {
+		path  string
+		mtime time.Time
+	}
+	var cands []cand
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || len(name) < 4 || name[len(name)-3:] != ".md" || name == sessionID+".md" {
+			continue
+		}
+		path := board.BoardsDir() + string(os.PathSeparator) + name
+		b, err := board.Load(path)
+		if err != nil || b.Frontmatter.Cwd != cwd {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		cands = append(cands, cand{path, fi.ModTime()})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].mtime.After(cands[j].mtime) })
+	out := make([]string, 0, max)
+	for i := 0; i < len(cands) && i < max; i++ {
+		out = append(out, cands[i].path)
+	}
+	return out
 }
 
 // PromptSubmit handles the UserPromptSubmit hook: surface unchecked urgent
