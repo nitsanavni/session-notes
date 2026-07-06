@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -22,7 +23,13 @@ var (
 	styleHelpBar    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	styleStatus     = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
 	styleMarker     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	styleLink       = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Underline(true)
 )
+
+// linkDisplayRe matches [[name]] spans for display-only highlighting. It
+// mirrors board.ExtractLinks' delimiters but is kept separate: this one runs
+// per already-wrapped, plain-text display row, not over raw item text.
+var linkDisplayRe = regexp.MustCompile(`\[\[[^\[\]]+\]\]`)
 
 func statusMarker(s board.Status) string {
 	switch s {
@@ -220,13 +227,42 @@ func wrapRows(head, text string, hang, width int, style lipgloss.Style) []string
 	out := make([]string, 0, len(rows))
 	pad := strings.Repeat(" ", hang)
 	for i, r := range rows {
+		rendered := renderRowWithLinks(r, style)
 		if i == 0 {
-			out = append(out, head+style.Render(r))
+			out = append(out, head+rendered)
 		} else {
-			out = append(out, pad+style.Render(r))
+			out = append(out, pad+rendered)
 		}
 	}
 	return out
+}
+
+// renderRowWithLinks renders one already-wrapped, plain-text row, styling
+// [[wiki-link]] spans in a distinct link color while the rest of the row
+// keeps the caller's style. Wrapping happens on plain text first (see
+// wrapRows) specifically so this can render each segment as its own
+// self-contained styled string — concatenating sibling Render calls, never
+// nesting one inside another, which would let an inner reset code clobber the
+// outer style for the remainder of the row.
+func renderRowWithLinks(row string, style lipgloss.Style) string {
+	locs := linkDisplayRe.FindAllStringIndex(row, -1)
+	if locs == nil {
+		return style.Render(row)
+	}
+	linkStyle := style.Foreground(styleLink.GetForeground()).Underline(true)
+	var b strings.Builder
+	last := 0
+	for _, loc := range locs {
+		if loc[0] > last {
+			b.WriteString(style.Render(row[last:loc[0]]))
+		}
+		b.WriteString(linkStyle.Render(row[loc[0]:loc[1]]))
+		last = loc[1]
+	}
+	if last < len(row) {
+		b.WriteString(style.Render(row[last:]))
+	}
+	return b.String()
 }
 
 // continuationRow renders a continuation (or stray raw) line for display:
@@ -253,7 +289,7 @@ func (m *model) viewFooter() string {
 		}[m.mode]
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · L log · r reload · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · o open link · L log · r reload · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -277,6 +313,7 @@ func (m *model) viewHelp() string {
   enter / l           expand / collapse the Archive section (on its header)
   e                   edit item inline (the bullet line only)
   E                   open board in $EDITOR
+  o                   open item's first [[linked note]] in $EDITOR
   L                   quick log entry
   r                   reload from disk
   q / esc             quit
@@ -292,6 +329,8 @@ Continuation lines (indented text under a bullet, not "- ") render verbatim as
 part of that bullet's block — a single cursor stop. Author them with E ($EDITOR).
 Long lines soft-wrap; ASCII-art continuation lines clip at the edge, not wrap.
 Urgent (!!) open items are injected into Claude's context on your next prompt.
+[[name]] in an item's text links to a side notes file; o opens the first
+link's file in $EDITOR, creating it (with a "# name" heading) if missing.
 
 press any key to return`
 	return lipgloss.NewStyle().Padding(1, 2).Render(help)
