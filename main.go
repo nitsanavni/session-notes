@@ -85,8 +85,41 @@ func resolveBoard(explicit, paneID string) (string, bool) {
 			return path, true
 		}
 	}
-	// 5. Picker.
+	// 5. Exactly one live session (one distinct board across all pane
+	// mappings): no ambiguity, land on it directly.
+	if path, ok := soleLiveBoard(); ok {
+		return path, true
+	}
+	// 6. Picker.
 	return "", false
+}
+
+// soleLiveBoard returns the board path if every pane mapping (with a board
+// file that still exists) points at the same single board.
+func soleLiveBoard() (string, bool) {
+	entries, err := os.ReadDir(board.PanesDir())
+	if err != nil {
+		return "", false
+	}
+	sole := ""
+	for _, e := range entries {
+		name := e.Name()
+		if len(name) < 6 || name[len(name)-5:] != ".json" {
+			continue
+		}
+		m, err := board.ReadPaneMapping(name[:len(name)-5])
+		if err != nil || m.Board == "" {
+			continue
+		}
+		if _, err := os.Stat(m.Board); err != nil {
+			continue
+		}
+		if sole != "" && sole != m.Board {
+			return "", false
+		}
+		sole = m.Board
+	}
+	return sole, sole != ""
 }
 
 func runHook(name string) {
