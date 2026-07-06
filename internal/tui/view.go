@@ -105,7 +105,10 @@ func (m *model) viewBoard() string {
 		lines = append(lines, header)
 		posIdx++
 		if collapsed {
-			continue // items hidden until expanded
+			// Keep a blank line below the collapsed header (the section's real
+			// trailing blank is hidden along with its items).
+			lines = append(lines, "")
+			continue
 		}
 		// Walk the item tree depth-first; children render indented below their
 		// parent for a threaded, forum-style look. posIdx tracks navigable items
