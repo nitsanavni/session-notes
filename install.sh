@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Installer for session-notes.
 #
-# - Builds the session-notes binary and installs it to ~/.local/bin.
+# - Builds the session-notes binary with the Go toolchain if one is available,
+#   otherwise downloads a prebuilt binary from the latest GitHub release, and
+#   installs it to ~/.local/bin. Pass --download to skip the build and always
+#   download.
 # - Creates the ~/.claude/boards state directories.
 # - Merges the SessionStart / SessionEnd / UserPromptSubmit hooks into a
 #   Claude Code settings.json (creating it if needed, backing it up first).
@@ -13,15 +16,17 @@
 set -euo pipefail
 
 SCOPE=project
+DOWNLOAD=0
 for arg in "$@"; do
   case "$arg" in
     --global) SCOPE=global ;;
-    *) echo "usage: install.sh [--global]" >&2; exit 1 ;;
+    --download) DOWNLOAD=1 ;;
+    *) echo "usage: install.sh [--global] [--download]" >&2; exit 1 ;;
   esac
 done
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GO_BIN="$HOME/.local/go/bin/go"
+REPO_SLUG="nitsanavni/session-notes"
 INSTALL_BIN_DIR="$HOME/.local/bin"
 BINARY_PATH="$INSTALL_BIN_DIR/session-notes"
 CLAUDE_DIR="$HOME/.claude"
@@ -36,21 +41,53 @@ SETTINGS_FILE="$SETTINGS_DIR/settings.json"
 log()  { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 
-# --- 1. Build & install the binary ------------------------------------------
+# --- 1. Build or download & install the binary -------------------------------
 
-if [ ! -x "$GO_BIN" ]; then
-  echo "error: go toolchain not found at $GO_BIN" >&2
-  echo "       install Go there, or edit install.sh to point at your go binary." >&2
-  exit 1
-fi
+find_go() {
+  if [ -x "$HOME/.local/go/bin/go" ]; then
+    echo "$HOME/.local/go/bin/go"
+  elif command -v go >/dev/null 2>&1; then
+    command -v go
+  else
+    return 1
+  fi
+}
+
+download_binary() {
+  local os arch url tmp_dir
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) echo "error: unsupported architecture: $(uname -m)" >&2; return 1 ;;
+  esac
+  case "$os" in
+    linux|darwin) ;;
+    *) echo "error: unsupported OS: $os" >&2; return 1 ;;
+  esac
+
+  url="https://github.com/$REPO_SLUG/releases/latest/download/session-notes_${os}_${arch}.tar.gz"
+  tmp_dir="$(mktemp -d)"
+  log "Downloading prebuilt binary ($url)"
+  curl -fsSL "$url" | tar -xz -C "$tmp_dir"
+  install -m 755 "$tmp_dir/session-notes" "$BINARY_PATH"
+  rm -rf "$tmp_dir"
+}
 
 mkdir -p "$INSTALL_BIN_DIR"
 
-log "Building session-notes ($GO_BIN build -o $BINARY_PATH .)"
-(
-  cd "$REPO_DIR"
-  PATH="$HOME/.local/go/bin:$PATH" "$GO_BIN" build -o "$BINARY_PATH" .
-)
+if [ "$DOWNLOAD" = 0 ] && GO_BIN="$(find_go)"; then
+  log "Building session-notes ($GO_BIN build -o $BINARY_PATH .)"
+  (
+    cd "$REPO_DIR"
+    PATH="$(dirname "$GO_BIN"):$PATH" "$GO_BIN" build -o "$BINARY_PATH" .
+  )
+else
+  if [ "$DOWNLOAD" = 0 ]; then
+    log "No Go toolchain found; falling back to a prebuilt release binary"
+  fi
+  download_binary
+fi
 log "Installed binary to $BINARY_PATH"
 
 case ":$PATH:" in

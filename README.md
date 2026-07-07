@@ -42,12 +42,16 @@ The `▸` marks the active section; the highlighted row is the cursor. Urgent
 ```
 ./install.sh            # hooks scoped to the current project (./.claude/settings.json)
 ./install.sh --global   # hooks for all sessions (~/.claude/settings.json)
+./install.sh --download # skip the build, install a prebuilt release binary
 ```
 
 This will:
 
-1. Build the binary with the Go toolchain at `~/.local/go/bin/go` and install it to
-   `~/.local/bin/session-notes` (warns if `~/.local/bin` isn't on your `PATH`).
+1. Build the binary with the Go toolchain (`~/.local/go/bin/go` or `go` on your
+   `PATH`) and install it to `~/.local/bin/session-notes` (warns if `~/.local/bin`
+   isn't on your `PATH`). No Go? It downloads a prebuilt binary from the
+   [latest GitHub release](https://github.com/nitsanavni/session-notes/releases/latest)
+   instead (linux/macOS, amd64/arm64).
 2. Create `~/.claude/boards/{panes,.state}` (board data is always kept centrally).
 3. Merge the `SessionStart` / `SessionEnd` / `UserPromptSubmit` hooks into the chosen
    settings.json — project-level `./.claude/settings.json` by default, so only sessions
@@ -81,6 +85,16 @@ pane instead — it live-reloads on Claude's edits, so you can keep it open besi
 the session as a permanent dashboard; `q` closes it and returns the space.
 `prefix + D` opens the multi-session **Dashboard** (see below): every live
 session in the current project on one screen.
+
+### Cutting a release (maintainers)
+
+Push a `v*` tag and the `release.yml` workflow builds linux/darwin ×
+amd64/arm64 tarballs and attaches them (plus sha256 checksums) to a GitHub
+Release:
+
+```
+git tag v0.1.0 && git push origin v0.1.0
+```
 
 ## Board format
 
