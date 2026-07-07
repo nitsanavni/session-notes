@@ -16,6 +16,7 @@ var (
 	styleSectionSel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81")).Underline(true)
 	styleCursor     = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
 	styleDone       = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Strikethrough(true)
+	styleDoneSel    = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Strikethrough(true).Bold(true)
 	styleUrgent     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	styleBlocked    = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 	styleInProg     = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
@@ -209,6 +210,10 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	}
 	var style lipgloss.Style
 	switch {
+	case it.Status == board.StatusDone && selected:
+		// Keep the strikethrough (done-ness must still read) but brighten and
+		// embolden so the cursor stays visible in a run of done items.
+		style = styleDoneSel
 	case it.Status == board.StatusDone: // dim wins over urgent once done
 		style = styleDone
 	case it.Urgent:
