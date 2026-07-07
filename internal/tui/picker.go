@@ -16,6 +16,7 @@ import (
 type pickerEntry struct {
 	path    string
 	session string
+	title   string // frontmatter title, if any
 	cwd     string
 	mtime   time.Time
 	thread  string // first in-progress thread, if any
@@ -45,6 +46,7 @@ func listBoards() []pickerEntry {
 		}
 		if b, err := board.Load(path); err == nil {
 			e.cwd = b.Frontmatter.Cwd
+			e.title = b.Frontmatter.Title
 			if s := b.Section("Threads"); s != nil {
 				for _, it := range s.Items {
 					if it.IsItem() && it.Status == board.StatusInProgress {
@@ -111,7 +113,11 @@ func (m *model) viewPicker() string {
 	}
 	for i, e := range m.entries {
 		prefix := "  "
-		line := fmt.Sprintf("%-24s %s %s", truncate(e.session, 24),
+		name := e.session
+		if e.title != "" {
+			name = e.title
+		}
+		line := fmt.Sprintf("%-24s %s %s", truncate(name, 24),
 			styleDim.Render(e.mtime.Format("Jan 02 15:04")), e.cwd)
 		if e.thread != "" {
 			line += "  " + styleInProg.Render("[>] "+truncate(e.thread, 40))
