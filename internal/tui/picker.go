@@ -63,17 +63,30 @@ func listBoards() []pickerEntry {
 }
 
 // FindBoardByCwd returns the board path if exactly one board's frontmatter cwd
-// matches the given directory.
+// matches the given directory. Old boards accumulate — one per past session —
+// so when several match, boards whose session shows no recent transcript
+// activity are excluded; an exactly-one live match still resolves directly.
 func FindBoardByCwd(cwd string) (string, bool) {
-	var match string
-	n := 0
+	var matches []pickerEntry
 	for _, e := range listBoards() {
 		if e.cwd == cwd {
-			match = e.path
-			n++
+			matches = append(matches, e)
 		}
 	}
-	return match, n == 1
+	if len(matches) == 1 {
+		return matches[0].path, true
+	}
+	var live []pickerEntry
+	now := time.Now()
+	for _, e := range matches {
+		if mt := board.Liveness(e.cwd, e.session); !mt.IsZero() && now.Sub(mt) < idleWindow {
+			live = append(live, e)
+		}
+	}
+	if len(live) == 1 {
+		return live[0].path, true
+	}
+	return "", false
 }
 
 func (m *model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -117,7 +130,8 @@ func (m *model) viewPicker() string {
 		if e.title != "" {
 			name = e.title
 		}
-		line := fmt.Sprintf("%-24s %s %s", truncate(name, 24),
+		line := fmt.Sprintf("%-24s %s %s %s", truncate(name, 24),
+			styleDim.Render(shortID(e.session)),
 			styleDim.Render(e.mtime.Format("Jan 02 15:04")), e.cwd)
 		if e.thread != "" {
 			line += "  " + styleInProg.Render("[>] "+truncate(e.thread, 40))
@@ -130,6 +144,18 @@ func (m *model) viewPicker() string {
 	}
 	b.WriteString("\n" + styleHelpBar.Render("j/k move · enter open · r refresh · q quit"))
 	return b.String()
+}
+
+// shortID abbreviates a session id for display: the first UUID segment (up to
+// the first '-'), or the first 8 characters for non-UUID ids.
+func shortID(s string) string {
+	if i := strings.IndexByte(s, '-'); i > 0 {
+		return s[:i]
+	}
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
 }
 
 func truncate(s string, n int) string {
