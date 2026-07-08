@@ -270,6 +270,12 @@ func (s *Section) insert(it *Item) {
 }
 
 // AddItem appends a new open item to the named section (created if missing).
+//
+// When the item is the section's very first bullet — the common case right after
+// a new section is created and its first item added — a blank line is kept
+// between the "## " header and the item for readability. This is a data-level
+// rule (the blank becomes a real, verbatim line), so it survives round-trips and
+// stays consistent when a rebase re-applies the add onto a freshly-parsed board.
 func (b *Board) AddItem(sectionTitle, text string) *Item {
 	s := b.Section(sectionTitle)
 	if s == nil {
@@ -282,8 +288,32 @@ func (b *Board) AddItem(sectionTitle, text string) *Item {
 		status = StatusNone
 	}
 	it := &Item{parsed: true, Status: status, Text: text}
+	first := !s.hasParsedItem()
 	s.insert(it)
+	if first {
+		ensureLeadingBlank(s)
+	}
 	return it
+}
+
+// hasParsedItem reports whether the section already contains at least one
+// recognized bullet item (blank/continuation lines don't count).
+func (s *Section) hasParsedItem() bool {
+	for _, it := range s.Items {
+		if it.parsed {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureLeadingBlank prepends a blank line to the section unless it already
+// begins with one, so the header and the first item stay visually separated.
+func ensureLeadingBlank(s *Section) {
+	if n := len(s.Items); n > 0 && !s.Items[0].parsed && strings.TrimSpace(s.Items[0].raw) == "" {
+		return
+	}
+	s.Items = append([]*Item{{raw: ""}}, s.Items...)
 }
 
 // AddSection appends a new empty section with the given title and returns it.

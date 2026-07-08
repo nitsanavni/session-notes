@@ -273,14 +273,52 @@ func TestAddItem(t *testing.T) {
 	b.AddItem("Brand New", "hello")
 	got := b.Render()
 	for _, want := range []string{
-		"- [ ] a\n- [ ] new step\n\n", // inserted before section-separating blank
-		"## Ideas\n- an idea\n",       // plain bullet in Ideas
-		"## Brand New\n- [ ] hello\n", // section created
+		"- [ ] a\n- [ ] new step\n\n",   // inserted before section-separating blank
+		"## Ideas\n\n- an idea\n",       // first item: blank line kept after header
+		"## Brand New\n\n- [ ] hello\n", // section created, first item spaced off header
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
+}
+
+// TestAddItemFirstItemBlankLine locks the readability rule: after a new section
+// is created and its first item added, a blank line separates the "## " header
+// from that item. Subsequent items pack directly under it, and the resulting
+// format is stable under a Parse→Render round-trip.
+func TestAddItemFirstItemBlankLine(t *testing.T) {
+	t.Run("new section then first item", func(t *testing.T) {
+		b := Parse("## Plan\n- [ ] a\n")
+		b.AddSection("Ideas")
+		b.AddItem("Ideas", "first thought")
+		want := "## Plan\n- [ ] a\n\n## Ideas\n\n- first thought\n"
+		if got := b.Render(); got != want {
+			t.Errorf("\n--- got ---\n%q\n--- want ---\n%q", got, want)
+		}
+	})
+
+	t.Run("second item packs under the first", func(t *testing.T) {
+		b := Parse("## Plan\n- [ ] a\n")
+		b.AddSection("Ideas")
+		b.AddItem("Ideas", "one")
+		b.AddItem("Ideas", "two")
+		want := "## Plan\n- [ ] a\n\n## Ideas\n\n- one\n- two\n"
+		if got := b.Render(); got != want {
+			t.Errorf("\n--- got ---\n%q\n--- want ---\n%q", got, want)
+		}
+	})
+
+	t.Run("blank-separated format is idempotent", func(t *testing.T) {
+		b := Parse("## Plan\n- [ ] a\n")
+		b.AddSection("Ideas")
+		b.AddItem("Ideas", "first thought")
+		once := b.Render()
+		twice := Parse(once).Render()
+		if once != twice {
+			t.Errorf("format not stable across round-trip\n--- once ---\n%q\n--- twice ---\n%q", once, twice)
+		}
+	})
 }
 
 func TestAddSection(t *testing.T) {
