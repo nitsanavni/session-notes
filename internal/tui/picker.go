@@ -111,7 +111,7 @@ func (m *model) enterPicker() tea.Cmd {
 	m.selSec = 0
 	m.scroll = 0
 	m.target = nil
-	m.archiveExpanded = false
+	m.collapsed = map[string]bool{}
 	m.hist = newHistory(100)
 	m.entries = listBoards()
 	m.pickerCur = 0

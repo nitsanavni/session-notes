@@ -63,9 +63,13 @@ type model struct {
 	scroll    int
 	status    string // transient one-line message
 
-	// archiveExpanded controls whether the Archive section shows its items or
-	// collapses to a one-line header with a count. Collapsed by default.
-	archiveExpanded bool
+	// collapsed holds per-section collapse-state overrides, keyed by section
+	// TITLE (not index) so the state survives reparses — reload, rebase, undo —
+	// which rebuild the section slice. A missing key means the section is in
+	// its default state (see defaultCollapsed): Archive collapsed, everything
+	// else expanded. A collapsed section shows only its header plus a dim
+	// hidden-item count, and its items are skipped by cursor navigation.
+	collapsed map[string]bool
 
 	input textinput.Model
 	// target is the item acted on by modeInputEdit / modeInputReply, captured
@@ -144,7 +148,33 @@ func newModel() *model {
 	ti := textinput.New()
 	ti.CharLimit = 500
 	ti.Prompt = "> "
-	return &model{cursor: -1, input: ti, width: 80, height: 24, hist: newHistory(100)}
+	return &model{cursor: -1, input: ti, width: 80, height: 24, hist: newHistory(100), collapsed: map[string]bool{}}
+}
+
+// defaultCollapsed is the collapse state a section starts in before the user
+// toggles it: Archive is collapsed by default, every other section expanded.
+func defaultCollapsed(title string) bool { return title == board.ArchiveTitle }
+
+// sectionCollapsed reports whether the section with the given title currently
+// renders collapsed (header + count only, items hidden and non-navigable).
+func (m *model) sectionCollapsed(title string) bool {
+	if v, ok := m.collapsed[title]; ok {
+		return v
+	}
+	return defaultCollapsed(title)
+}
+
+// setCollapsed records a section's collapse state. A state equal to the
+// section's default clears the override, keeping the map minimal.
+func (m *model) setCollapsed(title string, c bool) {
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	if c == defaultCollapsed(title) {
+		delete(m.collapsed, title)
+		return
+	}
+	m.collapsed[title] = c
 }
 
 func (m *model) openBoard(path string) error {
@@ -175,10 +205,10 @@ func (m *model) rebuildPositions() {
 	m.positions = m.positions[:0]
 	for si, s := range m.board.Sections {
 		// Every section header is a cursor stop of its own, so it can be acted
-		// on (archive/remove the whole section) and, for Archive, toggled.
+		// on (archive/remove the whole section) and collapse-toggled.
 		m.positions = append(m.positions, navItem{sec: si, header: true})
-		// A collapsed Archive hides its items entirely — they are not navigable.
-		if s.Title == board.ArchiveTitle && !m.archiveExpanded {
+		// A collapsed section hides its items entirely — they are not navigable.
+		if m.sectionCollapsed(s.Title) {
 			continue
 		}
 		var walk func(items []*board.Item, depth int)
@@ -514,15 +544,16 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.save()
 		}
 	case "enter", "l", "right":
-		// Toggle the Archive section between collapsed and expanded.
-		if sec, ok := m.onHeader(); ok && sec.Title == board.ArchiveTitle {
-			m.archiveExpanded = !m.archiveExpanded
+		// Toggle the section under the cursor between collapsed and expanded.
+		// Only header stops toggle; on items enter/l/right stay a no-op.
+		if sec, ok := m.onHeader(); ok {
+			m.setCollapsed(sec.Title, !m.sectionCollapsed(sec.Title))
 			m.rebuildPositions()
 		}
 	case "h", "left":
-		// Collapse the Archive when on its header (symmetric with l/right).
-		if sec, ok := m.onHeader(); ok && sec.Title == board.ArchiveTitle && m.archiveExpanded {
-			m.archiveExpanded = false
+		// Collapse the section when on its header (symmetric with l/right).
+		if sec, ok := m.onHeader(); ok && !m.sectionCollapsed(sec.Title) {
+			m.setCollapsed(sec.Title, true)
 			m.rebuildPositions()
 		}
 	case "e":

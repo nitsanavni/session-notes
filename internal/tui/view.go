@@ -107,10 +107,16 @@ func (m *model) viewBoard() string {
 		if si < 9 {
 			header += " " + styleDim.Render(fmt.Sprintf("%d", si+1))
 		}
-		// The Archive section collapses to just its header plus a dim count.
-		collapsed := s.Title == board.ArchiveTitle && !m.archiveExpanded
+		// A collapsed section renders as just its header plus a dim count of
+		// the items it hides. Archive keeps its "(N archived)" wording; other
+		// sections use a generic "(N items)" hint.
+		collapsed := m.sectionCollapsed(s.Title)
 		if collapsed {
-			header += " " + styleDim.Render(fmt.Sprintf("(%d archived)", m.board.ArchivedCount()))
+			hint := fmt.Sprintf("(%d items)", sectionItemCount(s))
+			if s.Title == board.ArchiveTitle {
+				hint = fmt.Sprintf("(%d archived)", m.board.ArchivedCount())
+			}
+			header += " " + styleDim.Render(hint)
 		}
 		// Every section header renders, including empty ones, so they stay
 		// visible and reachable. Remember the active header's row for scrolling.
@@ -212,6 +218,23 @@ func (m *model) viewBoard() string {
 		header += "\n"
 	}
 	return header + "\n" + body + "\n" + footer
+}
+
+// sectionItemCount counts the parsed items in a section's whole tree (replies
+// included) — the number of nav stops its collapsed header hides.
+func sectionItemCount(s *board.Section) int {
+	var count func(items []*board.Item) int
+	count = func(items []*board.Item) int {
+		n := 0
+		for _, it := range items {
+			if it.IsItem() {
+				n++
+			}
+			n += count(it.Children)
+		}
+		return n
+	}
+	return count(s.Items)
 }
 
 // scrollReadout renders the "▲ 12–28/96 ▼" position indicator embedded, flush
@@ -412,7 +435,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -434,7 +457,7 @@ func (m *model) viewHelp() string {
 		{"!", "toggle urgent (!!)"},
 		{"d", "archive item (or whole section) into ## Archive"},
 		{"D", "hard-delete item (or whole section) from the file"},
-		{"enter / l", "expand / collapse the Archive section (on its header)"},
+		{"enter / l", "collapse / expand the section under the cursor (on its header)"},
 		{"e", "edit item inline (the bullet line only)"},
 		{"E", "open board in $EDITOR"},
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
@@ -457,8 +480,8 @@ func (m *model) viewHelp() string {
 	notes := []string{
 		"Section headers are cursor stops: " + styleKey.Render("d") + " there archives the whole section (its items",
 		"move to ## Archive), " + styleKey.Render("D") + " hard-deletes it. Archive and Log can't be archived.",
-		"The Archive section is collapsed by default (shows a count); " + styleKey.Render("enter") + "/" + styleKey.Render("l") + " on its",
-		"header toggles it open.",
+		"Any section collapses to its header plus a hidden-item count; " + styleKey.Render("enter") + "/" + styleKey.Render("l") + " on a",
+		"header toggles it. Archive starts collapsed; other sections start expanded.",
 		"Replies nest under an item as indented \"- author: text\" sub-bullets.",
 		"Continuation lines (indented text under a bullet, not \"- \") render verbatim as",
 		"part of that bullet's block — a single cursor stop. Author them with " + styleKey.Render("E") + " ($EDITOR).",

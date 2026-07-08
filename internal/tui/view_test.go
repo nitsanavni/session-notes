@@ -218,7 +218,7 @@ func TestArchiveExpandToggle(t *testing.T) {
 		}
 	}
 	m.handleBoardKey(keyPress("enter"))
-	if !m.archiveExpanded {
+	if m.sectionCollapsed(board.ArchiveTitle) {
 		t.Fatal("enter on Archive header did not expand it")
 	}
 	out := stripANSI(m.viewBoard())
@@ -226,8 +226,75 @@ func TestArchiveExpandToggle(t *testing.T) {
 		t.Errorf("expanded Archive should show items:\n%s", out)
 	}
 	m.handleBoardKey(keyPress("h"))
-	if m.archiveExpanded {
+	if !m.sectionCollapsed(board.ArchiveTitle) {
 		t.Error("h on Archive header did not collapse it")
+	}
+}
+
+// TestSectionCollapseToggle asserts the collapse toggle generalizes beyond
+// Archive: enter on any section header (Log here) hides its items from both
+// the rendered output and the cursor positions, shows a dim "(N items)" hint,
+// and a second enter expands it again. The collapse state must survive a
+// reload (it is keyed by section title, not index or pointer).
+func TestSectionCollapseToggle(t *testing.T) {
+	src := "## Threads\n- [>] t\n\n## Log\n- 10:00 user: first\n- 10:05 claude: second\n"
+	m := newTestModel(src, 80, 24)
+
+	// Log starts expanded (only Archive defaults collapsed).
+	out := stripANSI(m.viewBoard())
+	if !strings.Contains(out, "first") || !strings.Contains(out, "second") {
+		t.Fatalf("Log should start expanded:\n%s", out)
+	}
+
+	// Move cursor onto the Log header and collapse it.
+	for i, p := range m.positions {
+		if p.header && m.board.Sections[p.sec].Title == board.LogTitle {
+			m.cursor = i
+		}
+	}
+	m.handleBoardKey(keyPress("enter"))
+	if !m.sectionCollapsed(board.LogTitle) {
+		t.Fatal("enter on Log header did not collapse it")
+	}
+	out = stripANSI(m.viewBoard())
+	if strings.Contains(out, "first") || strings.Contains(out, "second") {
+		t.Errorf("collapsed Log should hide its items:\n%s", out)
+	}
+	if !strings.Contains(out, "(2 items)") {
+		t.Errorf("collapsed Log header missing hidden-item hint:\n%s", out)
+	}
+	// Collapsed items are not navigable: no item stops in the Log section.
+	for _, p := range m.positions {
+		if !p.header && m.board.Sections[p.sec].Title == board.LogTitle {
+			t.Errorf("collapsed Log item is navigable: %+v", p)
+		}
+	}
+
+	// The state is keyed by title, so a reparse-driven rebuild keeps it.
+	m.board = board.Parse(src)
+	m.board.Path = m.path
+	m.rebuildPositions()
+	if !m.sectionCollapsed(board.LogTitle) {
+		t.Error("Log collapse state lost across a reparse")
+	}
+
+	// Enter again expands.
+	m.handleBoardKey(keyPress("enter"))
+	if m.sectionCollapsed(board.LogTitle) {
+		t.Fatal("second enter on Log header did not expand it")
+	}
+	out = stripANSI(m.viewBoard())
+	if !strings.Contains(out, "first") || !strings.Contains(out, "second") {
+		t.Errorf("re-expanded Log should show items:\n%s", out)
+	}
+	items := 0
+	for _, p := range m.positions {
+		if !p.header && m.board.Sections[p.sec].Title == board.LogTitle {
+			items++
+		}
+	}
+	if items != 2 {
+		t.Errorf("expanded Log item stops = %d, want 2", items)
 	}
 }
 
