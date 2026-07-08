@@ -80,13 +80,14 @@ func (m *model) viewBoard() string {
 	cursorLine := 0
 	selHeaderLine := 0 // display row of the active section's header
 
-	header := m.path
+	// Title text (Title -> Session -> path fallback) is held aside and rendered
+	// as a sticky header below, outside the scrollable body — see boardHeader.
+	title := m.path
 	if fm := m.board.Frontmatter; fm.Title != "" {
-		header = fmt.Sprintf("%s  %s", fm.Title, styleDim.Render(fm.Cwd))
+		title = fmt.Sprintf("%s  %s", fm.Title, styleDim.Render(fm.Cwd))
 	} else if fm.Session != "" {
-		header = fmt.Sprintf("%s  %s", fm.Session, styleDim.Render(fm.Cwd))
+		title = fmt.Sprintf("%s  %s", fm.Session, styleDim.Render(fm.Cwd))
 	}
-	lines = append(lines, styleTitle.Render(header), "")
 
 	posIdx := 0
 	for si, s := range m.board.Sections {
@@ -161,8 +162,15 @@ func (m *model) viewBoard() string {
 	footer := m.viewFooter()
 	footerH := lipgloss.Height(footer)
 
+	// Reserve a sticky header: title row + a blank separator (preserving the
+	// current rhythm), degrading to just the title row on a tiny viewport.
+	headerH := 2
+	if m.height < 10 {
+		headerH = 1
+	}
+
 	// Scroll the body so the cursor stays visible.
-	bodyH := m.height - footerH
+	bodyH := m.height - headerH - footerH
 	if bodyH < 3 {
 		bodyH = 3
 	}
@@ -192,7 +200,59 @@ func (m *model) viewBoard() string {
 	if pad := bodyH - (end - m.scroll); pad > 0 {
 		body += strings.Repeat("\n", pad)
 	}
-	return body + "\n" + footer
+
+	// Sticky title row, with a right-aligned scroll readout only when the board
+	// is taller than the visible body (short board -> title looks as before).
+	var readout string
+	if len(lines) > bodyH {
+		readout = scrollReadout(m.scroll, m.scroll+1, end, len(lines))
+	}
+	header := boardHeader(title, readout, m.width)
+	if headerH == 2 {
+		header += "\n"
+	}
+	return header + "\n" + body + "\n" + footer
+}
+
+// scrollReadout renders the "▲ 12–28/96 ▼" position indicator embedded, flush
+// right, in the sticky title row. The up chevron shows only when scrolled down
+// from the top; the down chevron only when rows remain below the window. Both
+// slots keep a fixed cell so the readout width doesn't jitter as you scroll.
+func scrollReadout(scroll, start, end, total int) string {
+	up := " "
+	if scroll > 0 {
+		up = "▲"
+	}
+	down := " "
+	if end < total {
+		down = "▼"
+	}
+	return styleDim.Render(fmt.Sprintf("%s %d–%d/%d %s", up, start, end, total, down))
+}
+
+// boardHeader renders the sticky title row: the board title, truncated to fit,
+// with the optional scroll readout pinned flush right. Widths are measured with
+// lipgloss.Width so the ANSI styling embedded in both strings never throws off
+// the layout. Below ~20 columns the readout is dropped and only the title (also
+// truncated) remains.
+func boardHeader(title, readout string, width int) string {
+	if width < 1 {
+		return styleTitle.Render(title)
+	}
+	if readout == "" || width < 20 {
+		return styleTitle.Render(ansi.Truncate(title, width, ""))
+	}
+	rw := lipgloss.Width(readout)
+	avail := width - rw - 2
+	if avail < 1 {
+		avail = 1
+	}
+	t := styleTitle.Render(ansi.Truncate(title, avail, ""))
+	gap := width - lipgloss.Width(t) - rw
+	if gap < 1 {
+		gap = 1
+	}
+	return t + strings.Repeat(" ", gap) + readout
 }
 
 // renderItem renders a bullet as one or more display rows: its text is
@@ -352,7 +412,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -382,6 +442,7 @@ func (m *model) viewHelp() string {
 		{"u", "undo last change"},
 		{"ctrl+r", "redo"},
 		{"r", "reload from disk"},
+		{"B", "back to board picker"},
 		{"q / esc", "quit"},
 		{"?", "close help"},
 	}

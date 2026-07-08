@@ -150,6 +150,46 @@ func TestScrollReachesTop(t *testing.T) {
 	}
 }
 
+// TestStickyTitleAndReadout asserts the board title stays at the top row
+// regardless of scroll offset, and that the "start–end/total" scroll readout
+// appears only when the board is taller than the viewport.
+func TestStickyTitleAndReadout(t *testing.T) {
+	// Short board: fits the viewport, so no readout and the title is row 0.
+	short := newTestModel("## Threads\n- [ ] one\n- [ ] two\n", 80, 24)
+	out := stripANSI(short.viewBoard())
+	rows := strings.Split(out, "\n")
+	if !strings.Contains(rows[0], "test.md") {
+		t.Errorf("title not on top row of short board: %q", rows[0])
+	}
+	if strings.ContainsAny(out, "▲▼") || strings.Contains(out, "/2") {
+		t.Errorf("short board should not show a scroll readout:\n%s", out)
+	}
+
+	// Tall board: scroll to the bottom, the title must still be pinned at row 0
+	// and the readout with a running total must be present.
+	var b strings.Builder
+	b.WriteString("## Threads\n")
+	for i := 0; i < 40; i++ {
+		b.WriteString("- [ ] item\n")
+	}
+	tall := newTestModel(b.String(), 80, 12)
+	tall.cursor = len(tall.positions) - 1
+	out = stripANSI(tall.viewBoard())
+	if tall.scroll == 0 {
+		t.Fatalf("expected a scrolled viewport, scroll=0")
+	}
+	rows = strings.Split(out, "\n")
+	if !strings.Contains(rows[0], "test.md") {
+		t.Errorf("title not sticky at top when scrolled: %q", rows[0])
+	}
+	if !strings.Contains(rows[0], "/41") { // 40 items + 1 section header
+		t.Errorf("scroll readout total missing from title row: %q", rows[0])
+	}
+	if !strings.Contains(rows[0], "▲") {
+		t.Errorf("expected up chevron when scrolled down: %q", rows[0])
+	}
+}
+
 func TestArchiveCollapsedByDefault(t *testing.T) {
 	src := "## Threads\n- [>] t\n\n## Archive\n- [x] one\n- [x] two\n"
 	m := newTestModel(src, 80, 24)
