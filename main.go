@@ -93,15 +93,22 @@ func resolveBoard(explicit, paneID string) (string, bool) {
 		}
 	}
 	// 4. Exactly one board matching the current cwd.
-	if cwd, err := os.Getwd(); err == nil {
-		if path, ok := tui.FindBoardByCwd(cwd); ok {
+	// 5. Exactly one live session across all pane mappings.
+	//
+	// PAUSED: these two fuzzy, liveness-based steps can resolve to the wrong
+	// session's board when a project has several boards (see the picker's
+	// FindBoardByCwd). Until that's fixed, skip them and fall through to the
+	// picker for manual selection. Set SESSION_NOTES_AUTORESOLVE=1 to restore
+	// the automatic behavior.
+	if os.Getenv("SESSION_NOTES_AUTORESOLVE") != "" {
+		if cwd, err := os.Getwd(); err == nil {
+			if path, ok := tui.FindBoardByCwd(cwd); ok {
+				return path, true
+			}
+		}
+		if path, ok := soleLiveBoard(); ok {
 			return path, true
 		}
-	}
-	// 5. Exactly one live session (one distinct board across all pane
-	// mappings): no ambiguity, land on it directly.
-	if path, ok := soleLiveBoard(); ok {
-		return path, true
 	}
 	// 6. Picker.
 	return "", false
