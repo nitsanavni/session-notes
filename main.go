@@ -47,6 +47,9 @@ func main() {
 		case "-h", "--help":
 			usage(os.Stdout)
 			return
+		case "-v", "--version":
+			fmt.Println("session-notes", versionString())
+			return
 		default:
 			fmt.Fprintf(os.Stderr, "unknown argument: %s\n\n", args[i])
 			usage(os.Stderr)
@@ -155,6 +158,7 @@ Usage:
   session-notes -d, --dash            live dashboard of this project's sessions
   session-notes --dash --all          dashboard across every project
   session-notes -l                    board picker (all boards, newest first)
+  session-notes -v, --version         print version and exit
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook

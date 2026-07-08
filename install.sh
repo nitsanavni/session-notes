@@ -77,10 +77,12 @@ download_binary() {
 mkdir -p "$INSTALL_BIN_DIR"
 
 if [ "$DOWNLOAD" = 0 ] && GO_BIN="$(find_go)"; then
-  log "Building session-notes ($GO_BIN build -o $BINARY_PATH .)"
+  version="$(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+  log "Building session-notes ($GO_BIN build -o $BINARY_PATH .) [version $version]"
   (
     cd "$REPO_DIR"
-    PATH="$(dirname "$GO_BIN"):$PATH" "$GO_BIN" build -o "$BINARY_PATH" .
+    PATH="$(dirname "$GO_BIN"):$PATH" "$GO_BIN" build \
+      -ldflags "-X main.version=$version" -o "$BINARY_PATH" .
   )
 else
   if [ "$DOWNLOAD" = 0 ]; then
