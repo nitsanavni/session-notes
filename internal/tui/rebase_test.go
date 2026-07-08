@@ -119,3 +119,194 @@ func TestSaveWithRebaseMergesExternalEdit(t *testing.T) {
 		t.Errorf("first undo should reveal external write without our edit: %q", prev)
 	}
 }
+
+// countOccur counts non-overlapping occurrences of sub in s.
+func countOccur(s, sub string) int { return strings.Count(s, sub) }
+
+// The user cycled alpha [ ]->[>]; meanwhile Claude flipped it to [x] on disk.
+// The exact-raw key misses, the fuzzy text key hits, and the RESULTING status is
+// set absolutely — not a relative re-cycle — so a double-apply is a no-op.
+func TestApplyOpCycleFuzzyAbsolute(t *testing.T) {
+	fresh := board.Parse("## Threads\n- [x] alpha\n")
+	op := pendingOp{typ: opCycle, section: "Threads", rawLine: "- [ ] alpha", newStatus: board.StatusInProgress}
+	applyOp(fresh, op)
+	applyOp(fresh, op) // idempotent under double-apply
+	it := fresh.Section("Threads").Items[0]
+	if it.Status != board.StatusInProgress {
+		t.Errorf("status = %v, want InProgress (absolute set, not re-cycled)", it.Status)
+	}
+	if countOccur(fresh.Render(), "alpha") != 1 {
+		t.Errorf("item duplicated: %q", fresh.Render())
+	}
+	// Target genuinely gone -> no-op, no resurrection.
+	gone := board.Parse("## Threads\n- [ ] beta\n")
+	applyOp(gone, op)
+	if strings.Contains(gone.Render(), "alpha") {
+		t.Errorf("cycle resurrected a gone item: %q", gone.Render())
+	}
+}
+
+// Urgent replays the resulting flag absolutely and hits through marker drift.
+func TestApplyOpUrgentFuzzyAbsolute(t *testing.T) {
+	fresh := board.Parse("## Threads\n- [x] alpha\n") // Claude flipped the marker
+	op := pendingOp{typ: opUrgent, section: "Threads", rawLine: "- [ ] alpha", newUrgent: true}
+	applyOp(fresh, op)
+	applyOp(fresh, op)
+	if !strings.Contains(fresh.Render(), "!! alpha") {
+		t.Errorf("urgency not set: %q", fresh.Render())
+	}
+	if countOccur(fresh.Render(), "alpha") != 1 {
+		t.Errorf("item duplicated: %q", fresh.Render())
+	}
+}
+
+// Archive acts when the target is present (exact or single-fuzzy) and is a clean
+// no-op when it is gone — no resurrection, no spurious Archive section.
+func TestApplyOpArchiveItem(t *testing.T) {
+	present := board.Parse("## Threads\n- [x] alpha\n- [ ] beta\n") // marker drift on alpha
+	applyOp(present, pendingOp{typ: opArchiveItem, section: "Threads", rawLine: "- [ ] alpha"})
+	if hasItem(present, "Threads", "alpha") {
+		t.Errorf("alpha not archived out of Threads: %q", present.Render())
+	}
+	if present.Section("Archive") == nil || !strings.Contains(present.Render(), "alpha") {
+		t.Errorf("archived content lost: %q", present.Render())
+	}
+
+	gone := board.Parse("## Threads\n- [ ] beta from claude\n")
+	applyOp(gone, pendingOp{typ: opArchiveItem, section: "Threads", rawLine: "- [ ] alpha"})
+	if strings.Contains(gone.Render(), "alpha") {
+		t.Errorf("archive resurrected a gone item: %q", gone.Render())
+	}
+	if gone.Section("Archive") != nil {
+		t.Errorf("spurious Archive section created: %q", gone.Render())
+	}
+}
+
+// Delete is EXACT-RAW only: a marker-drifted (fuzzy-matchable) or reworded line
+// an external writer touched is never hard-deleted.
+func TestApplyOpDeleteItemExactOnly(t *testing.T) {
+	drift := board.Parse("## Threads\n- [x] alpha\n") // fuzzy WOULD match, delete must not
+	applyOp(drift, pendingOp{typ: opDeleteItem, section: "Threads", rawLine: "- [ ] alpha"})
+	if !strings.Contains(drift.Render(), "alpha") {
+		t.Errorf("exact-only delete removed a drifted line: %q", drift.Render())
+	}
+
+	reworded := board.Parse("## Threads\n- [ ] alpha reworded by claude\n")
+	applyOp(reworded, pendingOp{typ: opDeleteItem, section: "Threads", rawLine: "- [ ] alpha"})
+	if !strings.Contains(reworded.Render(), "alpha reworded by claude") {
+		t.Errorf("exact-only delete removed a reworded line: %q", reworded.Render())
+	}
+
+	exact := board.Parse("## Threads\n- [ ] alpha\n- [ ] beta\n")
+	applyOp(exact, pendingOp{typ: opDeleteItem, section: "Threads", rawLine: "- [ ] alpha"})
+	if strings.Contains(exact.Render(), "alpha") {
+		t.Errorf("exact delete did not remove target: %q", exact.Render())
+	}
+	if !strings.Contains(exact.Render(), "beta") {
+		t.Errorf("exact delete took a bystander: %q", exact.Render())
+	}
+}
+
+// Add-section is idempotent (existing titles not duplicated) and applies every
+// title in a multi-title op.
+func TestApplyOpAddSection(t *testing.T) {
+	fresh := board.Parse("## Plan\n- [ ] x\n\n## Threads\n- [ ] y\n")
+	applyOp(fresh, pendingOp{typ: opAddSection, sections: []string{"Threads", "Questions"}})
+	if countOccur(fresh.Render(), "## Threads") != 1 {
+		t.Errorf("existing section duplicated: %q", fresh.Render())
+	}
+	if fresh.Section("Questions") == nil {
+		t.Errorf("new section not added: %q", fresh.Render())
+	}
+	// Idempotent under double-apply.
+	applyOp(fresh, pendingOp{typ: opAddSection, sections: []string{"Questions"}})
+	if countOccur(fresh.Render(), "## Questions") != 1 {
+		t.Errorf("section duplicated on replay: %q", fresh.Render())
+	}
+}
+
+// Archive / delete of a whole section: acted on when present, no-op when gone.
+func TestApplyOpSectionOps(t *testing.T) {
+	b := board.Parse("## Threads\n- [ ] a\n\n## Ideas\n- foo\n\n## Plan\n- [ ] p\n")
+	applyOp(b, pendingOp{typ: opArchiveSection, section: "Ideas"})
+	if b.Section("Ideas") != nil {
+		t.Errorf("section not archived: %q", b.Render())
+	}
+	if b.Section("Archive") == nil || !strings.Contains(b.Render(), "foo") {
+		t.Errorf("archived section content lost: %q", b.Render())
+	}
+	// Gone section: no-op, no panic.
+	applyOp(b, pendingOp{typ: opArchiveSection, section: "Ideas"})
+
+	applyOp(b, pendingOp{typ: opDeleteSection, section: "Plan"})
+	if b.Section("Plan") != nil {
+		t.Errorf("section not deleted: %q", b.Render())
+	}
+	if strings.Contains(b.Render(), "- [ ] p") {
+		t.Errorf("deleted section content survived: %q", b.Render())
+	}
+	// Gone section: no-op, no panic.
+	applyOp(b, pendingOp{typ: opDeleteSection, section: "Plan"})
+}
+
+// End-to-end through the model: an external writer flips alpha's marker between
+// load and save; the user's cycle result is set absolutely on the rebased tree.
+func TestSaveWithRebaseCycleAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "b.md")
+	if err := os.WriteFile(path, []byte("## Threads\n- [ ] alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel()
+	if err := m.openBoard(path); err != nil {
+		t.Fatal(err)
+	}
+	it := m.board.Section("Threads").Items[0]
+	op := pendingOp{typ: opCycle, section: "Threads", rawLine: it.Raw()}
+	m.snapshot()
+	it.CycleStatus() // [ ] -> [>]
+	op.newStatus = it.Status
+
+	// External writer flips alpha to done while the gesture was in flight.
+	if err := os.WriteFile(path, []byte("## Threads\n- [x] alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.saveWithRebase(op)
+
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "- [>] alpha") {
+		t.Errorf("cycle not absolute-set on rebase (want [>]): %q", string(got))
+	}
+	if m.lastDisk != string(got) {
+		t.Errorf("lastDisk out of sync with disk")
+	}
+}
+
+// End-to-end: a stale delete whose target Claude reworded on disk is a no-op —
+// the reworded line survives (no accidental hard delete).
+func TestSaveWithRebaseDeleteExactOnlyNoOp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "b.md")
+	if err := os.WriteFile(path, []byte("## Threads\n- [ ] alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel()
+	if err := m.openBoard(path); err != nil {
+		t.Fatal(err)
+	}
+	it := m.board.Section("Threads").Items[0]
+	op := pendingOp{typ: opDeleteItem, section: "Threads", rawLine: it.Raw()}
+	m.snapshot()
+	m.board.Remove(it)
+
+	// Claude reworded alpha on disk before we save.
+	if err := os.WriteFile(path, []byte("## Threads\n- [ ] alpha reworded by claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.saveWithRebase(op)
+
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "alpha reworded by claude") {
+		t.Errorf("stale delete clobbered a reworded line: %q", string(got))
+	}
+}

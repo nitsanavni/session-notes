@@ -212,6 +212,54 @@ func (b *Board) FindByRawInSection(sectionTitle, raw string) *Item {
 	return found
 }
 
+// NormalizeItemText computes an item's merge-matching key: the item text with
+// its status marker, "!!" urgency flag, indentation, and surrounding whitespace
+// removed. It reuses parseLine so a parsed item and its raw source line
+// normalize identically, letting a fuzzy match survive cosmetic drift (a flipped
+// checkbox, an added "!!", a re-indent) that FindByRawInSection's verbatim
+// identity would miss. Matching is case-sensitive and does NOT collapse internal
+// spaces: a genuinely reworded line normalizes differently and should miss.
+func NormalizeItemText(rawLine string) string {
+	it := parseLine(rawLine)
+	if it.parsed {
+		return strings.TrimSpace(it.Text)
+	}
+	return strings.TrimSpace(it.raw)
+}
+
+// FindByTextInSection returns the item within the section titled sectionTitle
+// whose normalized text (see NormalizeItemText) equals normText, searching the
+// whole item tree (nested replies included) in document order, together with the
+// COUNT of items that matched. Only recognized bullet items are considered.
+//
+// Callers MUST treat count != 1 as "no confident match": 0 means the target is
+// gone, and >1 means there are indistinguishable twins so acting on either would
+// be a guess. It is the fuzzy fallback used by the TUI's rebase when a verbatim
+// FindByRawInSection lookup misses because an external write cosmetically altered
+// the target line.
+func (b *Board) FindByTextInSection(sectionTitle, normText string) (*Item, int) {
+	s := b.Section(sectionTitle)
+	if s == nil {
+		return nil, 0
+	}
+	var found *Item
+	count := 0
+	var walk func(items []*Item)
+	walk = func(items []*Item) {
+		for _, it := range items {
+			if it.parsed && NormalizeItemText(it.raw) == normText {
+				if found == nil {
+					found = it
+				}
+				count++
+			}
+			walk(it.Children)
+		}
+	}
+	walk(s.Items)
+	return found, count
+}
+
 // SectionTitleOf returns the title of the section whose item tree contains
 // target (at any depth), or "" if target is not on the board.
 func (b *Board) SectionTitleOf(target *Item) string {

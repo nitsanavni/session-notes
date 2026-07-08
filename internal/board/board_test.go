@@ -881,3 +881,67 @@ func TestUrgentIncludesChildren(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeItemText(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"- [ ] hello world", "hello world"},
+		{"- [x] hello world", "hello world"},    // marker drift normalizes away
+		{"  - [>] hello world", "hello world"},  // indentation stripped
+		{"- [ ] !! hello world", "hello world"}, // urgency stripped
+		{"   - hello world  ", "hello world"},   // surrounding whitespace trimmed
+		{"not a bullet", "not a bullet"},        // raw line falls back to trimmed raw
+	}
+	for _, c := range cases {
+		if got := NormalizeItemText(c.in); got != c.want {
+			t.Errorf("NormalizeItemText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// Case-sensitive and internal spaces preserved: a reworded/re-cased line
+	// must normalize differently so it does NOT fuzzy-match.
+	if NormalizeItemText("- [ ] Hello  World") == NormalizeItemText("- [ ] hello world") {
+		t.Error("normalization must be case- and internal-space-sensitive")
+	}
+}
+
+func TestFindByTextInSection(t *testing.T) {
+	b := Parse(`## Threads
+- [ ] alpha
+- [x] beta
+- [ ] !! urgent task
+  - [ ] nested reply
+- [ ] dup
+- [ ] dup
+`)
+	// Exact-raw lookup still wins for a verbatim line, and misses on drift.
+	if b.FindByRawInSection("Threads", "- [x] beta") == nil {
+		t.Error("exact raw match should still work")
+	}
+	if b.FindByRawInSection("Threads", "- [ ] beta") != nil {
+		t.Error("exact raw must not match a marker-drifted line")
+	}
+
+	// Marker drift ([ ] -> [x]) matches by normalized text, n == 1.
+	if it, n := b.FindByTextInSection("Threads", NormalizeItemText("- [ ] beta")); n != 1 || it == nil || it.DisplayText() != "beta" {
+		t.Errorf("marker drift: it=%v n=%d", it, n)
+	}
+	// "!!" urgency added on disk still matches the un-urgent search key.
+	if it, n := b.FindByTextInSection("Threads", NormalizeItemText("- [ ] urgent task")); n != 1 || it == nil {
+		t.Errorf("urgency drift: it=%v n=%d", it, n)
+	}
+	// Indentation drift: a nested reply matches a top-level-looking key.
+	if it, n := b.FindByTextInSection("Threads", NormalizeItemText("- [ ] nested reply")); n != 1 || it == nil {
+		t.Errorf("indent drift: it=%v n=%d", it, n)
+	}
+	// Two identical lines are ambiguous twins: n == 2 (caller treats as no match).
+	if _, n := b.FindByTextInSection("Threads", NormalizeItemText("- [ ] dup")); n != 2 {
+		t.Errorf("twin count = %d, want 2", n)
+	}
+	// A genuinely reworded line misses: n == 0.
+	if _, n := b.FindByTextInSection("Threads", NormalizeItemText("- [ ] alpha reworded")); n != 0 {
+		t.Errorf("reworded count = %d, want 0", n)
+	}
+	// Unknown section: n == 0.
+	if _, n := b.FindByTextInSection("Nope", "alpha"); n != 0 {
+		t.Errorf("missing section count = %d, want 0", n)
+	}
+}

@@ -525,31 +525,41 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// than record a no-op undo entry.
 		if it := m.currentItem(); it != nil && it.Status != board.StatusNone {
 			m.snapshot()
+			// Capture identity BEFORE mutating; record the RESULTING status so the
+			// rebase sets it absolutely (a relative re-cycle would double-apply on
+			// a disk tree an external writer already advanced).
+			op := pendingOp{typ: opCycle, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
 			it.CycleStatus()
-			m.save()
+			op.newStatus = it.Status
+			m.saveWithRebase(op)
 		}
 	case "!":
 		if it := m.currentItem(); it != nil {
 			m.snapshot()
+			op := pendingOp{typ: opUrgent, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
 			it.ToggleUrgent()
-			m.save()
+			op.newUrgent = it.Urgent
+			m.saveWithRebase(op)
 		}
 	case "d":
 		// Archive: move the item (or a whole section) into ## Archive.
 		if sec, ok := m.onHeader(); ok {
 			m.snapshot()
+			title := sec.Title // read before ArchiveSection empties/removes it
 			if m.board.ArchiveSection(sec) {
 				m.rebuildPositions()
-				m.save()
-				m.status = "archived section " + sec.Title
+				m.saveWithRebase(pendingOp{typ: opArchiveSection, section: title})
+				m.status = "archived section " + title
 			} else {
-				m.status = "cannot archive " + sec.Title
+				m.status = "cannot archive " + title
 			}
 		} else if it := m.currentItem(); it != nil {
 			m.snapshot()
+			// Capture identity BEFORE ArchiveItem moves it out of its section.
+			op := pendingOp{typ: opArchiveItem, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
 			if m.board.ArchiveItem(it) { // item + its whole subtree
 				m.rebuildPositions()
-				m.save()
+				m.saveWithRebase(op)
 				m.status = "archived"
 			}
 		}
@@ -557,15 +567,18 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Hard delete: remove the item (or whole section) from the file.
 		if sec, ok := m.onHeader(); ok {
 			m.snapshot()
+			title := sec.Title // read before RemoveSection detaches it
 			m.board.RemoveSection(sec)
 			m.rebuildPositions()
-			m.save()
-			m.status = "deleted section " + sec.Title
+			m.saveWithRebase(pendingOp{typ: opDeleteSection, section: title})
+			m.status = "deleted section " + title
 		} else if it := m.currentItem(); it != nil {
 			m.snapshot()
+			// Capture identity BEFORE Remove; delete replays exact-raw only.
+			op := pendingOp{typ: opDeleteItem, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
 			m.board.Remove(it) // removes the item and its whole subtree of replies
 			m.rebuildPositions()
-			m.save()
+			m.saveWithRebase(op)
 		}
 	case "enter", "l", "right":
 		// Toggle the section under the cursor between collapsed and expanded.
@@ -737,12 +750,10 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.rebuildPositions()
 			m.saveWithRebase(pendingOp{typ: opLog, payload: text})
 		case modeInputCustomSection:
-			// Add-section is structural and one-keystroke redoable; it uses the
-			// plain last-writer save rather than rebasing.
 			m.board.AddSection(text)
 			m.rebuildPositions()
 			m.jumpToSectionByTitle(text)
-			m.save()
+			m.saveWithRebase(pendingOp{typ: opAddSection, sections: []string{text}})
 		}
 		return m, nil
 	}
@@ -756,28 +767,91 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 type opType int
 
 const (
-	opAdd   opType = iota // add a new open item to a section
-	opEdit                // replace an existing item's text
-	opReply               // append a "user:" reply under an existing item
-	opLog                 // append a user log line to Log
+	opAdd            opType = iota // add a new open item to a section
+	opEdit                         // replace an existing item's text
+	opReply                        // append a "user:" reply under an existing item
+	opLog                          // append a user log line to Log
+	opCycle                        // set an item's checkbox status (absolute)
+	opUrgent                       // set an item's urgency flag (absolute)
+	opArchiveItem                  // move an item (+ subtree) into ## Archive
+	opArchiveSection               // archive a whole section
+	opDeleteItem                   // hard-delete an item (+ subtree)
+	opDeleteSection                // hard-delete a whole section
+	opAddSection                   // add one or more sections (idempotent)
 )
 
-// pendingOp captures the one mutation an inline input produced, in a form that
-// can be replayed against a different (freshly-loaded) board when the file
-// changed underneath us. rawLine is the target item's verbatim source line (edit
-// / reply); section is the section title it lives in / is added to; payload is
-// the user's text.
+// pendingOp captures the one mutation a keystroke or inline input produced, in a
+// form that can be replayed against a different (freshly-loaded) board when the
+// file changed underneath us. rawLine is the target item's verbatim source line
+// (edit / reply / cycle / urgent / archive / delete of an item); section is the
+// section title it lives in / is added to / acted on; payload is the user's text.
+//
+// Structural ops replay ABSOLUTE resulting state, never the relative gesture: a
+// cycle or urgent-toggle would double-apply on a disk tree an external writer has
+// already advanced, so we record the value the mutation produced and set it
+// directly. newStatus/newUrgent carry those values; sections carries the titles
+// for opAddSection (the canonical "add sections" overlay adds several at once).
 type pendingOp struct {
-	typ     opType
-	section string
-	rawLine string
-	payload string
+	typ       opType
+	section   string
+	rawLine   string
+	payload   string
+	newStatus board.Status
+	newUrgent bool
+	sections  []string
+}
+
+// resolveTarget relocates op's target item in fresh (a board just reparsed from
+// disk) using progressively looser identity, and returns nil when no confident
+// match exists:
+//
+//  1. exact verbatim source line within op.section (FindByRawInSection) — the
+//     strongest identity, survives any external edit that did not touch the line;
+//  2. if fuzzy, the section-scoped normalized-text match, used only when it is
+//     unambiguous (exactly one match) so a flipped checkbox / added "!!" /
+//     re-indent still resolves but reworded or twinned lines do not;
+//  3. if boardWide (edit/reply only), the same normalized-text match across every
+//     section, used only when there is exactly one match on the whole board.
+//
+// Delete passes fuzzy=false so it is exact-only: a line an external writer merely
+// reworded (or cosmetically altered) is never hard-deleted by mistake.
+func resolveTarget(fresh *board.Board, op pendingOp, fuzzy, boardWide bool) *board.Item {
+	if it := fresh.FindByRawInSection(op.section, op.rawLine); it != nil && it.IsItem() {
+		return it
+	}
+	if !fuzzy {
+		return nil
+	}
+	norm := board.NormalizeItemText(op.rawLine)
+	if it, n := fresh.FindByTextInSection(op.section, norm); n == 1 {
+		return it
+	}
+	if boardWide {
+		var found *board.Item
+		total := 0
+		for _, s := range fresh.Sections {
+			if it, n := fresh.FindByTextInSection(s.Title, norm); n > 0 {
+				total += n
+				if found == nil {
+					found = it
+				}
+			}
+		}
+		if total == 1 {
+			return found
+		}
+	}
+	return nil
 }
 
 // applyOp re-applies op onto fresh (a board just reparsed from disk) and returns
-// a one-line status describing what happened. It never loses the user's text: if
-// the target item vanished from disk, the text is appended as a new item to the
-// section rather than dropped.
+// a one-line status describing what happened.
+//
+// Text-entry ops (add/edit/reply/log) never lose the user's text: if the target
+// item vanished, the text is appended as a new item rather than dropped.
+// Structural ops (cycle/urgent/archive/delete/add-section) are idempotent and
+// set absolute state; when their target is gone they are a deliberate no-op — the
+// external writer's version stands rather than being resurrected or duplicated.
 func applyOp(fresh *board.Board, op pendingOp) string {
 	switch op.typ {
 	case opAdd:
@@ -787,7 +861,7 @@ func applyOp(fresh *board.Board, op pendingOp) string {
 		fresh.AppendLog("user", op.payload)
 		return "board changed, log re-appended"
 	case opEdit:
-		if it := fresh.FindByRawInSection(op.section, op.rawLine); it != nil && it.IsItem() {
+		if it := resolveTarget(fresh, op, true, true); it != nil {
 			it.Text = op.payload
 			return "board changed, edit reapplied"
 		}
@@ -795,12 +869,54 @@ func applyOp(fresh *board.Board, op pendingOp) string {
 		fresh.AddItem(op.section, op.payload)
 		return "board changed, edited item was gone — kept your text"
 	case opReply:
-		if it := fresh.FindByRawInSection(op.section, op.rawLine); it != nil && it.IsItem() {
+		if it := resolveTarget(fresh, op, true, true); it != nil {
 			fresh.AddReply(it, "user: "+op.payload)
 			return "board changed, reply reapplied"
 		}
 		fresh.AddItem(op.section, "user: "+op.payload)
 		return "board changed, reply target was gone — kept your text"
+	case opCycle:
+		if it := resolveTarget(fresh, op, true, false); it != nil {
+			it.Status = op.newStatus // absolute, not a relative re-cycle
+			return "board changed, status reapplied"
+		}
+		return "board changed, status target gone"
+	case opUrgent:
+		if it := resolveTarget(fresh, op, true, false); it != nil {
+			it.Urgent = op.newUrgent // absolute, not a relative re-toggle
+			return "board changed, urgency reapplied"
+		}
+		return "board changed, urgency target gone"
+	case opArchiveItem:
+		if it := resolveTarget(fresh, op, true, false); it != nil {
+			fresh.ArchiveItem(it)
+			return "board changed, archive reapplied"
+		}
+		return "board changed, archive target gone"
+	case opDeleteItem:
+		// Exact-only: never hard-delete a line an external writer reworded.
+		if it := resolveTarget(fresh, op, false, false); it != nil {
+			fresh.Remove(it)
+			return "board changed, delete reapplied"
+		}
+		return "board changed, delete target gone"
+	case opArchiveSection:
+		if s := fresh.Section(op.section); s != nil {
+			fresh.ArchiveSection(s)
+			return "board changed, section archived"
+		}
+		return "board changed, section already gone"
+	case opDeleteSection:
+		if s := fresh.Section(op.section); s != nil {
+			fresh.RemoveSection(s)
+			return "board changed, section deleted"
+		}
+		return "board changed, section already gone"
+	case opAddSection:
+		for _, title := range op.sections {
+			fresh.AddSection(title) // idempotent: existing titles are not duplicated
+		}
+		return "board changed, sections re-added"
 	}
 	return "board changed, edit reapplied"
 }
@@ -864,7 +980,7 @@ func (m *model) confirmAddSections() (tea.Model, tea.Cmd) {
 		}
 		first = toAdd[0]
 		m.rebuildPositions()
-		m.save()
+		m.saveWithRebase(pendingOp{typ: opAddSection, sections: append([]string(nil), toAdd...)})
 	}
 	if custom {
 		// Prompt for the free-text name; canonical picks (if any) are already saved.
