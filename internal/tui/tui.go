@@ -101,6 +101,14 @@ type model struct {
 	dashCwd      string // cwd whose boards are shown when !dashAll
 	cameFromDash bool   // board view was opened from the dashboard; q/esc returns there
 
+	// editorBase / editorBuf support the lock-aware $EDITOR round-trip: the
+	// editor edits a temp COPY (editorBuf) seeded from the board (editorBase),
+	// and on close SaveEditorMerge 3-way merges the user's buffer with any writes
+	// Claude made to the real board meanwhile. editorBuf != "" distinguishes a
+	// board edit (needs the merge) from openLink's note edit (plain reload).
+	editorBase string
+	editorBuf  string
+
 	hist *history // bounded undo/redo of full board snapshots
 
 	watch  *watcher
@@ -444,7 +452,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, dashTick()
 	case editorDoneMsg:
-		m.reload()
+		// A board edit (editorBuf set) went through a temp copy and needs the
+		// 3-way merge; openLink reuses editorDoneMsg for a note file and just
+		// reloads the board.
+		if m.editorBuf != "" {
+			m.finishEditorMerge()
+		} else {
+			m.reload()
+		}
 		return m, nil
 	case updateHintMsg:
 		m.updateHint = msg.hint
@@ -1002,15 +1017,6 @@ func (m *model) jumpToSectionByTitle(title string) {
 			return
 		}
 	}
-}
-
-func (m *model) openEditor() tea.Cmd {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
-	}
-	c := exec.Command(editor, m.path) // #nosec G204 -- user's own $EDITOR
-	return tea.ExecProcess(c, func(error) tea.Msg { return editorDoneMsg{} })
 }
 
 // openLink opens the [[wiki-link]] in the current item's text in $EDITOR
