@@ -178,6 +178,9 @@ func (m *model) viewPicker() string {
 		b.WriteString(prefix + line + "\n")
 	}
 	b.WriteString("\n" + styleHelpBar.Render("j/k move · enter open · r refresh · q quit"))
+	if m.updateHint != "" {
+		b.WriteString("\n" + styleDim.Render(m.updateHint))
+	}
 	return b.String()
 }
 

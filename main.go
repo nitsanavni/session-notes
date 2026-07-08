@@ -9,18 +9,29 @@ import (
 	"github.com/nitsanavni/session-notes/internal/board"
 	"github.com/nitsanavni/session-notes/internal/hooks"
 	"github.com/nitsanavni/session-notes/internal/tui"
+	"github.com/nitsanavni/session-notes/internal/update"
 )
 
 func main() {
 	args := os.Args[1:]
 
-	// Hook subcommands: must never exit non-zero or block the session.
+	// Hook subcommands: must never exit non-zero or block the session. The
+	// update check must never be reachable from here (see internal/update).
 	if len(args) >= 1 && args[0] == "hook" {
 		if len(args) >= 2 {
 			runHook(args[1])
 		}
 		os.Exit(0)
 	}
+
+	// Upgrade subcommand: fetch and swap in the latest release.
+	if len(args) >= 1 && args[0] == "upgrade" {
+		os.Exit(runUpgrade())
+	}
+
+	// The TUI surfaces the upgrade hint asynchronously off the UI thread; give
+	// it the installed version to compare against.
+	tui.Version = versionString()
 
 	var boardPath, paneID string
 	picker := false
@@ -49,6 +60,9 @@ func main() {
 			return
 		case "-v", "--version":
 			fmt.Println("session-notes", versionString())
+			if h := update.Hint(versionString()); h != "" {
+				fmt.Fprintln(os.Stderr, h)
+			}
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "unknown argument: %s\n\n", args[i])
@@ -166,6 +180,7 @@ Usage:
   session-notes --dash --all          dashboard across every project
   session-notes -l                    board picker (all boards, newest first)
   session-notes -v, --version         print version and exit
+  session-notes upgrade               update to the latest release
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook

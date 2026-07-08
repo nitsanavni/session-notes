@@ -12,7 +12,12 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nitsanavni/session-notes/internal/board"
+	"github.com/nitsanavni/session-notes/internal/update"
 )
+
+// Version is the installed build's version string, set by package main before
+// any Run*. It feeds the asynchronous upgrade-hint check (checkUpdateCmd).
+var Version = "unknown"
 
 type mode int
 
@@ -101,6 +106,12 @@ type model struct {
 	watch  *watcher
 	width  int
 	height int
+
+	// updateHint is a dim, text-only "newer release available" notice shown in
+	// the picker and dashboard footers. Populated asynchronously by
+	// checkUpdateCmd so it never blocks startup; empty until (and unless) a
+	// newer release is found.
+	updateHint string
 }
 
 // Run opens the TUI on a specific board file.
@@ -381,6 +392,15 @@ func (m *model) doReload(recordExternal bool) {
 type reloadMsg struct{}
 type editorDoneMsg struct{}
 
+// updateHintMsg carries the result of the asynchronous upgrade-staleness check.
+type updateHintMsg struct{ hint string }
+
+// checkUpdateCmd runs the staleness check off the UI thread (bubbletea executes
+// Cmds in goroutines), so the ≤3s network call never blocks TUI startup.
+func checkUpdateCmd() tea.Cmd {
+	return func() tea.Msg { return updateHintMsg{update.Hint(Version)} }
+}
+
 func (m *model) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if m.watch != nil {
@@ -392,6 +412,7 @@ func (m *model) Init() tea.Cmd {
 		// a board and back, and never spawns a second chain.
 		cmds = append(cmds, dashTick())
 	}
+	cmds = append(cmds, checkUpdateCmd())
 	return tea.Batch(cmds...)
 }
 
@@ -424,6 +445,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, dashTick()
 	case editorDoneMsg:
 		m.reload()
+		return m, nil
+	case updateHintMsg:
+		m.updateHint = msg.hint
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
