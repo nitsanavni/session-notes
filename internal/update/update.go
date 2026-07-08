@@ -3,18 +3,23 @@
 //
 // CRITICAL: this package must never be reachable from the Claude Code hook path
 // (internal/hooks must not import it). Hooks must be fast and offline-safe; the
-// staleness check does network I/O. It is only invoked from the --version case
-// and from the TUI model's Init (off the UI thread).
+// staleness check does network I/O — and now may also shell out to `gh`, which
+// makes the "never on the hook path" invariant even more important. It is only
+// invoked from the --version case and from the TUI model's Init (off the UI
+// thread).
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
@@ -133,8 +138,48 @@ func LatestTag() string {
 	return tag
 }
 
-// fetchLatest performs the anonymous GitHub API request and returns tag_name.
+// ghPath returns the path to the `gh` CLI, or "" when it is not installed.
+func ghPath() string {
+	p, err := exec.LookPath("gh")
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// fetchLatest returns the newest release tag. It prefers the `gh` CLI (which
+// already handles auth and private-repo access), falling back to an anonymous
+// HTTP request. When SESSION_NOTES_UPDATE_URL is set (tests / power users) it
+// uses HTTP directly so the override is honored and gh is bypassed.
 func fetchLatest() (string, error) {
+	if os.Getenv("SESSION_NOTES_UPDATE_URL") != "" {
+		return fetchLatestHTTP()
+	}
+	if tag, err := fetchLatestGH(); err == nil && tag != "" {
+		return tag, nil
+	}
+	return fetchLatestHTTP()
+}
+
+// fetchLatestGH shells out to `gh api` for the latest release tag. It requires
+// `gh` on PATH and bounds the call with a 3s timeout to keep the check snappy.
+func fetchLatestGH() (string, error) {
+	gh := ghPath()
+	if gh == "" {
+		return "", fmt.Errorf("gh not found")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// Fixed args; gh reads tag_name from the (possibly private) release.
+	out, err := exec.CommandContext(ctx, gh, "api", "repos/"+repoSlug+"/releases/latest", "--jq", ".tag_name").Output() // #nosec G204 -- fixed args
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// fetchLatestHTTP performs the anonymous GitHub API request and returns tag_name.
+func fetchLatestHTTP() (string, error) {
 	req, err := http.NewRequest(http.MethodGet, endpoint(), nil)
 	if err != nil {
 		return "", err

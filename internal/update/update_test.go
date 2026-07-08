@@ -118,6 +118,25 @@ func TestLatestTagOptOut(t *testing.T) {
 	}
 }
 
+// TestFetchLatestEnvOverrideUsesHTTP asserts that when SESSION_NOTES_UPDATE_URL
+// is set, fetchLatest uses the HTTP path (bypassing gh) so the override is
+// honored and tests never depend on gh being present.
+func TestFetchLatestEnvOverrideUsesHTTP(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"tag_name":"v3.4.5"}`)
+	}))
+	defer srv.Close()
+	t.Setenv("SESSION_NOTES_UPDATE_URL", srv.URL)
+
+	got, err := fetchLatest()
+	if err != nil {
+		t.Fatalf("fetchLatest() error: %v", err)
+	}
+	if got != "v3.4.5" {
+		t.Fatalf("fetchLatest() = %q, want v3.4.5", got)
+	}
+}
+
 // TestHint asserts the message wording and the up-to-date/dev suppression.
 func TestHint(t *testing.T) {
 	t.Setenv("SESSION_NOTES_DIR", t.TempDir())

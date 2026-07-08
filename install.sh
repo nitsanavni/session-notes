@@ -66,10 +66,19 @@ download_binary() {
     *) echo "error: unsupported OS: $os" >&2; return 1 ;;
   esac
 
-  url="https://github.com/$REPO_SLUG/releases/latest/download/session-notes_${os}_${arch}.tar.gz"
+  local asset="session-notes_${os}_${arch}.tar.gz"
   tmp_dir="$(mktemp -d)"
-  log "Downloading prebuilt binary ($url)"
-  curl -fsSL "$url" | tar -xz -C "$tmp_dir"
+  # Prefer gh: it already handles auth, private-repo access, and the signed
+  # asset redirect. Fall back to an anonymous download when gh is absent.
+  if command -v gh >/dev/null 2>&1; then
+    log "Downloading prebuilt binary via gh ($asset)"
+    gh release download --repo "$REPO_SLUG" --pattern "$asset" --dir "$tmp_dir" --clobber
+    tar -xzf "$tmp_dir/$asset" -C "$tmp_dir"
+  else
+    url="https://github.com/$REPO_SLUG/releases/latest/download/$asset"
+    log "gh not found; trying anonymous download ($url)"
+    curl -fsSL "$url" | tar -xz -C "$tmp_dir"
+  fi
   install -m 755 "$tmp_dir/session-notes" "$BINARY_PATH"
   rm -rf "$tmp_dir"
 }

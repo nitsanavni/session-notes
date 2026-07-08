@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,8 +158,10 @@ func gitDescribe(repo string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// upgradeFromDownload fetches the latest prebuilt release for this platform,
-// extracts it beside the target, sanity-checks it, and atomically swaps it in.
+// upgradeFromDownload fetches the latest prebuilt release for this platform via
+// the `gh` CLI (which already handles auth, private-repo access, and the signed
+// asset redirect), extracts it beside the target, sanity-checks it, and
+// atomically swaps it in.
 func upgradeFromDownload(target string) int {
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	if goos != "linux" && goos != "darwin" {
@@ -171,29 +172,53 @@ func upgradeFromDownload(target string) int {
 		fmt.Fprintln(os.Stderr, "unsupported platform:", goos+"/"+goarch)
 		return 1
 	}
-	platform := goos + "_" + goarch
-	url := fmt.Sprintf("https://github.com/nitsanavni/session-notes/releases/latest/download/session-notes_%s.tar.gz", platform)
+	asset := "session-notes_" + goos + "_" + goarch + ".tar.gz"
 
-	fmt.Println("downloading", url)
-	resp, err := http.Get(url) // #nosec G107 -- fixed release URL; follows redirects
+	gh, err := exec.LookPath("gh")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "download failed:", err)
+		fmt.Fprintln(os.Stderr, "gh CLI not found: cannot download a release from the private repo. "+
+			"Install gh + `gh auth login`, or upgrade from a source checkout.")
 		return 1
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNotFound {
-		fmt.Fprintln(os.Stderr, "no release found for", goos+"/"+goarch)
+
+	// Download into a temp dir under target's directory so the eventual Rename is
+	// same-fs (a cross-device rename would fail).
+	dlDir, err := os.MkdirTemp(filepath.Dir(target), ".session-notes-dl-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot create download dir:", err)
 		return 1
 	}
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "download failed: status %d\n", resp.StatusCode)
+	defer func() { _ = os.RemoveAll(dlDir) }()
+
+	args := []string{"release", "download"}
+	// Pin the tag we checked against so the check and the upgrade stay
+	// consistent; when unknown, gh downloads the latest release.
+	if tag := update.LatestTag(); tag != "" {
+		args = append(args, tag)
+	}
+	args = append(args, "--repo", "nitsanavni/session-notes", "--pattern", asset, "--dir", dlDir, "--clobber")
+
+	fmt.Println("downloading", asset, "via gh")
+	dl := exec.Command(gh, args...) // #nosec G204 -- fixed subcommand + literal flags
+	if out, err := dl.CombinedOutput(); err != nil {
+		if len(out) > 0 {
+			fmt.Fprint(os.Stderr, string(out))
+		}
+		fmt.Fprintln(os.Stderr, "gh release download failed:", err)
 		return 1
 	}
+
+	archive, err := os.Open(filepath.Join(dlDir, asset)) // #nosec G304 -- asset name is a fixed platform string
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot open downloaded asset:", err)
+		return 1
+	}
+	defer func() { _ = archive.Close() }()
 
 	// Extract into the SAME directory as target so the final Rename is same-fs
 	// (a cross-device rename would fail) and never overwrites a running inode.
 	tmp := filepath.Join(filepath.Dir(target), fmt.Sprintf(".session-notes.new-%d", os.Getpid()))
-	if err := extractSessionNotes(resp.Body, tmp); err != nil {
+	if err := extractSessionNotes(archive, tmp); err != nil {
 		_ = os.Remove(tmp)
 		fmt.Fprintln(os.Stderr, "extract failed:", err)
 		return 1
