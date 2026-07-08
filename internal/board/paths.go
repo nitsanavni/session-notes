@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -75,23 +76,37 @@ func WritePaneMapping(paneID string, m *PaneMapping) error {
 	return os.Rename(tmp, path)
 }
 
+// TemplateSections is the ordered default section set seeded into a fresh
+// board. "Waiting on User" leads because it is the human's attention queue —
+// when non-empty it is the most important thing on the board. Then the active
+// working sections (Plan, Threads, Questions), the generative/deferred ones
+// (Ideas, Parked), the low-churn reference section (Working Agreements), and
+// the append-only Log last. Archive is intentionally absent: it is created on
+// demand by the first archive action, just above Log (see archiveSection).
+var TemplateSections = []string{
+	"Waiting on User",
+	"Plan",
+	"Threads",
+	"Questions",
+	"Ideas",
+	"Parked",
+	"Working Agreements",
+	LogTitle,
+}
+
 // Template returns the initial markdown for a fresh board.
 func Template(sessionID, cwd string, started time.Time) string {
-	return fmt.Sprintf(`---
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `---
 session: %s
 cwd: %s
 started: %s
 ---
 
-## Plan
-
-## Threads
-
-## Questions
-
-## Ideas
-
-## Log
-- %02d:%02d start: session started in %s
-`, sessionID, cwd, started.Format(time.RFC3339), started.Hour(), started.Minute(), cwd)
+`, sessionID, cwd, started.Format(time.RFC3339))
+	for _, title := range TemplateSections {
+		fmt.Fprintf(&sb, "## %s\n\n", title)
+	}
+	fmt.Fprintf(&sb, "- %02d:%02d start: session started in %s\n", started.Hour(), started.Minute(), cwd)
+	return sb.String()
 }

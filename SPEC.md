@@ -37,7 +37,10 @@ Non-tmux sessions still get a board; only the pane mapping is skipped.
 
 ## Board format
 
-Markdown, loosely parsed. YAML frontmatter + fixed `##` sections:
+Markdown, loosely parsed. YAML frontmatter + fixed `##` sections. New boards
+are seeded with, in order: Waiting on User, Plan, Threads, Questions, Ideas,
+Parked, Working Agreements, Log (`board.TemplateSections`). Archive is not
+seeded — the first archive action creates it just above Log. Abridged example:
 
 ```markdown
 ---

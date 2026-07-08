@@ -100,7 +100,9 @@ git tag v0.1.0 && git push origin v0.1.0
 
 Each session gets a Markdown file at `~/.claude/boards/<session-id>.md`: YAML
 frontmatter (`session`, `cwd`, `started`, and an optional `title`) followed by
-fixed `##` sections — Plan, Threads, Questions, Ideas, Log.
+fixed `##` sections — Waiting on User, Plan, Threads, Questions, Ideas, Parked,
+Working Agreements, Log (an Archive section is created on demand by the first
+archive action, just above Log).
 
 ```markdown
 ---
