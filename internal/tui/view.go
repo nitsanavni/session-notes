@@ -16,7 +16,6 @@ var (
 	styleSectionSel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81")).Underline(true)
 	styleCursor     = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
 	styleDone       = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Strikethrough(true)
-	styleDoneSel    = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Strikethrough(true).Bold(true)
 	styleUrgent     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	styleBlocked    = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 	styleInProg     = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
@@ -25,12 +24,22 @@ var (
 	styleStatus     = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
 	styleMarker     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	styleLink       = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Underline(true)
+
+	styleAuthorClaude = lipgloss.NewStyle().Foreground(lipgloss.Color("208")) // orange — claude's turn
+	styleAuthorUser   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))  // blue — user's turn
 )
 
 // linkDisplayRe matches [[name]] spans for display-only highlighting. It
 // mirrors board.ExtractLinks' delimiters but is kept separate: this one runs
 // per already-wrapped, plain-text display row, not over raw item text.
 var linkDisplayRe = regexp.MustCompile(`\[\[[^\[\]]+\]\]`)
+
+// authorRe matches a leading author token — "claude:" or "user:" — at the very
+// start of an item's display text, tolerating a "!! " urgent prepend and/or a
+// "HH:MM " log timestamp ahead of it. Only the (claude|user): capture (colon
+// included) is tinted; the match's full length tells wrapRows where the token
+// ends so the rest of the row renders as a plain sibling segment.
+var authorRe = regexp.MustCompile(`^(?:!!\s+)?(?:\d{2}:\d{2}\s+)?(claude|user):`)
 
 func statusMarker(s board.Status) string {
 	switch s {
@@ -208,22 +217,28 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	if it.Urgent {
 		text = "!! " + text
 	}
+	// Status/urgency set the base foreground + decoration, independent of
+	// selection.
 	var style lipgloss.Style
 	switch {
-	case it.Status == board.StatusDone && selected:
-		// Keep the strikethrough (done-ness must still read) but brighten and
-		// embolden so the cursor stays visible in a run of done items.
-		style = styleDoneSel
-	case it.Status == board.StatusDone: // dim wins over urgent once done
+	case it.Status == board.StatusDone: // dim + strikethrough wins over urgent once done
 		style = styleDone
 	case it.Urgent:
 		style = styleUrgent
-	case selected:
-		style = lipgloss.NewStyle().Bold(true)
 	case depth > 0: // replies read slightly dimmer than top-level items
 		style = styleDim
 	default:
 		style = lipgloss.NewStyle()
+	}
+	// Selection is a uniform overlay applied after, identical for every status:
+	// a loud, theme-adaptive reverse-video bar (a fixed background washes out on
+	// light terminals). Normalize the foreground to a bright constant first so
+	// the reversed bar is high-contrast on every status — a done item's dim 240
+	// would otherwise reverse into a low-contrast bar. Strikethrough from
+	// styleDone is an independent SGR attribute and survives alongside Reverse,
+	// so a selected done item still reads as done.
+	if selected {
+		style = style.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
 	}
 	return wrapRows(head, text, hang, m.width, style)
 }
@@ -241,14 +256,42 @@ func wrapRows(head, text string, hang, width int, style lipgloss.Style) []string
 	out := make([]string, 0, len(rows))
 	pad := strings.Repeat(" ", hang)
 	for i, r := range rows {
-		rendered := renderRowWithLinks(r, style)
 		if i == 0 {
-			out = append(out, head+rendered)
+			out = append(out, head+renderRow0(r, style))
 		} else {
-			out = append(out, pad+rendered)
+			out = append(out, pad+renderRowWithLinks(r, style))
 		}
 	}
 	return out
+}
+
+// renderRow0 renders the first wrapped row of an item. If the row opens with an
+// author token — "claude:" or "user:", tolerating a "!! " urgent prepend or a
+// "HH:MM " log timestamp ahead of it — that token (colon included) is tinted in
+// the author color as its own sibling segment; any prefix before it and the
+// remainder render in the base style (with [[links]] highlighted). The tint
+// style is derived from the base style so it inherits the selection background
+// and any strikethrough. Continuation rows never carry an author token, so they
+// call renderRowWithLinks directly.
+func renderRow0(row string, style lipgloss.Style) string {
+	loc := authorRe.FindStringSubmatchIndex(row)
+	if loc == nil {
+		return renderRowWithLinks(row, style)
+	}
+	tokStart, tokEnd := loc[2], loc[3]
+	authorStyle := style.Foreground(styleAuthorUser.GetForeground())
+	if strings.HasPrefix(row[tokStart:tokEnd], "claude") {
+		authorStyle = style.Foreground(styleAuthorClaude.GetForeground())
+	}
+	var b strings.Builder
+	if tokStart > 0 {
+		b.WriteString(style.Render(row[:tokStart]))
+	}
+	b.WriteString(authorStyle.Render(row[tokStart:tokEnd]))
+	if tokEnd < len(row) {
+		b.WriteString(renderRowWithLinks(row[tokEnd:], style))
+	}
+	return b.String()
 }
 
 // renderRowWithLinks renders one already-wrapped, plain-text row, styling
@@ -301,7 +344,13 @@ func (m *model) viewFooter() string {
 			modeInputReply:         "reply",
 			modeInputCustomSection: "section",
 		}[m.mode]
-		return styleStatus.Render(label+": ") + m.input.View()
+		// Reply mode's human message is always authored "user:", so tint its
+		// label user-blue; add/edit/log/section keep the neutral status color.
+		labelStyle := styleStatus
+		if m.mode == modeInputReply {
+			labelStyle = styleAuthorUser
+		}
+		return labelStyle.Render(label+": ") + m.input.View()
 	}
 	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter expand · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · ? help · q quit"
 	line := styleHelpBar.Render(hints)

@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/nitsanavni/session-notes/internal/board"
 )
 
@@ -215,5 +217,47 @@ func TestEmptySectionHeaderRenders(t *testing.T) {
 	out := stripANSI(m.viewBoard())
 	if !strings.Contains(out, "## Plan") {
 		t.Errorf("empty section header not rendered:\n%s", out)
+	}
+}
+
+// TestAuthorTokenTinted asserts the leading "user:" author token is tinted
+// user-blue (256-color 39) prefix-only, with the rest of the line intact under
+// the ANSI codes. The default renderer disables color outside a TTY, so force a
+// 256-color profile for the duration of the test.
+func TestAuthorTokenTinted(t *testing.T) {
+	orig := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(orig)
+
+	m := newTestModel("## Threads\n- user: hello there\n", 80, 24)
+	out := m.viewBoard() // keep ANSI codes
+	if !strings.Contains(out, "\x1b[38;5;39m") {
+		t.Errorf("expected user author token tinted blue (38;5;39):\n%q", out)
+	}
+	if !strings.Contains(stripANSI(out), "user: hello there") {
+		t.Errorf("author line text lost:\n%s", stripANSI(out))
+	}
+}
+
+// TestSelectedDoneReverseVideo asserts a selected done item uses reverse-video
+// (SGR 7) for its selection affordance while keeping the done strikethrough
+// (SGR 9), so it still reads as done.
+func TestSelectedDoneReverseVideo(t *testing.T) {
+	orig := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(orig)
+
+	m := newTestModel("## Threads\n- [x] finished task\n", 80, 24)
+	for i, p := range m.positions {
+		if p.item != nil && p.item.DisplayText() == "finished task" {
+			m.cursor = i
+		}
+	}
+	out := m.viewBoard()
+	if !strings.Contains(out, ";7;") && !strings.Contains(out, ";7m") {
+		t.Errorf("expected reverse-video (SGR 7) on selected row:\n%q", out)
+	}
+	if !strings.Contains(out, ";9m") {
+		t.Errorf("expected strikethrough (SGR 9) preserved on selected done item:\n%q", out)
 	}
 }
