@@ -89,6 +89,41 @@ func FindBoardByCwd(cwd string) (string, bool) {
 	return "", false
 }
 
+// enterPicker switches the model from a board view back to the board picker —
+// the inverse of the picker's openBoard transition. It closes the board's file
+// watcher and clears all per-board state (board tree, cursor, pending-edit
+// target, undo history) so nothing leaks into the next board opened, then
+// re-lists boards with the cursor on the board we came from.
+func (m *model) enterPicker() tea.Cmd {
+	if m.watch != nil {
+		m.watch.close()
+		m.watch = nil
+	}
+	from := m.path
+	m.mode = modePicker
+	m.cameFromDash = false
+	m.status = ""
+	m.path = ""
+	m.board = nil
+	m.lastDisk = ""
+	m.positions = m.positions[:0]
+	m.cursor = -1
+	m.selSec = 0
+	m.scroll = 0
+	m.target = nil
+	m.archiveExpanded = false
+	m.hist = newHistory(100)
+	m.entries = listBoards()
+	m.pickerCur = 0
+	for i, e := range m.entries {
+		if e.path == from {
+			m.pickerCur = i
+			break
+		}
+	}
+	return nil
+}
+
 func (m *model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc", "ctrl+c":

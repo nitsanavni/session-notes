@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nitsanavni/session-notes/internal/board"
 )
 
@@ -92,6 +93,63 @@ func TestFindBoardByCwd(t *testing.T) {
 			t.Fatalf("got %q, true; want none", got)
 		}
 	})
+}
+
+// TestBoardToPickerRoundTrip drives picker -> board -> B (back to picker) ->
+// pick another board, asserting the transitions land in the right mode and
+// that per-board state (undo history, board tree, path) does not leak across.
+func TestBoardToPickerRoundTrip(t *testing.T) {
+	t.Setenv("SESSION_NOTES_DIR", t.TempDir())
+	t.Setenv("SESSION_NOTES_PROJECTS_DIR", t.TempDir())
+	p1 := writeTestBoard(t, "s1", "/proj/a")
+	p2 := writeTestBoard(t, "s2", "/proj/b")
+
+	m := newModel()
+	if err := m.openBoard(p2); err != nil {
+		t.Fatal(err)
+	}
+	// Plant undo history on this board so we can assert it doesn't leak.
+	m.hist.snapshot("stale content from the first board")
+
+	keyB := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("B")}
+	m.handleBoardKey(keyB)
+	if m.mode != modePicker {
+		t.Fatalf("after B: mode = %v, want modePicker", m.mode)
+	}
+	if m.board != nil || m.path != "" || m.watch != nil {
+		t.Fatalf("after B: board state not cleared (board=%v path=%q watch=%v)", m.board, m.path, m.watch)
+	}
+	if len(m.entries) != 2 {
+		t.Fatalf("after B: %d picker entries, want 2", len(m.entries))
+	}
+	if m.entries[m.pickerCur].path != p2 {
+		t.Fatalf("after B: picker cursor on %q, want the board we came from %q", m.entries[m.pickerCur].path, p2)
+	}
+
+	// Pick the other board.
+	for i, e := range m.entries {
+		if e.path == p1 {
+			m.pickerCur = i
+		}
+	}
+	m.handlePickerKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != modeBoard || m.path != p1 {
+		t.Fatalf("after enter: mode=%v path=%q, want modeBoard %q", m.mode, m.path, p1)
+	}
+	// The first board's undo history must not restore into this board.
+	m.undo()
+	if m.status != "nothing to undo" {
+		t.Fatalf("undo leaked across boards: status = %q", m.status)
+	}
+
+	// And back to the picker once more.
+	m.handleBoardKey(keyB)
+	if m.mode != modePicker {
+		t.Fatalf("second B: mode = %v, want modePicker", m.mode)
+	}
+	if m.entries[m.pickerCur].path != p1 {
+		t.Fatalf("second B: picker cursor on %q, want %q", m.entries[m.pickerCur].path, p1)
+	}
 }
 
 func TestShortID(t *testing.T) {

@@ -554,6 +554,9 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.openLink()
 	case "L":
 		m.startInput(modeInputLog, "", "log entry")
+	case "B":
+		// Back to the board picker: list all boards and pick another.
+		return m, m.enterPicker()
 	case "u":
 		m.undo()
 	case "ctrl+r":
