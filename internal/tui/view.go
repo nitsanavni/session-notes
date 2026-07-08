@@ -78,6 +78,7 @@ func (m *model) viewBoard() string {
 	}
 	var lines []string
 	cursorLine := 0
+	cursorEnd := 0     // exclusive end of the selected block: past its rows + whole subtree
 	selHeaderLine := 0 // display row of the active section's header
 
 	// Title text (Title -> Session -> path fallback) is held aside and rendered
@@ -159,9 +160,18 @@ func (m *model) viewBoard() string {
 				lines = append(lines, m.renderItem(it, selected, depth)...)
 				posIdx++
 				walk(it.Children, depth+1)
+				if selected {
+					// Exclusive end: past the item's rows + its whole subtree.
+					cursorEnd = len(lines)
+				}
 			}
 		}
 		walk(s.Items, 0)
+	}
+	// Normalize the unset case: cursor on a section header (including a collapsed
+	// one) or no selection leaves cursorEnd at zero.
+	if cursorEnd <= cursorLine {
+		cursorEnd = cursorLine + 1
 	}
 
 	// Footer: input line or key hints, plus status.
@@ -180,16 +190,22 @@ func (m *model) viewBoard() string {
 	if bodyH < 3 {
 		bodyH = 3
 	}
+	blockH := cursorEnd - cursorLine
+	visBlockH := min(blockH, bodyH)
+	// 1. cursor row never scrolls off the top
 	if cursorLine < m.scroll {
 		m.scroll = cursorLine
 	}
-	if cursorLine >= m.scroll+bodyH {
-		m.scroll = cursorLine - bodyH + 1
+	// 2. keep the block's fitting portion on screen when it hangs off the bottom
+	//    (1-row block reduces to the old cursorLine>=m.scroll+bodyH -> cursorLine-bodyH+1 clamp)
+	if cursorLine+visBlockH > m.scroll+bodyH {
+		m.scroll = cursorLine + visBlockH - bodyH
 	}
-	// Prefer showing the active section's header when doing so still keeps the
-	// cursor on screen — this reveals empty sections you tab onto without ever
-	// pinning a section taller than the viewport to its header.
-	if selHeaderLine < m.scroll && cursorLine < selHeaderLine+bodyH {
+	// 3. header preference — reveal the active section's header, but only when the
+	//    whole fitting portion of the block still fits below it. A block taller
+	//    than the viewport never snaps to the header (this reduces to
+	//    cursorLine<=selHeaderLine, true only on the header stop itself).
+	if selHeaderLine < m.scroll && cursorLine+visBlockH <= selHeaderLine+bodyH {
 		m.scroll = selHeaderLine
 	}
 	// At the very first item (or an empty board), scroll fully to the top so the

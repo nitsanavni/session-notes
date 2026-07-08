@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,21 @@ import (
 	"github.com/muesli/termenv"
 	"github.com/nitsanavni/session-notes/internal/board"
 )
+
+// focus points the cursor (and active section) at the first item whose visible
+// text equals want, mirroring how key handlers keep m.selSec in sync with the
+// cursor. It fails the test if no such item exists.
+func focus(t *testing.T, m *model, want string) {
+	t.Helper()
+	for i, p := range m.positions {
+		if p.item != nil && p.item.DisplayText() == want {
+			m.cursor = i
+			m.selSec = p.sec
+			return
+		}
+	}
+	t.Fatalf("no navigable item with text %q", want)
+}
 
 // keyPress builds a tea.KeyMsg whose String() matches the board key handler's
 // switch (single runes, plus the named "enter"/"left" keys used in tests).
@@ -366,5 +382,162 @@ func TestSelectedDoneReverseVideo(t *testing.T) {
 	}
 	if !strings.Contains(out, ";9m") {
 		t.Errorf("expected strikethrough (SGR 9) preserved on selected done item:\n%q", out)
+	}
+}
+
+// childBoard builds a single Threads section whose first item is SELITEM,
+// followed by n indented children (2-space reply indent). At width 80 every
+// bullet is one display row, so lines are: [0]=header, [1]=SELITEM,
+// [2..n+1]=child00..child(n-1).
+func childBoard(n int) string {
+	var b strings.Builder
+	b.WriteString("## Threads\n- [ ] SELITEM\n")
+	for i := 0; i < n; i++ {
+		b.WriteString(fmt.Sprintf("  - [ ] child%02d\n", i))
+	}
+	return b.String()
+}
+
+// TestScrollUpKeepsBlockOverHeader is the bug fix: with the cursor on an item
+// whose rows + child subtree overflow the viewport, scrolling up must not snap
+// the viewport to the section header (which would evict the selected item's
+// tail). The block-aware clamp keeps the cursor row at the top instead.
+func TestScrollUpKeepsBlockOverHeader(t *testing.T) {
+	m := newTestModel(childBoard(10), 80, 12) // bodyH = 12 - 2 - 1 = 9
+	focus(t, m, "SELITEM")                    // cursorLine == 1, header (selHeaderLine) == 0
+	m.scroll = 4                              // as if scrolled down, now arrowing back up
+	out := stripANSI(m.viewBoard())
+
+	// The whole block (SELITEM + 10 children) is 11 rows > bodyH, so the header
+	// preference must NOT fire: scroll stays on the cursor row, not the header.
+	if m.scroll != 1 {
+		t.Fatalf("scroll snapped away from cursor row: got %d, want 1 (header line 0 not shown)", m.scroll)
+	}
+	if strings.Contains(out, "## Threads") {
+		t.Errorf("section header should not be pinned on screen:\n%s", out)
+	}
+	// Selected item and at least its first child stay visible.
+	for _, want := range []string{"SELITEM", "child00"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q visible after scroll-up:\n%s", want, out)
+		}
+	}
+}
+
+// TestHeaderPreferenceStillFits confirms the header preference is intact: when
+// the selected item's block fits below the section header, scrolling reveals
+// the header row.
+func TestHeaderPreferenceStillFits(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("## Top\n")
+	for i := 0; i < 9; i++ {
+		b.WriteString(fmt.Sprintf("- [ ] f%d\n", i))
+	}
+	// Threads header lands at line 10; t0 at line 11.
+	b.WriteString("## Threads\n- [ ] t0\n- [ ] t1\n")
+	m := newTestModel(b.String(), 80, 12) // bodyH = 9
+	focus(t, m, "t0")                     // cursorLine 11, selHeaderLine 10, block is 1 row
+	m.scroll = 11                         // header just above the window
+	out := stripANSI(m.viewBoard())
+
+	if m.scroll != 10 {
+		t.Fatalf("header preference did not fire: scroll = %d, want 10 (## Threads row)", m.scroll)
+	}
+	if !strings.Contains(out, "## Threads") {
+		t.Errorf("active section header should be revealed:\n%s", out)
+	}
+	if !strings.Contains(out, "t0") {
+		t.Errorf("selected item should remain visible:\n%s", out)
+	}
+}
+
+// TestOverflowingBlockPinsCursorTop asserts that an item whose subtree is taller
+// than the viewport puts the selected row on the first body line, with the
+// children filling the rest of the window.
+func TestOverflowingBlockPinsCursorTop(t *testing.T) {
+	m := newTestModel(childBoard(12), 80, 12) // bodyH = 9; block = 13 rows
+	focus(t, m, "SELITEM")                    // cursorLine 1
+	m.scroll = 0
+	out := stripANSI(m.viewBoard())
+
+	if m.scroll != 1 {
+		t.Fatalf("selected row not pinned to top of body: scroll = %d, want 1 (== cursorLine)", m.scroll)
+	}
+	if strings.Contains(out, "## Threads") {
+		t.Errorf("header should be scrolled off for an overflowing block:\n%s", out)
+	}
+	// Children fill the body: rows 1..9 => SELITEM + child00..child07.
+	for _, want := range []string{"SELITEM", "child00", "child07"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in the filled body:\n%s", want, out)
+		}
+	}
+}
+
+// TestWrappedItemNoHeaderSnap covers a wrapped item with no children near the
+// header: scrolling up keeps its tail rows on screen without snapping to the
+// header.
+func TestWrappedItemNoHeaderSnap(t *testing.T) {
+	long := "STARTMARK " + strings.TrimSpace(strings.Repeat("word ", 60))
+	m := newTestModel("## Threads\n- [ ] "+long+"\n", 40, 12) // narrow -> wraps to many rows
+	// The board's only item is the wrapped bullet; put the cursor on it.
+	for i, p := range m.positions {
+		if p.item != nil {
+			m.cursor, m.selSec = i, p.sec
+			break
+		}
+	}
+	m.scroll = 3 // scrolled down, arrowing up
+	out := stripANSI(m.viewBoard())
+
+	if m.scroll != 1 {
+		t.Fatalf("wrapped item snapped scroll unexpectedly: got %d, want 1", m.scroll)
+	}
+	if strings.Contains(out, "## Threads") {
+		t.Errorf("header should not snap onto screen for a tall wrapped item:\n%s", out)
+	}
+	// The item's first row (its head) is at the top of the body.
+	if !strings.Contains(out, "STARTMARK") {
+		t.Errorf("expected the wrapped item's first row visible:\n%s", out)
+	}
+	// The body is filled to bodyH with the item's wrapped rows.
+	rows := bodyRows(out)
+	filled := 0
+	for _, r := range rows {
+		if strings.Contains(r, "word") {
+			filled++
+		}
+	}
+	if filled < 9 {
+		t.Errorf("expected the wrapped tail to fill bodyH (9) rows, got %d:\n%s", filled, out)
+	}
+}
+
+// TestDownwardSingleRowBottomAligns is the regression guard for downward
+// movement: single-row items still bottom-align (the block-aware clamp reduces
+// to the old cursorLine-bodyH+1 behavior when the block is one row).
+func TestDownwardSingleRowBottomAligns(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("## Threads\n")
+	for i := 0; i < 20; i++ {
+		b.WriteString(fmt.Sprintf("- [ ] item%02d\n", i))
+	}
+	m := newTestModel(b.String(), 80, 12) // bodyH = 9
+	focus(t, m, "item19")                 // cursorLine 20 (header + 20 items)
+	m.scroll = 0
+	out := stripANSI(m.viewBoard())
+
+	// Bottom-aligned: scroll = cursorLine - bodyH + 1 = 20 - 9 + 1 = 12.
+	if m.scroll != 12 {
+		t.Fatalf("single-row item not bottom-aligned: scroll = %d, want 12", m.scroll)
+	}
+	if !strings.Contains(out, "item19") {
+		t.Errorf("selected bottom item should be visible:\n%s", out)
+	}
+	if !strings.Contains(out, "item11") { // first visible body line
+		t.Errorf("expected the window to start at item11:\n%s", out)
+	}
+	if strings.Contains(out, "## Threads") || strings.Contains(out, "item00") {
+		t.Errorf("top of board should be scrolled away:\n%s", out)
 	}
 }
