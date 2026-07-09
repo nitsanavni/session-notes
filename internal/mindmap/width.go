@@ -1,6 +1,9 @@
 package mindmap
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // Arm bits for connector junctions: which stubs meet at a cell.
 const (
@@ -66,4 +69,102 @@ func dispWidth(text string) int {
 		w += charW(c)
 	}
 	return w
+}
+
+// truncateDisplay clips s to at most max display columns, appending a "…"
+// (width 1) when it actually cuts. Display-width aware: wide (CJK/emoji) glyphs
+// count as 2 and are never split across the boundary. max<=0 means no limit.
+func truncateDisplay(s string, max int) string {
+	if max <= 0 || dispWidth(s) <= max {
+		return s
+	}
+	budget := max - 1 // reserve one column for the ellipsis
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		cw := charW(r)
+		if w+cw > budget {
+			break
+		}
+		b.WriteRune(r)
+		w += cw
+	}
+	b.WriteRune('…')
+	return b.String()
+}
+
+// hardChunks splits a single word into pieces each at most max display columns
+// wide (for words longer than the wrap width).
+func hardChunks(word string, max int) []string {
+	var chunks []string
+	var b strings.Builder
+	w := 0
+	for _, r := range word {
+		cw := charW(r)
+		if w+cw > max && w > 0 {
+			chunks = append(chunks, b.String())
+			b.Reset()
+			w = 0
+		}
+		b.WriteRune(r)
+		w += cw
+	}
+	if b.Len() > 0 {
+		chunks = append(chunks, b.String())
+	}
+	return chunks
+}
+
+// wrapDisplay word-wraps s to lines each at most max display columns wide,
+// hard-breaking any single word longer than max. Runs of whitespace collapse to
+// a single space. Always returns at least one line. max<=0 returns s unwrapped.
+func wrapDisplay(s string, max int) []string {
+	if max <= 0 {
+		return []string{s}
+	}
+	var lines []string
+	cur := ""
+	curW := 0
+	flush := func() {
+		if cur != "" {
+			lines = append(lines, cur)
+			cur, curW = "", 0
+		}
+	}
+	for _, word := range strings.Fields(s) {
+		ww := dispWidth(word)
+		if ww > max {
+			flush()
+			chunks := hardChunks(word, max)
+			// keep the trailing partial chunk open so following words can pack in
+			for i, ch := range chunks {
+				if i < len(chunks)-1 {
+					lines = append(lines, ch)
+				} else {
+					cur, curW = ch, dispWidth(ch)
+				}
+			}
+			continue
+		}
+		add := ww
+		if cur != "" {
+			add++ // the joining space
+		}
+		if curW+add > max {
+			flush()
+			cur, curW = word, ww
+		} else {
+			if cur != "" {
+				cur += " "
+				curW++
+			}
+			cur += word
+			curW += ww
+		}
+	}
+	flush()
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	return lines
 }

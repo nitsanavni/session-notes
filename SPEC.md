@@ -133,8 +133,17 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
 - Map view (`m`): the board as a center-outward mindmap (ported from mm — see
   docs/mm-port.md). Title at center, all `##` sections as the protected first ring,
-  items as subtrees. `hjkl`/arrows move focus spatially, `enter` folds a subtree,
-  `a`/`e`/`space`/`D` edit (sections aren't editable/markable/deletable); every
+  items as subtrees. Navigation is tree-structural (mm-style, not pixel-scored):
+  `j`/`k` (down/up) walk the focused node's siblings on its side of the center,
+  top-to-bottom, so up/down always reach the node visually above/below and never
+  dive into a subtree or jump across the map; `h`/`l` (left/right) move along the
+  parent/child axis — toward the center is the parent, away enters the branch at
+  its first child, so left/right cross between the two sides via the center.
+  Node text is truncated to 40 display columns (unicode-width aware) with a `…`
+  so maps don't sprawl; the focused node's full text still shows in the detail
+  footer, and `w` toggles the focused node expanded in place — rendered as a
+  wrapped multi-line block instead of one truncated line. `enter` folds a
+  subtree, `a`/`e`/`space`/`D` edit (sections aren't editable/markable/deletable); every
   mutation saves through the same locked write + rebase path as the list view and
   shares its undo history. Conversational reply children (`user:`/`claude:`
   sub-bullets) render dim and collapse by default into a `[N replies]` suffix on

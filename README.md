@@ -38,7 +38,11 @@ The `▸` marks the active section; the highlighted row is the cursor. Urgent
 (`!!`) items are highlighted, done (`[x]`) items are dimmed.
 
 `m` toggles the mindmap view: the board as a center-outward map, sections as
-the first ring, `hjkl` moving focus spatially. When a move surprises you (focus
+the first ring. `hjkl` move focus tree-structurally — `j`/`k` walk siblings on
+your side of the center (the node visually above/below), `h`/`l` cross the
+parent/child axis toward and away from the center. Long node text is truncated
+to 40 columns with a `…` (the full text shows in the footer); `w` expands the
+focused node in place as a wrapped multi-line block. When a move surprises you (focus
 didn't land where your fingers expected), press `!`: a prompt shows what just
 happened ("you hit k · focus moved 'Log' → 'Working Agreements' — where did you
 expect it?") and your note is appended to `<board>.feedback.jsonl` along with

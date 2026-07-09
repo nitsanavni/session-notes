@@ -223,6 +223,12 @@ func buildMapTree(b *board.Board, folded, repliesShown map[string]bool, showLog 
 	return root, refs, keys
 }
 
+// mapNodeMaxWidth caps a node's on-map display width; longer text is truncated
+// with a "…" (or wrapped when the node is expanded via `w`). The focused node's
+// full text still shows in the detail footer. This is a TUI choice; the mindmap
+// package never truncates by default (the mm golden fixtures depend on that).
+const mapNodeMaxWidth = 40
+
 // ensureMap builds the map layout if it is stale (nil), re-resolving focus from
 // the persisted mapFocusKey (falling back to the center when it no longer maps).
 func (m *model) ensureMap() {
@@ -230,9 +236,16 @@ func (m *model) ensureMap() {
 		return
 	}
 	root, refs, keys := buildMapTree(m.board, m.mapFolded, m.mapRepliesShown, m.mapShowLog)
+	expanded := map[*mindmap.Node]bool{}
+	for n, k := range keys {
+		if m.mapExpanded[k] {
+			expanded[n] = true
+		}
+	}
+	opts := mindmap.Options{MaxWidth: mapNodeMaxWidth, Expanded: expanded}
 	ms := &mapState{
 		root:   root,
-		layout: mindmap.LayoutTree("", root, root.Children, mindmap.Rounded),
+		layout: mindmap.LayoutTreeOpts("", root, root.Children, mindmap.Rounded, opts),
 		refs:   refs,
 		keys:   keys,
 	}
@@ -274,58 +287,172 @@ func (m *model) enterMap() {
 
 // --- navigation ---
 
-// mapMove moves focus to the spatially nearest node in the given direction
-// ('h'/'j'/'k'/'l'), mm-style: candidates strictly on that side of the focused
-// node's center, scored so on-axis distance dominates the cross-axis.
+// mapMove moves focus in the given direction ('h'/'j'/'k'/'l'). Navigation is
+// TREE-STRUCTURAL, mirroring mm rather than scoring by pixel distance (the old
+// geometric scorer is the root cause of the reported k-from-a-section surprise:
+// it demanded candidates be strictly on one side of the focus CENTER and then
+// weighted cross-axis distance, so vertically-stacked first-ring siblings — who
+// share a column but have different widths, hence different centers — were
+// rejected or mis-ranked, and up/down could jump across the map or not move).
+//
+// The structural model, which is deterministic and always lands on the visually
+// adjacent node when one exists:
+//   - j/k (down/up): walk the focused node's siblings ON ITS SIDE of the center,
+//     in document (top-to-bottom) order. Siblings on the same side are stacked
+//     vertically in that order, so the previous/next sibling is the node
+//     visually above/below. Stops at the ends; never dives into a subtree or
+//     crosses the map. On the center, step to the nearest first-ring node in
+//     that vertical direction.
+//   - h/l (left/right): move along the parent/child axis. Toward the center is
+//     the parent; away from the center enters the branch at its first child.
+//     From the center, l enters the right side and h the left side.
 func (m *model) mapMove(dir rune) {
-	ms := m.mp
-	fp := ms.placement(ms.focus)
-	if fp == nil {
+	switch dir {
+	case 'j':
+		m.mapVertical(1)
+	case 'k':
+		m.mapVertical(-1)
+	case 'l':
+		m.mapLateral(1)
+	case 'h':
+		m.mapLateral(-1)
+	}
+}
+
+// setMapFocus points focus (and the persisted key) at a node.
+func (m *model) setMapFocus(n *mindmap.Node) {
+	if n == nil {
 		return
 	}
-	fr := fp.Row
-	fc := fp.Col + fp.Width/2
+	m.mp.focus = n
+	m.mapFocusKey = m.mp.keys[n]
+}
+
+// mapVertical walks same-side siblings (delta +1 down / -1 up).
+func (m *model) mapVertical(delta int) {
+	ms := m.mp
+	if ms.focus == ms.root {
+		m.centerVertical(delta)
+		return
+	}
+	side := ms.sideOf(ms.focus)
+	sibs := ms.sameSideSiblings(ms.focus, side)
+	i := indexOfNode(sibs, ms.focus)
+	if i < 0 {
+		return
+	}
+	j := i + delta
+	if j >= 0 && j < len(sibs) {
+		m.setMapFocus(sibs[j])
+	}
+}
+
+// centerVertical moves off the center to the first-ring node nearest in the
+// given vertical direction (delta +1 down / -1 up).
+func (m *model) centerVertical(delta int) {
+	ms := m.mp
+	cp := ms.placement(ms.root)
+	if cp == nil {
+		return
+	}
 	var best *mindmap.Node
-	bestScore := 1 << 30
-	for _, p := range ms.layout.Placements {
-		if p.Node == ms.focus {
+	bestD := 1 << 30
+	for _, c := range ms.root.Children {
+		p := ms.placement(c)
+		if p == nil {
 			continue
 		}
-		dr := p.Row - fr
-		dc := (p.Col + p.Width/2) - fc
-		switch dir {
-		case 'l':
-			if dc <= 0 {
-				continue
-			}
-		case 'h':
-			if dc >= 0 {
-				continue
-			}
-		case 'j':
-			if dr <= 0 {
-				continue
-			}
-		case 'k':
-			if dr >= 0 {
-				continue
-			}
+		dr := p.Row - cp.Row
+		if delta < 0 && dr >= 0 {
+			continue
 		}
-		var score int
-		if dir == 'h' || dir == 'l' {
-			score = absInt(dc) + 3*absInt(dr)
-		} else {
-			score = absInt(dr) + 3*absInt(dc)
+		if delta > 0 && dr <= 0 {
+			continue
 		}
-		if score < bestScore {
-			bestScore = score
-			best = p.Node
+		if d := absInt(dr); d < bestD {
+			bestD = d
+			best = c
 		}
 	}
-	if best != nil {
-		ms.focus = best
-		m.mapFocusKey = ms.keys[best]
+	m.setMapFocus(best)
+}
+
+// mapLateral moves along the parent/child axis (dir +1 right / -1 left).
+func (m *model) mapLateral(dir int) {
+	ms := m.mp
+	if ms.focus == ms.root {
+		// From the center, enter the first child on the chosen side.
+		for _, c := range ms.root.Children {
+			if ms.sideOf(c) == dir {
+				m.setMapFocus(c)
+				return
+			}
+		}
+		return
 	}
+	side := ms.sideOf(ms.focus)
+	if side == dir {
+		// Outward, deeper into this node's own branch: its first visible child.
+		if !ms.focus.Folded && len(ms.focus.Children) > 0 {
+			m.setMapFocus(ms.focus.Children[0])
+		}
+		return
+	}
+	// Inward, toward the center: the parent.
+	m.setMapFocus(ms.parentOf(ms.focus))
+}
+
+// sideOf reports which side of the center a node sits on (1 right, -1 left, 0
+// center), from its placement.
+func (ms *mapState) sideOf(n *mindmap.Node) int {
+	if p := ms.placement(n); p != nil {
+		return p.Side
+	}
+	return 0
+}
+
+// parentOf returns a node's parent in the bridged tree, or nil for the center.
+func (ms *mapState) parentOf(n *mindmap.Node) *mindmap.Node {
+	var found *mindmap.Node
+	var walk func(p *mindmap.Node)
+	walk = func(p *mindmap.Node) {
+		for _, c := range p.Children {
+			if c == n {
+				found = p
+				return
+			}
+			walk(c)
+		}
+	}
+	walk(ms.root)
+	return found
+}
+
+// sameSideSiblings returns the focused node's siblings that render on the given
+// side of the center, in document order (deeper nodes' siblings all share the
+// branch's side, so the filter is a no-op there).
+func (ms *mapState) sameSideSiblings(n *mindmap.Node, side int) []*mindmap.Node {
+	p := ms.parentOf(n)
+	if p == nil {
+		return []*mindmap.Node{n}
+	}
+	var sibs []*mindmap.Node
+	for _, c := range p.Children {
+		if ms.sideOf(c) == side {
+			sibs = append(sibs, c)
+		}
+	}
+	return sibs
+}
+
+// indexOfNode returns n's index in nodes, or -1.
+func indexOfNode(nodes []*mindmap.Node, n *mindmap.Node) int {
+	for i, x := range nodes {
+		if x == n {
+			return i
+		}
+	}
+	return -1
 }
 
 // --- key handling ---
@@ -369,6 +496,8 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mapMove('l')
 	case "enter":
 		m.mapToggleFold()
+	case "w":
+		m.mapToggleExpand()
 	case "a":
 		m.startMapAdd()
 	case "e":
@@ -431,6 +560,22 @@ func (m *model) mapToggleFold() {
 		m.mapFolded[m.mapFocusKey] = true
 	}
 	m.mp = nil // re-layout with the new fold state
+}
+
+// mapToggleExpand flips the focused node between a single truncated line and a
+// wrapped multi-line block (the `w` key). Nodes whose full text already fits
+// within mapNodeMaxWidth render identically either way, but the toggle still
+// records so the state is explicit.
+func (m *model) mapToggleExpand() {
+	if m.mapExpanded == nil {
+		m.mapExpanded = map[string]bool{}
+	}
+	if m.mapExpanded[m.mapFocusKey] {
+		delete(m.mapExpanded, m.mapFocusKey)
+	} else {
+		m.mapExpanded[m.mapFocusKey] = true
+	}
+	m.mp = nil // re-layout: node height/width changed
 }
 
 // mapCycle advances the focused item's status through the map cycle and saves.
@@ -642,14 +787,20 @@ func (m *model) viewMap() string {
 		ref := ms.refs[p.Node]
 		id := len(styles)
 		styles = append(styles, mapNodeStyle(ref, p.Node == ms.focus))
-		r := p.Row - minRow
-		if r < 0 || r >= gridH {
-			continue
-		}
 		c0 := p.Col - layout.MinCol
-		for k := 0; k < p.Width && c0+k < gridW; k++ {
-			if c0+k >= 0 {
-				cellStyle[r][c0+k] = id
+		top := p.Row - (p.Height-1)/2 - minRow
+		// Style every row of the node's block across its full width, so an
+		// expanded (multi-line) node reads as one styled rectangle and the focus
+		// bar stays continuous.
+		for li := 0; li < p.Height; li++ {
+			r := top + li
+			if r < 0 || r >= gridH {
+				continue
+			}
+			for k := 0; k < p.Width && c0+k < gridW; k++ {
+				if c0+k >= 0 {
+					cellStyle[r][c0+k] = id
+				}
 			}
 		}
 	}
@@ -781,7 +932,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · enter fold · a add · e edit · space status · D delete · M log · m list · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · enter fold · w wrap · a add · e edit · space status · D delete · M log · m list · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

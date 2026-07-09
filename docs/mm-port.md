@@ -99,5 +99,30 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   trivial reader), same as mm. `session-notes feedback <board.md>` lists records
   (`--json` raw); `--gen-test` prints paste-ready Go tests (package tui,
   building on the `newMapModel`/`keyPress` test helpers) that replay the move
-  and assert today's landing, mm's flip-one-line-to-fail design. Navigation
-  fixes come next, driven by real recorded surprises.
+  and assert today's landing, mm's flip-one-line-to-fail design.
+- Navigation reworked to mm's tree-structural model (was a geometric
+  nearest-node scorer). Root cause of the reported "k on a section does nothing
+  / lands somewhere odd" surprise: the scorer required candidates to sit
+  strictly on one side of the focus *center* and then weighted cross-axis
+  distance 3×, so vertically-stacked first-ring sections (same column, differing
+  widths → differing centers) were rejected or mis-ranked, letting up/down jump
+  across the map or stall. Now `j`/`k` walk the focused node's siblings **on its
+  side of the center** in document order (which is exactly the visual top-to-
+  bottom stack, so up/down reach the adjacent node and never dive into a
+  subtree); on the center they step to the nearest first-ring node in that
+  direction. `h`/`l` move the parent/child axis (mm's `moveLateral`): toward the
+  center is the parent, away enters the branch at its first child — so left/right
+  cross between sides via the center. Deterministic; table-tested against real
+  layouts in `mapnav_test.go` (including the recorded `k`-on-`Log` case). mm's
+  per-side "remember where I descended from" memory (`lastVisited`) is not
+  ported — away-from-center always enters at the first child.
+- Long-node handling implemented (mm has none — it just grows wide). Node text
+  is truncated to 40 display columns (unicode-width aware, in `width.go`) with a
+  trailing `…` at layout time; the focused node's full text stays in the detail
+  footer. `w` toggles the focused node expanded in place — wrapped into a
+  multi-line block at 40 cols. `mindmap.Placement` gained a `Height` and per-row
+  `Lines`; layout row-packing sums node heights and connectors attach at a
+  node's vertical center row. Truncation/expansion is a `mindmap.Options` opt-in
+  (`LayoutTreeOpts`) that the TUI turns on and the golden tests leave off, so the
+  byte-identical-to-mm fixtures are untouched; the Go-only truncation and
+  multi-line-layout cases have their own tests (`layout_opts_test.go`).

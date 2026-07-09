@@ -6,16 +6,35 @@ import (
 	"strings"
 )
 
-// Placement is one node's box on the map.
+// Options tune the layout beyond mm's plain center-outward tree. The zero value
+// reproduces mm exactly (the golden fixtures rely on this): no truncation, no
+// expansion. The TUI opts in to truncation; the mindmap package never does by
+// default.
+type Options struct {
+	// MaxWidth caps a node's display width; longer text is truncated with a "…"
+	// (or, when Expanded, wrapped into a multi-line block). 0 = no limit.
+	MaxWidth int
+	// Expanded holds the nodes rendered as wrapped multi-line blocks instead of
+	// a single truncated line (the `w` toggle). Ignored when MaxWidth is 0.
+	Expanded map[*Node]bool
+}
+
+// Placement is one node's box on the map. A node may span multiple rows (an
+// expanded, wrapped node): Row is its vertical CENTER (where connectors attach),
+// Height is the number of text rows, and the block's top row is
+// Row-(Height-1)/2. Lines/RawLines hold the per-row text (len == Height).
 type Placement struct {
-	Node    *Node
-	Text    string // visible text (markers stripped, checkbox glyph added)
-	Raw     string // text with markdown markers kept, for styled rendering
-	Row     int
-	Col     int  // left edge of visible text (in layout coordinates, pre-normalization)
-	Width   int  // visible width
-	Side    int  // 1 right / -1 left / 0 center
-	Virtual bool // stand-in center for an untitled (file-label) map
+	Node     *Node
+	Text     string   // first visible line (markers stripped, checkbox glyph added)
+	Raw      string   // first line with markdown markers kept, for styled rendering
+	Lines    []string // all visible rows (len == Height; >1 only when expanded)
+	RawLines []string // all rows with markers kept
+	Row      int      // vertical center row (connector attach)
+	Col      int      // left edge of visible text (layout coords, pre-normalization)
+	Width    int      // visible width (widest line)
+	Height   int      // number of text rows
+	Side     int      // 1 right / -1 left / 0 center
+	Virtual  bool     // stand-in center for an untitled (file-label) map
 }
 
 // Line is one rendered layout row: its layout-space row index and the plain
@@ -67,16 +86,52 @@ func countNodes(nodes []*Node) int {
 	return total
 }
 
-func height(n *Node) int {
+// nodeDisplayLines is a node's on-map text as one or more rows: a single
+// (possibly truncated) line normally, or the wrapped multi-line block when the
+// node is expanded. Returns visible rows and marker-kept rows in lockstep.
+func nodeDisplayLines(n *Node, opts Options) (vis, raw []string) {
+	full := displayText(n, false)
+	rawFull := displayText(n, true)
+	if opts.MaxWidth <= 0 {
+		return []string{full}, []string{rawFull}
+	}
+	if opts.Expanded[n] {
+		return wrapDisplay(full, opts.MaxWidth), wrapDisplay(rawFull, opts.MaxWidth)
+	}
+	return []string{truncateDisplay(full, opts.MaxWidth)}, []string{truncateDisplay(rawFull, opts.MaxWidth)}
+}
+
+// nodeHeight is how many text rows a node occupies (1, or the wrapped line count
+// when expanded).
+func nodeHeight(n *Node, opts Options) int {
+	vis, _ := nodeDisplayLines(n, opts)
+	return len(vis)
+}
+
+func maxLineWidth(lines []string) int {
+	w := 0
+	for _, l := range lines {
+		if d := dispWidth(l); d > w {
+			w = d
+		}
+	}
+	return maxInt(1, w)
+}
+
+// height is a node's total vertical extent in rows: the sum of its children's
+// extents (folds collapse to the node's own height), but never less than the
+// node's own multi-row block.
+func height(n *Node, opts Options) int {
+	nh := nodeHeight(n, opts)
 	if n.Folded || len(n.Children) == 0 {
-		return 1
+		return nh
 	}
 	total := 0
 	for _, c := range n.Children {
-		total += height(c)
+		total += height(c, opts)
 	}
-	if total < 1 {
-		return 1
+	if total < nh {
+		total = nh
 	}
 	return total
 }
@@ -129,12 +184,23 @@ func (cv *canvas) arm(row, col, arms int) {
 	cv.touch(row, col)
 }
 
-func (cv *canvas) place(n *Node, text, raw string, row, col, width, side int) {
-	cv.placements = append(cv.placements, &Placement{
-		Node: n, Text: text, Raw: raw, Row: row, Col: col, Width: width, Side: side,
-	})
-	cv.touch(row, col)
-	cv.touch(row, col+width-1)
+// place records a node's box. vis/raw are its per-row text (len == height); row
+// is the vertical center (connector attach), so the block's top is
+// row-(h-1)/2.
+func (cv *canvas) place(n *Node, vis, raw []string, row, col, side int) *Placement {
+	w := maxLineWidth(vis)
+	h := len(vis)
+	p := &Placement{
+		Node: n, Text: vis[0], Raw: raw[0], Lines: vis, RawLines: raw,
+		Row: row, Col: col, Width: w, Height: h, Side: side,
+	}
+	cv.placements = append(cv.placements, p)
+	top := row - (h-1)/2
+	for i := 0; i < h; i++ {
+		cv.touch(top+i, col)
+		cv.touch(top+i, col+w-1)
+	}
+	return p
 }
 
 func maxInt(a, b int) int {
@@ -147,9 +213,10 @@ func maxInt(a, b int) int {
 // placeNode places node n with its subtree rows in [row0, row0+height), growing
 // right (dir=1, anchor = left text edge) or left (dir=-1, anchor = exclusive
 // right text edge). Returns the node's own row.
-func placeNode(cv *canvas, n *Node, row0, anchor, dir int) int {
-	text := displayText(n, false)
-	w := maxInt(1, dispWidth(text))
+func placeNode(cv *canvas, n *Node, row0, anchor, dir int, opts Options) int {
+	vis, raw := nodeDisplayLines(n, opts)
+	w := maxLineWidth(vis)
+	nh := len(vis)
 	var kids []*Node
 	if !n.Folded {
 		kids = n.Children
@@ -174,17 +241,17 @@ func placeNode(cv *canvas, n *Node, row0, anchor, dir int) int {
 	var myRow int
 	var childRows []int
 	if len(kids) == 0 {
-		myRow = row0
+		myRow = row0 + (nh-1)/2 // center of the node's own block
 	} else {
 		r := row0
 		for _, c := range kids {
-			childRows = append(childRows, placeNode(cv, c, r, childAnchor, dir))
-			r += height(c)
+			childRows = append(childRows, placeNode(cv, c, r, childAnchor, dir, opts))
+			r += height(c, opts)
 		}
 		myRow = floorDiv(childRows[0]+childRows[len(childRows)-1], 2)
 	}
 
-	cv.place(n, text, displayText(n, true), myRow, textStart, w, dir)
+	cv.place(n, vis, raw, myRow, textStart, dir)
 
 	if len(kids) > 0 {
 		drawConnectors(cv, myRow, textStart, textEnd, jx, dir, childRows)
@@ -295,15 +362,23 @@ func splitSides(children []*Node) (rightKids, leftKids []*Node) {
 
 // LayoutTree lays out a map with rootNode at center. If rootNode is nil, label
 // is used as a virtual (file-label) root and children are the top-level nodes.
+// It is the zero-Options layout — byte-identical to mm (see the golden tests).
 func LayoutTree(label string, rootNode *Node, children []*Node, skin Skin) Layout {
+	return LayoutTreeOpts(label, rootNode, children, skin, Options{})
+}
+
+// LayoutTreeOpts is LayoutTree with truncation/expansion Options. With the zero
+// Options it is identical to LayoutTree.
+func LayoutTreeOpts(label string, rootNode *Node, children []*Node, skin Skin, opts Options) Layout {
 	cv := newCanvas()
-	var rootText string
+	var rootVis, rootRaw []string
 	if rootNode != nil {
-		rootText = displayText(rootNode, false)
+		rootVis, rootRaw = nodeDisplayLines(rootNode, opts)
 	} else {
-		rootText = "[ " + label + " ]"
+		t := "[ " + label + " ]"
+		rootVis, rootRaw = []string{t}, []string{t}
 	}
-	w := maxInt(1, dispWidth(rootText))
+	w := maxLineWidth(rootVis)
 	rightKids, leftKids := splitSides(children)
 
 	rootRow := 0
@@ -313,7 +388,7 @@ func LayoutTree(label string, rootNode *Node, children []*Node, skin Skin) Layou
 		}
 		total := 0
 		for _, c := range kids {
-			total += height(c)
+			total += height(c, opts)
 		}
 		row0 := rootRow - floorDiv(total-1, 2)
 		var textStart int
@@ -334,8 +409,8 @@ func LayoutTree(label string, rootNode *Node, children []*Node, skin Skin) Layou
 		var childRows []int
 		r := row0
 		for _, c := range kids {
-			childRows = append(childRows, placeNode(cv, c, r, childAnchor, dir))
-			r += height(c)
+			childRows = append(childRows, placeNode(cv, c, r, childAnchor, dir, opts))
+			r += height(c, opts)
 		}
 		drawConnectors(cv, rootRow, textStart, textEnd, jx, dir, childRows)
 	}
@@ -346,17 +421,17 @@ func LayoutTree(label string, rootNode *Node, children []*Node, skin Skin) Layou
 	} else {
 		rootNodeForPlacement = &Node{Text: label, Children: children}
 	}
-	rootRaw := rootText
-	if rootNode != nil {
-		rootRaw = displayText(rootNode, true)
-	}
 	rootPlacement := &Placement{
-		Node: rootNodeForPlacement, Text: rootText, Raw: rootRaw,
-		Row: rootRow, Col: 0, Width: w, Side: 0, Virtual: rootNode == nil,
+		Node: rootNodeForPlacement, Text: rootVis[0], Raw: rootRaw[0],
+		Lines: rootVis, RawLines: rootRaw,
+		Row: rootRow, Col: 0, Width: w, Height: len(rootVis), Side: 0, Virtual: rootNode == nil,
 	}
 	cv.placements = append(cv.placements, rootPlacement)
-	cv.touch(rootRow, 0)
-	cv.touch(rootRow, w-1)
+	top := rootRow - (len(rootVis)-1)/2
+	for i := range rootVis {
+		cv.touch(top+i, 0)
+		cv.touch(top+i, w-1)
+	}
 
 	placeSide(rightKids, 1, 0)
 	placeSide(leftKids, -1, w)
@@ -390,11 +465,13 @@ func composeLines(cv *canvas, skin Skin) []Line {
 			chars[key[1]-cv.minCol] = ch
 		}
 		for _, p := range cv.placements {
-			if p.Row != r {
+			top := p.Row - (p.Height-1)/2
+			li := r - top
+			if li < 0 || li >= len(p.Lines) {
 				continue
 			}
 			cc := p.Col - cv.minCol
-			for _, ch := range p.Text {
+			for _, ch := range p.Lines[li] {
 				cwid := charW(ch)
 				if cwid == 0 {
 					continue

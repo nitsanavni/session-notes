@@ -129,7 +129,11 @@ type model struct {
 	mapRepliesShown map[string]bool
 	// mapShowLog includes the append-only Log section in the map. It is excluded
 	// by default (noise); M toggles it back on.
-	mapShowLog      bool
+	mapShowLog bool
+	// mapExpanded holds, keyed by stable node key, which nodes the user has
+	// expanded in place (the `w` toggle): rendered as a wrapped multi-line block
+	// instead of a single truncated line.
+	mapExpanded     map[string]bool
 	mp              *mapState
 	mapInputParent  *board.Item // add-child target when adding under an item
 	mapInputItem    *board.Item // edit target
