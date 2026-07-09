@@ -308,7 +308,9 @@ def run(board_path):
     os.write(fd, outline.encode())
     os.close(fd)
     try:
-        subprocess.run(["bun", "src/cli.ts", tmp], cwd=MM_DIR)  # inherits tty
+        r = subprocess.run(["bun", "src/cli.ts", tmp], cwd=MM_DIR)  # inherits tty
+        if r.returncode != 0:
+            sys.exit("mm exited with %d — board left untouched" % r.returncode)
         with open(tmp) as f:
             edited_outline = f.read()
         edit = outline_to_board(edited_outline, base)
