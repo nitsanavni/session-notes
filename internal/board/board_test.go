@@ -530,6 +530,37 @@ func TestAddReply(t *testing.T) {
 	})
 }
 
+func TestReplyFlat(t *testing.T) {
+	t.Run("on a top-level item starts the thread", func(t *testing.T) {
+		b := Parse("## Q\n- [ ] q\n")
+		b.ReplyFlat(b.Section("Q").Items[0], "user: hi")
+		want := "## Q\n- [ ] q\n  - user: hi\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("on a reply continues the conversation as a sibling", func(t *testing.T) {
+		b := Parse("## Q\n- [ ] q\n  - user: first\n")
+		reply := b.Section("Q").Items[0].Children[0]
+		b.ReplyFlat(reply, "claude: second")
+		want := "## Q\n- [ ] q\n  - user: first\n  - claude: second\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("on a nested reply appends to its parent, not the root", func(t *testing.T) {
+		b := Parse("## Q\n- [ ] q\n  - user: r1\n    - claude: fork1\n")
+		nested := b.Section("Q").Items[0].Children[0].Children[0]
+		b.ReplyFlat(nested, "user: fork2")
+		want := "## Q\n- [ ] q\n  - user: r1\n    - claude: fork1\n    - user: fork2\n"
+		if got := b.Render(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
 func TestRemoveSubtree(t *testing.T) {
 	t.Run("delete parent removes children", func(t *testing.T) {
 		b := Parse(`## Q

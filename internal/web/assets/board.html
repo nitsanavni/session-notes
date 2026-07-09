@@ -4,15 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>session-notes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='14' height='14' rx='3' fill='%234a7d5f'/%3E%3Cpath d='M4 5h8M4 8h8M4 11h5' stroke='%23fff' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #f7f7f5; --fg: #1a1a1a; --dim: #77776f; --border: #e2e2dd;
   --accent: #4a7d5f; --urgent: #b3442e; --pin: #6b7fb3; --input: #ffffff;
+  --link: #6b7fb3; --cursor: #ecece6;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #16161a; --fg: #dcdcd4; --dim: #8a8a82; --border: #2e2e34;
     --accent: #7fbf9a; --urgent: #e07a5f; --pin: #8ea3d8; --input: #1f1f24;
+    --link: #8ea3d8; --cursor: #23232a;
   }
 }
 * { box-sizing: border-box; }
@@ -26,11 +29,22 @@ header a { color: var(--dim); text-decoration: none; }
 #title { font-size: 1.05rem; font-weight: 600; cursor: pointer; }
 #title:hover::after { content: " ✎"; color: var(--dim); }
 header .dim { color: var(--dim); font-size: .85em; }
-h2 { font-size: .95rem; margin: 1.25rem 0 .25rem; color: var(--accent); font-weight: 600; }
+header .tools { margin-left: auto; display: flex; gap: .1rem; }
+header .tools button {
+  background: none; border: none; color: var(--dim); cursor: pointer;
+  font: inherit; padding: 0 .3rem; border-radius: 4px;
+}
+header .tools button:hover:not(:disabled) { color: var(--fg); background: var(--border); }
+header .tools button:disabled { opacity: .3; cursor: default; }
+.sechead { display: flex; align-items: baseline; gap: .4rem; margin: 1.25rem 0 .25rem; padding: 0 .3rem; border-radius: 6px; }
+.sechead h2 { font-size: .95rem; margin: 0; color: var(--accent); font-weight: 600; cursor: default; }
+.sechead .actions { visibility: hidden; }
+.sechead:hover .actions { visibility: visible; }
 ul { margin: 0; padding: 0; list-style: none; }
 ul ul { padding-left: 1.4rem; }
 li { padding: .1rem 0; }
-.row { display: flex; align-items: baseline; gap: .45rem; }
+.row { display: flex; align-items: baseline; gap: .45rem; padding: 0 .3rem; border-radius: 6px; }
+.cursor { background: var(--cursor); outline: 1px solid var(--border); }
 .marker {
   cursor: pointer; user-select: none; flex: none; color: var(--dim);
   background: none; border: none; font: inherit; padding: 0;
@@ -41,8 +55,11 @@ li { padding: .1rem 0; }
 .done > .row .text { color: var(--dim); text-decoration: line-through; }
 .urgentflag { color: var(--urgent); font-weight: 700; }
 .pinflag { color: var(--pin); }
+.wikilink { color: var(--link); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+.wikilink.path { cursor: help; text-decoration-style: dashed; }
 .actions { visibility: hidden; flex: none; display: flex; gap: .15rem; }
-.row:hover .actions, .row:focus-within .actions { visibility: visible; }
+.row:hover .actions, .row:focus-within .actions, .row.cursor .actions { visibility: visible; }
+@media (hover: none) { .actions, .sechead .actions { visibility: visible; } }
 .actions button {
   background: none; border: none; color: var(--dim); cursor: pointer;
   font: inherit; font-size: .85em; padding: 0 .2rem; border-radius: 4px;
@@ -52,20 +69,54 @@ pre.cont {
   margin: .1rem 0 .1rem 1.55rem; padding: .3rem .5rem; overflow-x: auto;
   border-left: 2px solid var(--border); color: var(--dim); font: inherit; font-size: .9em;
 }
-input.inline, input.add {
+input.inline, input.add, input.addsec {
   width: 100%; font: inherit; color: var(--fg); background: var(--input);
   border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
 }
-input.add { margin: .3rem 0 0; opacity: .55; }
-input.add:focus, input.inline:focus { opacity: 1; outline: none; border-color: var(--accent); }
-details.archive summary { cursor: pointer; color: var(--dim); }
+input.add, input.addsec { margin: .3rem 0 0; opacity: .55; }
+input.addsec { margin-top: 2rem; }
+input.add:focus, input.addsec:focus, input.inline:focus { opacity: 1; outline: none; border-color: var(--accent); }
+details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 .25rem; }
 #log li { color: var(--dim); font-size: .92em; }
 #err {
   position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
   background: var(--urgent); color: #fff; padding: .4rem .9rem; border-radius: 6px;
-  opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 90vw;
+  opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 90vw; z-index: 30;
 }
 #err.show { opacity: 1; }
+#err.info { background: var(--accent); }
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  display: none; align-items: center; justify-content: center; z-index: 20;
+}
+.modal.open { display: flex; }
+.modal .panel {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  width: min(680px, 92vw); max-height: 88vh; display: flex; flex-direction: column;
+  padding: .9rem;
+}
+.modal .panel .bar { display: flex; align-items: baseline; gap: .6rem; margin-bottom: .6rem; }
+.modal .panel .bar b { flex: 1; }
+.modal .panel .bar .dim { color: var(--dim); font-size: .8em; }
+.modal textarea {
+  flex: 1; min-height: 320px; resize: vertical; font: inherit; font-size: .92em;
+  color: var(--fg); background: var(--input); border: 1px solid var(--border);
+  border-radius: 6px; padding: .5rem .6rem; white-space: pre; overflow-x: auto;
+}
+.modal button {
+  background: none; border: 1px solid var(--border); color: var(--fg); cursor: pointer;
+  font: inherit; font-size: .85em; padding: .15rem .6rem; border-radius: 6px;
+}
+.modal button:hover { border-color: var(--accent); }
+#helpmodal .panel { width: min(560px, 92vw); }
+#helpmodal table { border-collapse: collapse; font-size: .9em; }
+#helpmodal td { padding: .1rem .7rem .1rem 0; vertical-align: top; }
+#helpmodal td:first-child { color: var(--accent); white-space: nowrap; }
+footer {
+  position: fixed; bottom: 0; left: 0; right: 0; text-align: center;
+  padding: .25rem; color: var(--dim); font-size: .78em; background: var(--bg);
+  border-top: 1px solid var(--border);
+}
 </style>
 </head>
 <body>
@@ -74,15 +125,64 @@ details.archive summary { cursor: pointer; color: var(--dim); }
   <span id="title" title="click to rename"></span>
   <span class="dim" id="sid"></span>
   <span class="dim" id="cwd"></span>
+  <span class="tools">
+    <button id="undo" title="undo last web edit (u)">↶</button>
+    <button id="redo" title="redo (ctrl+r)">↷</button>
+    <button id="rawedit" title="edit board markdown (E)">✎</button>
+    <button id="copypath" title="copy board file path (y)">⧉</button>
+    <button id="helpbtn" title="keyboard help (?)">?</button>
+  </span>
 </header>
 <main id="board"></main>
+<footer>j/k move · tab section · a add · R reply · F fork · space status · ! urgent · e edit · d archive · E raw · o link · u undo · ? help</footer>
 <div id="err"></div>
+
+<div class="modal" id="notemodal"><div class="panel">
+  <div class="bar"><b id="notename"></b><button id="notesave">save</button><button id="noteclose">close</button></div>
+  <textarea id="notetext" spellcheck="false"></textarea>
+</div></div>
+
+<div class="modal" id="rawmodal"><div class="panel">
+  <div class="bar"><b>board markdown</b><span class="dim">ctrl+enter saves · esc closes</span>
+    <button id="rawsave">save</button><button id="rawclose">close</button></div>
+  <textarea id="rawtext" spellcheck="false"></textarea>
+</div></div>
+
+<div class="modal" id="helpmodal"><div class="panel">
+  <div class="bar"><b>keys</b><button id="helpclose">close</button></div>
+  <table>
+    <tr><td>j / k</td><td>move cursor down / up</td></tr>
+    <tr><td>tab / shift-tab</td><td>next / previous section</td></tr>
+    <tr><td>1 … 9</td><td>jump to the Nth section</td></tr>
+    <tr><td>g / G</td><td>first / last stop</td></tr>
+    <tr><td>a</td><td>add to the cursor's section</td></tr>
+    <tr><td>A</td><td>add a section</td></tr>
+    <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
+    <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
+    <tr><td>b</td><td>toggle blocked [?]</td></tr>
+    <tr><td>!</td><td>toggle urgent</td></tr>
+    <tr><td>e</td><td>edit item · rename section (on a heading)</td></tr>
+    <tr><td>E</td><td>edit the whole board markdown</td></tr>
+    <tr><td>o</td><td>open the item's first [[link]]</td></tr>
+    <tr><td>L</td><td>log entry</td></tr>
+    <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
+    <tr><td>u / ctrl+r</td><td>undo / redo (this browser's edits)</td></tr>
+    <tr><td>y</td><td>copy board file path</td></tr>
+    <tr><td>?</td><td>this help</td></tr>
+  </table>
+</div></div>
+
 <script>
 const ID = decodeURIComponent(location.pathname.split('/').pop());
 const API = `/api/board/${encodeURIComponent(ID)}`;
 const MARKERS = { open: '[ ]', wip: '[>]', done: '[x]', blocked: '[?]', none: '·' };
 const NEXT = { open: 'wip', wip: 'done', done: 'open', blocked: 'open' };
 let cur = null;
+// While the user is typing in an inline input, live re-renders are deferred
+// (the TUI defers fsnotify reloads the same way); the freshest fetch lands
+// when the input closes, so your in-progress text is never destroyed.
+let inputsOpen = 0;
+let pendingRender = false;
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -95,37 +195,157 @@ const el = (tag, attrs = {}, ...kids) => {
   return n;
 };
 
-function toast(msg) {
+function toast(msg, info) {
   const e = document.getElementById('err');
   e.textContent = msg;
+  e.classList.toggle('info', !!info);
   e.classList.add('show');
-  setTimeout(() => e.classList.remove('show'), 2500);
+  setTimeout(() => e.classList.remove('show'), info ? 1500 : 3500);
 }
 
-async function post(body) {
+// ---- cursor (the TUI's soul: keyboard-first) ----
+// Every item row and section heading is a stop, registered during render.
+// The cursor is remembered by a stable key so it survives re-renders.
+let stops = [];        // [{key, type:'item'|'section', el, section, it, title}]
+let cursorKey = null;
+// cursorFollow is where the cursor should land when its exact key vanished
+// because the cursor's own edit changed the raw line (status cycle, urgent
+// toggle, text edit, section rename). Item follow matches section + text —
+// the same drift-tolerant identity the Go side's NormalizeItemText uses;
+// {section} alone falls back to the section head (after archive/delete).
+let cursorFollow = null;
+
+function registerStop(stop) { stops.push(stop); }
+
+function visibleStops() { return stops.filter(s => s.el.offsetParent !== null); }
+
+function cursorStop() { return stops.find(s => s.key === cursorKey) || null; }
+
+function setCursor(stop, scroll = true) {
+  for (const s of stops) s.el.classList.remove('cursor');
+  cursorKey = stop ? stop.key : null;
+  if (stop) {
+    stop.el.classList.add('cursor');
+    if (scroll) stop.el.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function moveCursor(delta) {
+  const vis = visibleStops();
+  if (!vis.length) return;
+  const i = vis.findIndex(s => s.key === cursorKey);
+  setCursor(vis[Math.max(0, Math.min(vis.length - 1, i < 0 ? (delta > 0 ? 0 : vis.length - 1) : i + delta))]);
+}
+
+function moveSection(delta) {
+  const vis = visibleStops();
+  const heads = vis.filter(s => s.type === 'section');
+  if (!heads.length) return;
+  const curIdx = vis.findIndex(s => s.key === cursorKey);
+  let next;
+  if (delta > 0) next = heads.find(h => vis.indexOf(h) > curIdx) || heads[0];
+  else {
+    const curStop = cursorStop();
+    const curSec = curStop ? (curStop.type === 'section' ? curStop.title : curStop.section) : null;
+    const before = heads.filter(h => vis.indexOf(h) < curIdx && h.title !== curSec);
+    next = before[before.length - 1] || heads[heads.length - 1];
+  }
+  setCursor(next);
+}
+
+// ---- edits ----
+
+// post sends one edit. On failure the typed text (if any) is parked in the
+// section's add box rather than lost — the web analogue of the TUI rebase's
+// "target vanished → append as a new item" rule, but with a human in the loop.
+async function post(body, lostText) {
   const r = await fetch(`${API}/edit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!r.ok) {
+  const ok = r.ok;
+  if (!ok) {
     let msg = `edit failed (${r.status})`;
     try { msg = (await r.json()).error || msg; } catch {}
     toast(msg);
   }
   await refresh();
+  if (!ok && lostText && body.section) {
+    const box = [...document.querySelectorAll('input.add')]
+      .find(i => i.dataset.section === body.section);
+    if (box) { box.value = lostText; box.focus(); }
+  }
+  return ok;
 }
+
+// linkify renders [[wiki-links]] as live elements. Side notes open the note
+// modal; path links are deliberately inert (the server would otherwise become
+// a general file server) and say so on hover.
+function linkify(target, text) {
+  const re = /\[\[([^\[\]]+)\]\]/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    target.append(text.slice(last, m.index));
+    const name = m[1].trim();
+    const isPath = name.includes('/') || name.startsWith('~');
+    const span = el('span', {
+      class: 'wikilink' + (isPath ? ' path' : ''),
+      title: isPath ? `path link — resolved against the session cwd; open ${name} in your editor`
+                    : `side note — click to open`,
+    }, m[0]);
+    if (!isPath) span.addEventListener('click', ev => { ev.stopPropagation(); openNote(name); });
+    target.append(span);
+    last = m.index + m[0].length;
+  }
+  target.append(text.slice(last));
+}
+
+// firstLink returns the item's first [[link]] name and whether it's path-form.
+function firstLink(text) {
+  const m = /\[\[([^\[\]]+)\]\]/.exec(text);
+  if (!m) return null;
+  const name = m[1].trim();
+  return { name, isPath: name.includes('/') || name.startsWith('~') };
+}
+
+// ---- item actions, shared by hover buttons and keys ----
+const act = {
+  cycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: NEXT[it.status] || 'open' }); },
+  blocked: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: it.status === 'blocked' ? 'open' : 'blocked' }); },
+  urgent: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'urgent', section: s, raw: it.raw, urgent: !it.urgent }); },
+  archive: (s, it) => { cursorFollow = { section: s }; return post({ op: 'archive', section: s, raw: it.raw }); },
+  del: (s, it) => { if (confirm('Delete this item and its replies?')) { cursorFollow = { section: s }; post({ op: 'delete', section: s, raw: it.raw }); } },
+  edit: (s, it, row) => inlineInput(row, it.text, v => { cursorFollow = { section: s, text: v }; post({ op: 'edit', section: s, raw: it.raw, text: v }, v); }),
+  reply: (s, it, row, li, op) => {
+    const holder = el('li');
+    li.after(holder);
+    inlineInput(holder, 'user: ',
+      v => post({ op, section: s, raw: it.raw, text: v }, v).then(() => holder.remove()),
+      () => holder.remove());
+  },
+  open: (s, it) => {
+    const l = firstLink(it.text);
+    if (!l) { toast('no [[link]] on this item', true); return; }
+    if (l.isPath) { toast(`path link — open ${l.name} in your editor`, true); return; }
+    openNote(l.name);
+  },
+};
 
 function itemNode(section, it) {
   if (it.continuation) return el('pre', { class: 'cont' }, it.text);
 
   const li = el('li', { class: it.status === 'done' ? 'done' : '' });
   const row = el('div', { class: 'row' });
+  const key = `it:${section}:${it.raw}`;
+  registerStop({ key, type: 'item', el: row, section, it, row, li });
+  row.addEventListener('click', () => setCursor(stops.find(s => s.key === key), false));
+
   if (it.status !== 'none') {
     row.append(el('button', {
       class: `marker ${it.status}`,
-      title: 'cycle status',
-      onclick: () => post({ op: 'status', section, raw: it.raw, status: NEXT[it.status] || 'open' }),
+      title: 'cycle status (space)',
+      onclick: () => act.cycle(section, it),
     }, MARKERS[it.status]));
   } else {
     row.append(el('span', { class: 'marker' }, MARKERS.none));
@@ -134,23 +354,17 @@ function itemNode(section, it) {
   const text = el('span', { class: 'text' });
   if (it.urgent) text.append(el('span', { class: 'urgentflag' }, '!! '));
   if (it.pinned) text.append(el('span', { class: 'pinflag' }, '⚲ '));
-  text.append(it.text);
-  text.addEventListener('dblclick', () => {
-    inlineInput(row, it.text, v => post({ op: 'edit', section, raw: it.raw, text: v }));
-  });
+  linkify(text, it.text);
+  text.addEventListener('dblclick', () => act.edit(section, it, row));
   row.append(text);
 
   row.append(el('div', { class: 'actions' },
-    el('button', { title: 'reply', onclick: () => {
-      const holder = el('li');
-      li.after(holder);
-      inlineInput(holder, 'user: ', v => post({ op: 'reply', section, raw: it.raw, text: v }), () => holder.remove());
-    } }, '↩'),
-    el('button', { title: 'toggle urgent', onclick: () => post({ op: 'urgent', section, raw: it.raw, urgent: !it.urgent }) }, '!!'),
-    el('button', { title: 'archive', onclick: () => post({ op: 'archive', section, raw: it.raw }) }, '⤓'),
-    el('button', { title: 'delete', onclick: () => {
-      if (confirm('Delete this item and its replies?')) post({ op: 'delete', section, raw: it.raw });
-    } }, '✕'),
+    el('button', { title: 'reply in thread, flat (R)', onclick: () => act.reply(section, it, row, li, 'reply') }, '↩'),
+    el('button', { title: 'fork a sub-thread here (F)', onclick: () => act.reply(section, it, row, li, 'fork') }, '⑂'),
+    el('button', { title: 'toggle urgent (!)', onclick: () => act.urgent(section, it) }, '!!'),
+    el('button', { title: 'toggle blocked (b)', onclick: () => act.blocked(section, it) }, '[?]'),
+    el('button', { title: 'archive (d)', onclick: () => act.archive(section, it) }, '⤓'),
+    el('button', { title: 'delete (D)', onclick: () => act.del(section, it) }, '✕'),
   ));
   li.append(row);
 
@@ -164,14 +378,21 @@ function itemNode(section, it) {
 
 function inlineInput(holder, initial, submit, cancel) {
   const prev = [...holder.childNodes];
+  const close = () => {
+    inputsOpen--;
+    if (holder.isConnected) { holder.textContent = ''; holder.append(...prev); }
+    if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
+  };
   holder.textContent = '';
   const inp = el('input', { class: 'inline', value: initial });
+  inputsOpen++;
   inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && inp.value.trim()) submit(inp.value.trim());
-    if (e.key === 'Escape') { holder.textContent = ''; holder.append(...prev); if (cancel) cancel(); }
+    e.stopPropagation();
+    if (e.key === 'Enter' && inp.value.trim()) { const v = inp.value.trim(); close(); submit(v); }
+    if (e.key === 'Escape') { close(); if (cancel) cancel(); }
   });
   inp.addEventListener('blur', () => {
-    setTimeout(() => { if (holder.contains(inp)) { holder.textContent = ''; holder.append(...prev); if (cancel) cancel(); } }, 150);
+    setTimeout(() => { if (holder.contains(inp)) { close(); if (cancel) cancel(); } }, 150);
   });
   holder.append(inp);
   inp.focus();
@@ -181,48 +402,104 @@ function inlineInput(holder, initial, submit, cancel) {
 function addInput(section, isLog) {
   const inp = el('input', {
     class: 'add',
+    'data-section': section,
     placeholder: isLog ? '+ log entry' : `+ add to ${section}`,
   });
   inp.addEventListener('keydown', e => {
+    e.stopPropagation();
     if (e.key === 'Enter' && inp.value.trim()) {
       const v = inp.value.trim();
       inp.value = '';
-      post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v });
+      post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v }, v);
     }
+    if (e.key === 'Escape') inp.blur();
   });
   return inp;
 }
 
+const renameSection = (head, title) =>
+  inlineInput(head, title, v => { cursorFollow = { section: v }; post({ op: 'rename-section', section: title, text: v }); });
+
+function sectionHead(title) {
+  const head = el('div', { class: 'sechead' });
+  registerStop({ key: `sec:${title}`, type: 'section', el: head, title, head });
+  head.addEventListener('click', () => setCursor(stops.find(s => s.key === `sec:${title}`), false));
+  const h = el('h2', { title: 'double-click to rename (e)' }, title);
+  h.addEventListener('dblclick', () => renameSection(head, title));
+  head.append(h);
+  const guarded = title === 'Log' || title === 'Archive';
+  head.append(el('div', { class: 'actions' },
+    ...(guarded ? [] : [el('button', { title: 'archive whole section (d)', onclick: () =>
+      post({ op: 'archive-section', section: title }) }, '⤓')]),
+    el('button', { title: 'delete section and contents (D)', onclick: () => {
+      if (confirm(`Hard-delete section "${title}" and everything in it?`)) post({ op: 'delete-section', section: title });
+    } }, '✕'),
+  ));
+  return head;
+}
+
 function render(b) {
+  if (!b) return;
+  if (inputsOpen > 0) { pendingRender = true; return; }
   document.title = (b.title || shortId(b.session || b.id)) + ' — session-notes';
   document.getElementById('title').textContent = b.title || shortId(b.session || b.id);
   document.getElementById('sid').textContent = shortId(b.session || b.id);
   document.getElementById('cwd').textContent = b.cwd || '';
+  document.getElementById('undo').disabled = !b.canUndo;
+  document.getElementById('redo').disabled = !b.canRedo;
 
   const main = document.getElementById('board');
   const focused = document.activeElement;
-  const keep = focused && focused.classList && focused.classList.contains('add')
-    ? { ph: focused.placeholder, val: focused.value } : null;
+  const keep = focused && focused.classList && (focused.classList.contains('add') || focused.classList.contains('addsec'))
+    ? { sec: focused.dataset.section, val: focused.value } : null;
 
+  stops = [];
   main.textContent = '';
   for (const sec of b.sections || []) {
     const isLog = sec.title === 'Log';
     const isArchive = sec.title === 'Archive';
-    const list = el('ul', isLog ? { id: 'log' } : {});
-    for (const it of sec.items || []) list.append(itemNode(sec.title, it));
-
     if (isArchive) {
+      // Archive registers no stops while collapsed; build items only.
+      const list = el('ul');
+      for (const it of sec.items || []) list.append(itemNode(sec.title, it));
       const n = countItems(sec.items);
-      const det = el('details', { class: 'archive' }, el('summary', {}, `Archive (${n})`), list);
-      main.append(el('h2', {}, ''), det);
+      main.append(el('details', { class: 'archive' }, el('summary', {}, `Archive (${n})`), list));
       continue;
     }
-    main.append(el('h2', {}, sec.title), list);
-    main.append(addInput(sec.title, isLog));
+    // Head first so the stop order matches the visual order (j/k walk it).
+    const head = sectionHead(sec.title);
+    const list = el('ul', isLog ? { id: 'log' } : {});
+    for (const it of sec.items || []) list.append(itemNode(sec.title, it));
+    main.append(head, list, addInput(sec.title, isLog));
   }
+  const addSec = el('input', { class: 'addsec', 'data-section': ' new-section', placeholder: '+ add section (A)' });
+  addSec.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && addSec.value.trim()) {
+      const v = addSec.value.trim();
+      addSec.value = '';
+      post({ op: 'add-section', text: v });
+    }
+    if (e.key === 'Escape') addSec.blur();
+  });
+  main.append(addSec);
+
+  // Restore the cursor onto the same stop; if its raw line changed under it
+  // (its own status/urgent/edit), follow by section + text; if it vanished
+  // (archive/delete), rest on its section head.
+  let back = stops.find(s => s.key === cursorKey);
+  if (!back && cursorFollow) {
+    if (cursorFollow.text != null) {
+      back = stops.find(s => s.type === 'item' && s.section === cursorFollow.section && s.it.text === cursorFollow.text);
+    }
+    if (!back) back = stops.find(s => s.type === 'section' && s.title === cursorFollow.section);
+  }
+  cursorFollow = null;
+  if (back) setCursor(back, false);
+  else if (cursorKey) { cursorKey = null; }
 
   if (keep) {
-    const again = [...main.querySelectorAll('input.add')].find(i => i.placeholder === keep.ph);
+    const again = [...main.querySelectorAll('input.add, input.addsec')].find(i => i.dataset.section === keep.sec);
     if (again) { again.value = keep.val; again.focus(); }
   }
 }
@@ -230,21 +507,160 @@ function render(b) {
 const countItems = items => (items || []).reduce((n, it) => n + (it.continuation ? 0 : 1) + countItems(it.children), 0);
 const shortId = s => (s || '').split('-')[0].slice(0, 8);
 
+// ---- header tools ----
 document.getElementById('title').addEventListener('click', () => {
   const holder = document.getElementById('title');
   inlineInput(holder, cur && cur.title || '', v => post({ op: 'title', text: v }));
+});
+document.getElementById('undo').addEventListener('click', () => post({ op: 'undo' }));
+document.getElementById('redo').addEventListener('click', () => post({ op: 'redo' }));
+document.getElementById('rawedit').addEventListener('click', openRaw);
+document.getElementById('helpbtn').addEventListener('click', () => toggleModal('helpmodal', true));
+async function copyPath() {
+  if (!cur) return;
+  try { await navigator.clipboard.writeText(cur.path); toast('copied ' + cur.path, true); }
+  catch { toast(cur.path, true); }
+}
+document.getElementById('copypath').addEventListener('click', copyPath);
+
+// ---- modals ----
+function toggleModal(id, open) { document.getElementById(id).classList.toggle('open', open); }
+const modalOpen = () => !!document.querySelector('.modal.open');
+
+let noteOpen = null;
+async function openNote(name) {
+  const r = await fetch(`${API}/note/${encodeURIComponent(name)}`);
+  if (!r.ok) { toast(`cannot open note ${name}`); return; }
+  const n = await r.json();
+  noteOpen = name;
+  document.getElementById('notename').textContent = `[[${name}]]${n.exists ? '' : ' (new)'}`;
+  document.getElementById('notetext').value = n.content;
+  toggleModal('notemodal', true);
+  document.getElementById('notetext').focus();
+}
+document.getElementById('noteclose').addEventListener('click', () => toggleModal('notemodal', false));
+document.getElementById('notesave').addEventListener('click', async () => {
+  const r = await fetch(`${API}/note/${encodeURIComponent(noteOpen)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: document.getElementById('notetext').value }),
+  });
+  if (r.ok) { toast('note saved', true); toggleModal('notemodal', false); } else toast('save failed');
+});
+
+// Raw board editor (the TUI's E): optimistic-locked on the loaded content.
+// On conflict the modal stays open with your text — nothing is lost.
+let rawBase = null;
+async function openRaw() {
+  const r = await fetch(`${API}/raw`);
+  if (!r.ok) { toast('cannot load board'); return; }
+  rawBase = (await r.json()).content;
+  document.getElementById('rawtext').value = rawBase;
+  toggleModal('rawmodal', true);
+  document.getElementById('rawtext').focus();
+}
+async function saveRaw() {
+  const text = document.getElementById('rawtext').value;
+  const ok = await post({ op: 'set-content', text, base: rawBase });
+  if (ok) { toggleModal('rawmodal', false); toast('board saved', true); }
+  // on conflict the modal stays open; reload base for a retry after the user reconciles
+}
+document.getElementById('rawsave').addEventListener('click', saveRaw);
+document.getElementById('rawclose').addEventListener('click', () => {
+  if (document.getElementById('rawtext').value !== rawBase && !confirm('Discard your unsaved markdown changes?')) return;
+  toggleModal('rawmodal', false);
+});
+document.getElementById('rawtext').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter' && e.ctrlKey) saveRaw();
+  if (e.key === 'Escape') document.getElementById('rawclose').click();
+});
+document.getElementById('notetext').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Escape') toggleModal('notemodal', false);
+});
+document.getElementById('helpclose').addEventListener('click', () => toggleModal('helpmodal', false));
+
+// ---- keyboard layer ----
+document.addEventListener('keydown', e => {
+  const a = document.activeElement;
+  if (a && /INPUT|TEXTAREA/.test(a.tagName)) return;
+  if (modalOpen()) {
+    if (e.key === 'Escape' || e.key === 'q') document.querySelectorAll('.modal.open .bar button:last-child, #helpclose').forEach(b => b.click());
+    return;
+  }
+  const s = cursorStop();
+  const onItem = s && s.type === 'item';
+  const onSec = s && s.type === 'section';
+  const curSection = onItem ? s.section : onSec ? s.title : null;
+  const focusAdd = sec => {
+    const box = [...document.querySelectorAll('input.add')].find(i => i.dataset.section === sec);
+    if (box) { box.focus(); return true; }
+    return false;
+  };
+
+  if (e.key >= '1' && e.key <= '9') {
+    e.preventDefault();
+    const heads = visibleStops().filter(x => x.type === 'section');
+    if (heads[+e.key - 1]) setCursor(heads[+e.key - 1]);
+    return;
+  }
+  // preventDefault for every handled key: keys that open an input (a, e, R…)
+  // must not also type their own character into it, space must not scroll.
+  const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'Tab', 'g', 'G', 'a', 'A',
+    ' ', 'b', '!', 'e', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'u', 'y', '?']);
+  if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
+  switch (e.key) {
+    case 'j': case 'ArrowDown': moveCursor(1); break;
+    case 'k': case 'ArrowUp': moveCursor(-1); break;
+    case 'Tab': moveSection(e.shiftKey ? -1 : 1); break;
+    case 'g': { const v = visibleStops(); if (v.length) setCursor(v[0]); break; }
+    case 'G': { const v = visibleStops(); if (v.length) setCursor(v[v.length - 1]); break; }
+    case 'a': if (curSection) focusAdd(curSection); else { const v = visibleStops().filter(x => x.type === 'section'); if (v.length) focusAdd(v[0].title); } break;
+    case 'A': { const box = document.querySelector('input.addsec'); if (box) box.focus(); break; }
+    case ' ': if (onItem && s.it.status !== 'none') act.cycle(s.section, s.it); break;
+    case 'b': if (onItem && s.it.status !== 'none') act.blocked(s.section, s.it); break;
+    case '!': if (onItem) act.urgent(s.section, s.it); break;
+    case 'e': if (onItem) act.edit(s.section, s.it, s.row); else if (onSec) renameSection(s.head, s.title); break;
+    case 'R': if (onItem) act.reply(s.section, s.it, s.row, s.li, 'reply'); break;
+    case 'F': if (onItem) act.reply(s.section, s.it, s.row, s.li, 'fork'); break;
+    case 'o': if (onItem) act.open(s.section, s.it); break;
+    case 'd':
+      if (onItem) act.archive(s.section, s.it);
+      else if (onSec) { cursorFollow = { section: s.title }; post({ op: 'archive-section', section: s.title }); }
+      break;
+    case 'D':
+      if (onItem) act.del(s.section, s.it);
+      else if (onSec && confirm(`Hard-delete section "${s.title}" and everything in it?`)) post({ op: 'delete-section', section: s.title });
+      break;
+    case 'L': focusAdd('Log'); break;
+    case 'E': openRaw(); break;
+    case 'u': post({ op: 'undo' }); break;
+    case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
+    case 'y': copyPath(); break;
+    case '?': toggleModal('helpmodal', true); break;
+  }
 });
 
 async function refresh() {
   try {
     cur = await (await fetch(API)).json();
-    render(cur);
+    render(cur); // render() itself defers when an input is open
   } catch { /* transient; SSE or next action will retry */ }
 }
 
 refresh();
 const es = new EventSource(`${API}/events`);
-es.onmessage = refresh;
+es.onmessage = () => refresh();
+
+// Debug handle for the e2e harness (test/e2e): read-only introspection of
+// the navigation state, so tests assert on real state instead of scraping.
+window.__sn = {
+  get stops() { return stops.map(s => ({ key: s.key, type: s.type, visible: s.el.offsetParent !== null })); },
+  get cursorKey() { return cursorKey; },
+  get inputsOpen() { return inputsOpen; },
+  get board() { return cur; },
+};
 </script>
 </body>
 </html>

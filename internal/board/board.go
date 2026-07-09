@@ -545,6 +545,19 @@ func (b *Board) AddReply(parent *Item, text string) *Item {
 	return child
 }
 
+// ReplyFlat appends a reply with in-thread semantics (the TUI's R): replying
+// to a reply continues the conversation as a sibling — the new message is
+// appended to the thread's parent — while replying to a top-level item starts
+// its thread. Discussions stay flat; nesting under the exact target (the
+// TUI's F, fork) is AddReply. Shared here so every client (TUI, web, CLI)
+// agrees on what "reply" means.
+func (b *Board) ReplyFlat(target *Item, text string) *Item {
+	if p := b.ParentOf(target); p != nil {
+		target = p
+	}
+	return b.AddReply(target, text)
+}
+
 // Remove deletes target from anywhere in the board — a top-level item or a
 // nested reply — taking its whole subtree with it. Returns false if not found.
 func (b *Board) Remove(target *Item) bool {
