@@ -141,10 +141,26 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   dive into a subtree or jump across the map; `h`/`l` (left/right) move along the
   parent/child axis — toward the center is the parent, away enters the branch at
   its first child, so left/right cross between the two sides via the center.
+  `f` focuses into the selected subtree (mm's focus feature): the map re-roots on
+  that node — it becomes the center, its children fan out — with a breadcrumb
+  trail (e.g. `board › Threads › port mm…`) rendered under the header naming the
+  path back. Focus lands on the new center's first child; a collapsed focus root
+  is un-collapsed (it would otherwise hide the very children being revealed).
+  `b` (and `esc`, when no input is open) steps focus out one level, resting the
+  cursor on the node stepped out of, until repeated presses reach the whole
+  board; folds, edits and navigation all work as normal within the focused
+  subtree, and fold/expand state persists across re-rooting since it is keyed by
+  stable node key. `o` opens a `[[wiki-link]]` on the focused item's text,
+  reusing the list view's link machinery (a chooser overlay when the item has
+  several links, then back to the map); sections and the center have no links.
   Node text is truncated to 40 display columns (unicode-width aware) with a `…`
-  so maps don't sprawl; the focused node's full text still shows in the detail
+  so maps don't sprawl (the fold summary suffix — `[+N]`/`[N replies]` — is
+  truncation-exempt: the base text is clipped first, then the suffix appended, so
+  a collapsed node always shows its hidden-child count regardless of side or
+  text length); the focused node's full text still shows in the detail
   footer, and `w` toggles the focused node expanded in place — rendered as a
-  wrapped multi-line block instead of one truncated line. `enter` runs one
+  wrapped multi-line block instead of one truncated line (the suffix rides on the
+  last wrapped row). `enter` runs one
   unified fold cycle on the focused node: **collapsed → default → replies-shown →
   collapsed**. Each press reveals more (the default view, then the full reply
   thread) until everything is shown, then one more press collapses the whole

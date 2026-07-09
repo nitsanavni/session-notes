@@ -121,6 +121,11 @@ type model struct {
 	// layout. mapInput* capture the target of an inline map add/edit until enter.
 	mapView     bool
 	mapFocusKey string
+	// mapFocusRoot is the stable key of the node the map is re-rooted on (the mm
+	// `f` focus feature): the focused subtree fills the view, that node at the
+	// center, with a breadcrumb trail back. "" is the whole board (unfocused).
+	// Persisted across rebuilds like mapFocusKey; folds/expansion still apply.
+	mapFocusRoot string
 	// mapFold holds, keyed by stable node key, each node's fold state in the
 	// unified three-state cycle (see foldState in mapview.go). Absent keys are
 	// foldDefault: non-reply children visible, reply children summarized into a

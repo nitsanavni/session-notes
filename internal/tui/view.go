@@ -520,6 +520,8 @@ func (m *model) viewHelp() string {
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
 		{"y", "copy board file path to clipboard (shown in status)"},
 		{"m", "toggle the mindmap view (hjkl move · enter fold · a/e/space/D edit)"},
+		{"f / b (map)", "focus into subtree (breadcrumbs) / focus out one level (also esc)"},
+		{"o (map)", "open the focused item's [[linked note]] (chooser if several)"},
 		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},
 		{"! (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl"},
 		{"L", "quick log entry"},

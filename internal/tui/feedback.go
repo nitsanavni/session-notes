@@ -45,6 +45,9 @@ type feedbackState struct {
 	Board     string `json:"board"`
 	FocusKey  string `json:"focusKey"`
 	FocusText string `json:"focusText"`
+	// FocusRoot is the stable key the map is re-rooted on (mm's `f` focus). ""
+	// (the default, and absent in pre-focus JSONL records) is the whole board.
+	FocusRoot string `json:"focusRoot,omitempty"`
 	// Fold is the unified per-node fold state, keyed by stable node key. Replaces
 	// the old Folded/RepliesShown pair; those are still read (see restoreMapModel)
 	// so pre-existing JSONL records replay unchanged.
@@ -104,6 +107,7 @@ var recordedMapKeys = map[string]bool{
 	"d":     true,
 	"enter": true, "w": true, " ": true, "D": true, "M": true,
 	"u": true, "ctrl+r": true, "r": true,
+	"f": true, "b": true, // focus in / out (re-rooting)
 }
 
 // cloneFold copies a fold-state map (nil for empty), so the recorded before-
@@ -127,6 +131,7 @@ func (m *model) captureMapState() feedbackState {
 		Board:     m.board.Render(),
 		FocusKey:  m.mapFocusKey,
 		FocusText: mapFocusDetail(m.mp),
+		FocusRoot: m.mapFocusRoot,
 		Fold:      cloneFold(m.mapFold),
 		ShowLog:   m.mapShowLog,
 	}
@@ -338,6 +343,7 @@ func restoreMapModel(st feedbackState) *model {
 		m.mapFold[k] = foldRepliesExpanded
 	}
 	m.mapFocusKey = st.FocusKey
+	m.mapFocusRoot = st.FocusRoot
 	m.rebuildPositions()
 	m.mp = nil
 	m.ensureMap()
@@ -439,6 +445,9 @@ func generateFeedbackTests(recs []feedbackRecord) string {
 			fmt.Fprintf(&b, "\tm.mapFold = map[string]foldState{%s}\n", foldLiteral(fold))
 		}
 		fmt.Fprintf(&b, "\tm.mapFocusKey = %s // %s\n", strconv.Quote(last.Before.FocusKey), oneLine(last.Before.FocusText))
+		if last.Before.FocusRoot != "" {
+			fmt.Fprintf(&b, "\tm.mapFocusRoot = %s\n", strconv.Quote(last.Before.FocusRoot))
+		}
 		b.WriteString("\tm.mp = nil\n\tm.ensureMap()\n\n")
 		fmt.Fprintf(&b, "\tm.handleMapKey(keyPress(%s)) // the surprising move\n\n", strconv.Quote(last.Key))
 		fmt.Fprintf(&b, "\tif got := m.mapFocusKey; got != %s { // observed landing: %s\n", strconv.Quote(landed.FocusKey), oneLine(landed.FocusText))

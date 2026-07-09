@@ -93,12 +93,32 @@ func nodeDisplayLines(n *Node, opts Options) (vis, raw []string) {
 	full := displayText(n, false)
 	rawFull := displayText(n, true)
 	if opts.MaxWidth <= 0 {
-		return []string{full}, []string{rawFull}
+		return []string{full + n.Suffix}, []string{rawFull + n.Suffix}
 	}
 	if opts.Expanded[n] {
-		return wrapDisplay(full, opts.MaxWidth), wrapDisplay(rawFull, opts.MaxWidth)
+		// Wrap the base text, then re-attach the suffix to the last line so a
+		// wrapped node keeps its fold count too.
+		return appendSuffixLines(wrapDisplay(full, opts.MaxWidth), n.Suffix),
+			appendSuffixLines(wrapDisplay(rawFull, opts.MaxWidth), n.Suffix)
 	}
-	return []string{truncateDisplay(full, opts.MaxWidth)}, []string{truncateDisplay(rawFull, opts.MaxWidth)}
+	// Truncate the BASE first against a budget reduced by the suffix width, then
+	// append the suffix, so the suffix survives however long the base is.
+	budget := opts.MaxWidth
+	if sw := dispWidth(n.Suffix); sw > 0 && sw < budget {
+		budget -= sw
+	}
+	return []string{truncateDisplay(full, budget) + n.Suffix},
+		[]string{truncateDisplay(rawFull, budget) + n.Suffix}
+}
+
+// appendSuffixLines appends suf to the last line of lines (empty suf is a
+// no-op). Used to re-attach a node's never-truncated Suffix after wrapping.
+func appendSuffixLines(lines []string, suf string) []string {
+	if suf == "" || len(lines) == 0 {
+		return lines
+	}
+	lines[len(lines)-1] += suf
+	return lines
 }
 
 // nodeHeight is how many text rows a node occupies (1, or the wrapped line count

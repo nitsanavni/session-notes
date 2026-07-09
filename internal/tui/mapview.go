@@ -39,11 +39,16 @@ type mapRef struct {
 // focused node. It is rebuilt (m.mp niled) on every board change; focus and fold
 // survive via m.mapFocusKey / m.mapFold, both keyed by the stable node key.
 type mapState struct {
-	root   *mindmap.Node
-	layout mindmap.Layout
-	refs   map[*mindmap.Node]mapRef
-	keys   map[*mindmap.Node]string
-	focus  *mindmap.Node
+	// root is the layout/navigation center: the board title normally, or the
+	// focused node when re-rooted (mm's `f`). boardRoot is always the full-tree
+	// title root, kept so the breadcrumb can name focus-root ancestors.
+	root      *mindmap.Node
+	boardRoot *mindmap.Node
+	layout    mindmap.Layout
+	refs      map[*mindmap.Node]mapRef
+	keys      map[*mindmap.Node]string
+	nodeByKey map[string]*mindmap.Node
+	focus     *mindmap.Node
 }
 
 // placement returns the layout placement for a node, or nil.
@@ -306,7 +311,7 @@ func buildMapTree(b *board.Board, fold map[string]foldState, showLog bool) (*min
 				continue // folded into the parent's "[N replies]" suffix
 			}
 			st := fold[ck]
-			cn := &mindmap.Node{Text: mapNodeText(it) + foldSuffix(it.Children, st)}
+			cn := &mindmap.Node{Text: mapNodeText(it), Suffix: foldSuffix(it.Children, st)}
 			refs[cn] = mapRef{kind: refItem, section: sec, item: it}
 			keys[cn] = ck
 			parent.Children = append(parent.Children, cn)
@@ -323,7 +328,7 @@ func buildMapTree(b *board.Board, fold map[string]foldState, showLog bool) (*min
 		}
 		skey := "s" + strconv.Itoa(i)
 		sState := fold[skey]
-		sn := &mindmap.Node{Text: s.Title + foldSuffix(s.Items, sState)}
+		sn := &mindmap.Node{Text: s.Title, Suffix: foldSuffix(s.Items, sState)}
 		refs[sn] = mapRef{kind: refSection, section: s.Title}
 		keys[sn] = skey
 		root.Children = append(root.Children, sn)
@@ -346,17 +351,31 @@ func (m *model) ensureMap() {
 	}
 	root, refs, keys := buildMapTree(m.board, m.mapFold, m.mapShowLog)
 	expanded := map[*mindmap.Node]bool{}
+	nodeByKey := map[string]*mindmap.Node{}
 	for n, k := range keys {
+		nodeByKey[k] = n
 		if m.mapExpanded[k] {
 			expanded[n] = true
 		}
 	}
+	// Re-root on the focused subtree when set (mm's `f`); fall back to the whole
+	// board if the focus root no longer maps (e.g. its item was deleted).
+	layoutRoot := root
+	if m.mapFocusRoot != "" {
+		if fr, ok := nodeByKey[m.mapFocusRoot]; ok {
+			layoutRoot = fr
+		} else {
+			m.mapFocusRoot = ""
+		}
+	}
 	opts := mindmap.Options{MaxWidth: mapNodeMaxWidth, Expanded: expanded}
 	ms := &mapState{
-		root:   root,
-		layout: mindmap.LayoutTreeOpts("", root, root.Children, mindmap.Rounded, opts),
-		refs:   refs,
-		keys:   keys,
+		root:      layoutRoot,
+		boardRoot: root,
+		layout:    mindmap.LayoutTreeOpts("", layoutRoot, layoutRoot.Children, mindmap.Rounded, opts),
+		refs:      refs,
+		keys:      keys,
+		nodeByKey: nodeByKey,
 	}
 	for n, k := range keys {
 		if k == m.mapFocusKey {
@@ -364,9 +383,11 @@ func (m *model) ensureMap() {
 			break
 		}
 	}
-	if ms.focus == nil {
-		ms.focus = root
-		m.mapFocusKey = ""
+	// Focus must live inside the current view; snap it to the (re-rooted) center
+	// when it points outside the focused subtree or no longer maps.
+	if ms.focus == nil || ms.placement(ms.focus) == nil {
+		ms.focus = layoutRoot
+		m.mapFocusKey = ms.keys[layoutRoot]
 	}
 	m.mp = ms
 }
@@ -376,6 +397,7 @@ func (m *model) ensureMap() {
 func (m *model) enterMap() {
 	m.mapView = true
 	m.mapFocusKey = ""
+	m.mapFocusRoot = ""
 	m.mp = nil
 	m.ensureMap()
 	if it := m.currentItem(); it != nil {
@@ -392,6 +414,130 @@ func (m *model) enterMap() {
 	}
 	m.mp = nil // rebuild so mp.focus reflects the seeded key
 	m.ensureMap()
+}
+
+// --- focus (re-rooting, mm's `f`/`b`) ---
+
+// focusIn re-roots the map on the focused node's subtree: that node becomes the
+// center, its children fan out, and a breadcrumb trail names the path back. The
+// center and childless nodes can't be focused into. Matches mm: a collapsed
+// focus root is un-collapsed (it would otherwise claim a "[+N]" while showing
+// its children), and focus lands on the new center's first child.
+func (m *model) focusIn() {
+	ms := m.mp
+	ref := ms.refs[ms.focus]
+	if ref.kind == refCenter || ms.focus == ms.root {
+		m.status = "already the whole map"
+		return
+	}
+	// Use the BOARD children, not the mindmap node's: a collapsed node has no
+	// mindmap children (they're hidden behind its suffix) yet is still focusable.
+	var items []*board.Item
+	switch ref.kind {
+	case refItem:
+		items = ref.item.Children
+	case refSection:
+		if sec := m.board.Section(ref.section); sec != nil {
+			items = sec.Items
+		}
+	}
+	if countDescendantsIn(items) == 0 {
+		m.status = "no subtree to focus"
+		return
+	}
+	key := m.mapFocusKey
+	// A collapsed focus root would hide the very children we want to reveal.
+	if m.mapFold[key] == foldCollapsed {
+		delete(m.mapFold, key)
+	}
+	m.mapFocusRoot = key
+	m.mp = nil
+	m.ensureMap()
+	// Land on the first visible child of the new center.
+	if len(m.mp.root.Children) > 0 {
+		m.setMapFocus(m.mp.root.Children[0])
+	} else {
+		m.setMapFocus(m.mp.root)
+	}
+}
+
+// focusOut steps the focus root out one level (mm's `b`): the previous center
+// becomes an ordinary node again and focus rests on it, so repeated `b` walks
+// back up to the whole board. A no-op (with a hint) at the top level.
+func (m *model) focusOut() {
+	if m.mapFocusRoot == "" {
+		m.status = "already the whole map"
+		return
+	}
+	prev := m.mapFocusRoot
+	m.mapFocusRoot = parentKeyOf(prev)
+	m.mapFocusKey = prev // cursor rests on the node we just stepped out of
+	m.mp = nil
+	m.ensureMap()
+}
+
+// mapCrumbs is the breadcrumb path from the board center down to (and including)
+// the current focus root, e.g. ["board", "Threads", "port mm…"]. Empty when the
+// map is not focused. Each crumb is a short label of the ancestor node.
+func (m *model) mapCrumbs() []string {
+	if m.mapFocusRoot == "" || m.mp == nil {
+		return nil
+	}
+	// Ancestor keys from the focus root up to the board root (""), innermost last.
+	var keys []string
+	for k := m.mapFocusRoot; ; k = parentKeyOf(k) {
+		keys = append([]string{k}, keys...)
+		if k == "" {
+			break
+		}
+	}
+	var crumbs []string
+	for _, k := range keys {
+		if n, ok := m.mp.nodeByKey[k]; ok {
+			crumbs = append(crumbs, crumbLabel(m.mp, n))
+		}
+	}
+	return crumbs
+}
+
+// crumbLabel is a node's short breadcrumb label: the plain item/section text
+// (no status marker, no fold suffix), truncated for the trail.
+func crumbLabel(ms *mapState, n *mindmap.Node) string {
+	ref := ms.refs[n]
+	var s string
+	switch ref.kind {
+	case refSection:
+		s = ref.section
+	case refItem:
+		s = ref.item.Text
+	default:
+		s = n.Text
+	}
+	return ansi.Truncate(strings.TrimSpace(s), 18, "…")
+}
+
+// mapOpenLink opens a [[wiki-link]] on the focused item's text, reusing the list
+// view's chooser (modeLinkPick) and note/file machinery. The chooser and the
+// editor round-trip return to the map (mapView stays set). Sections and the
+// center have no links.
+func (m *model) mapOpenLink() tea.Cmd {
+	ref := m.mp.refs[m.mp.focus]
+	if ref.kind != refItem {
+		m.status = "focus an item to open its links"
+		return nil
+	}
+	links := board.ExtractLinks(ref.item.DisplayText())
+	switch len(links) {
+	case 0:
+		m.status = "no links on this item"
+		return nil
+	case 1:
+		return m.openLinkByName(links[0])
+	}
+	m.linkOpts = links
+	m.linkCur = 0
+	m.mode = modeLinkPick
+	return nil
 }
 
 // --- navigation ---
@@ -583,13 +729,30 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}()
 	switch key {
-	case "q", "esc":
+	case "esc":
+		// esc steps focus out one level before it quits: only an unfocused map
+		// (or q) leaves the view.
+		if m.mapFocusRoot != "" {
+			m.focusOut()
+			return m, nil
+		}
+		if m.cameFromDash {
+			return m, m.enterDash()
+		}
+		return m, tea.Quit
+	case "q":
 		if m.cameFromDash {
 			return m, m.enterDash()
 		}
 		return m, tea.Quit
 	case "ctrl+c":
 		return m, tea.Quit
+	case "f":
+		m.focusIn()
+	case "b":
+		m.focusOut()
+	case "o":
+		return m, m.mapOpenLink()
 	case "m":
 		m.mapView = false
 	case "M":
@@ -897,7 +1060,11 @@ func (m *model) viewMap() string {
 
 	footer := m.viewMapFooter()
 	footerH := lipgloss.Height(footer)
+	crumbLine := m.viewMapCrumbs()
 	headerH := 1
+	if crumbLine != "" {
+		headerH = 2
+	}
 	bodyH := m.height - headerH - footerH
 	if bodyH < 3 {
 		bodyH = 3
@@ -1016,7 +1183,20 @@ func (m *model) viewMap() string {
 		titleW = 1
 	}
 	header := styleTitle.Render(ansi.Truncate(boardTitle(m.board), titleW, "")) + idTag
+	if crumbLine != "" {
+		header += "\n" + crumbLine
+	}
 	return header + "\n" + strings.Join(lines, "\n") + "\n" + footer
+}
+
+// viewMapCrumbs renders the focus breadcrumb trail (empty when unfocused), e.g.
+// a dimmed "board › Threads › port mm…".
+func (m *model) viewMapCrumbs() string {
+	crumbs := m.mapCrumbs()
+	if len(crumbs) == 0 {
+		return ""
+	}
+	return styleDim.Render(ansi.Truncate(strings.Join(crumbs, " › "), m.width, "…"))
 }
 
 // offsetFor centers a focus coordinate within a window over a grid dimension:
@@ -1131,7 +1311,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · enter fold · w wrap · a add · A sibling · e edit · space status · d archive · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add · A sibling · e edit · space status · d archive · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
