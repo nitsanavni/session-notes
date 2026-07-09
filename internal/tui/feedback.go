@@ -95,6 +95,7 @@ func feedbackSidecarDir(jsonlPath string) string {
 var recordedMapKeys = map[string]bool{
 	"h": true, "j": true, "k": true, "l": true,
 	"left": true, "right": true, "up": true, "down": true,
+	"d": true,
 	"enter": true, "w": true, " ": true, "D": true, "M": true,
 	"u": true, "ctrl+r": true, "r": true,
 }

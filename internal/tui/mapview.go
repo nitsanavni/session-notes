@@ -500,6 +500,10 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mapToggleExpand()
 	case "a":
 		m.startMapAdd()
+	case "A":
+		m.startMapAddSibling()
+	case "d":
+		m.mapArchive()
 	case "e":
 		m.startMapEdit()
 	case " ":
@@ -638,6 +642,46 @@ func (m *model) startMapAdd() {
 		m.mapInputParent = ref.item
 	}
 	m.startInput(modeMapAdd, "", "add child")
+}
+
+// startMapAddSibling adds next to the focused node: for an item, a new item
+// under the same parent (top-level item for a section child, sibling reply in
+// a thread); for a section node it behaves like add-into-section.
+func (m *model) startMapAddSibling() {
+	ref := m.mp.refs[m.mp.focus]
+	if ref.kind == refCenter {
+		m.status = "focus a node to add a sibling"
+		return
+	}
+	m.mapInputParent = nil
+	m.mapInputSection = ref.section
+	if ref.kind == refItem {
+		if par := m.mp.parentOf(m.mp.focus); par != nil {
+			if pref, ok := m.mp.refs[par]; ok && pref.kind == refItem {
+				m.mapInputParent = pref.item
+			}
+		}
+	}
+	m.startInput(modeMapAdd, "", "add sibling")
+}
+
+// mapArchive moves the focused item (+ subtree) to ## Archive, like the list
+// view's d.
+func (m *model) mapArchive() {
+	ref := m.mp.refs[m.mp.focus]
+	if ref.kind != refItem {
+		m.status = "only items can be archived from the map"
+		return
+	}
+	it := ref.item
+	m.snapshot()
+	op := pendingOp{typ: opArchiveItem, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+	if m.board.ArchiveItem(it) {
+		m.mapFocusKey = parentKeyOf(m.mapFocusKey)
+		m.rebuildPositions()
+		m.saveWithRebase(op)
+		m.status = "archived"
+	}
 }
 
 func (m *model) startMapEdit() {
@@ -803,6 +847,27 @@ func (m *model) viewMap() string {
 				}
 			}
 		}
+		// Tint the leading author token of a reply ("user:"/"claude:") in the
+		// list view's author colors, keeping the rest of the node's style.
+		if ref.kind == refItem && isReplyItem(ref.item) {
+			if loc := authorRe.FindStringSubmatchIndex(ref.item.Text); loc != nil {
+				author := ref.item.Text[loc[2]:loc[3]]
+				fg := styleAuthorUser.GetForeground()
+				if author == "claude" {
+					fg = styleAuthorClaude.GetForeground()
+				}
+				tokID := len(styles)
+				styles = append(styles, styles[id].Foreground(fg))
+				if top >= 0 && top < gridH {
+					// token is ASCII, so byte offsets == display columns
+					for k := loc[2]; k < loc[3]+1 && c0+k < gridW; k++ {
+						if c0+k >= 0 {
+							cellStyle[top][c0+k] = tokID
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Center the viewport on the focus node; small maps center within the window
@@ -942,7 +1007,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · enter fold · w wrap · a add · e edit · space status · D delete · M log · m list · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · enter fold · w wrap · a add · A sibling · e edit · space status · d archive · D delete · M log · m list · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
