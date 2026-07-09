@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""boardmm — edit a session-notes board in the mm interactive mindmap editor.
+
+Usage:
+    boardmm <board.md>          # open the board in mm, merge edits back on exit
+    boardmm --test              # run the non-interactive round-trip test suite
+
+Round trip
+----------
+1. Snapshot the board (the merge *base*).
+2. Convert board -> mm outline, LOSSLESSLY:
+     - `title:` frontmatter field  -> `# title` center node
+     - each non-empty H2 section    -> a top-level `- section` bullet
+     - the section's bullets nested one level deeper (a flat 2-space shift, so
+       de-indent is exact and reversible)
+     - `[ ]` / `[x]` kept native so mm's checkbox toggling works
+     - `[>]` / `[?]` kept as LITERAL text (`[>] ...`) — mm treats an unknown
+       marker as plain node text and preserves it verbatim, so it round-trips
+3. Launch mm interactively on the outline (bun, run from the mm repo, tty
+   inherited). mm autosaves the outline in place.
+4. On exit convert the outline back to a board:
+     - frontmatter restored VERBATIM from the base (the `# title` node is
+       display-only and ignored)
+     - top-level bullets -> H2 sections, de-indented one level, markers decoded
+       (a no-op, since they were kept literal)
+     - the FULL section skeleton + order from the base is preserved: a section
+       dropped in mm becomes empty; brand-new top-level bullets become new
+       sections appended at the end
+5. Merge onto the current board under the board's fcntl flock:
+     - board unchanged since base            -> write the round-tripped edit
+     - board changed concurrently (Claude)   -> 3-way merge via `git merge-file`
+       (base=snapshot, ours=edit, theirs=current); conflict markers, if any, are
+       left in the file for Claude to reconcile later
+   The monitor snapshot `board.snap` is refreshed inside the same lock.
+"""
+import fcntl
+import os
+import subprocess
+import sys
+import tempfile
+
+MM_DIR = os.environ.get("MM_DIR", os.path.expanduser("~/code/mm"))
+SNAP = os.environ.get("BOARDMM_SNAP") or None  # optional monitor snapshot to refresh
+
+
+# --------------------------------------------------------------------------- #
+# frontmatter / section parsing
+# --------------------------------------------------------------------------- #
+def split_frontmatter(text):
+    """Return (frontmatter_block, rest). frontmatter_block keeps its trailing
+    newline; rest is everything after the closing `---` line. If there's no
+    frontmatter, frontmatter_block is ''."""
+    if not text.startswith("---\n"):
+        return "", text
+    end = text.find("\n---\n", 3)
+    if end == -1:
+        # closing fence may be the final line without a trailing newline
+        if text.rstrip("\n").endswith("\n---") or text.rstrip("\n") == text[:0]:
+            pass
+        return "", text
+    fm = text[: end + len("\n---\n")]
+    return fm, text[end + len("\n---\n") :]
+
+
+def frontmatter_title(fm):
+    for line in fm.split("\n"):
+        if line.startswith("title:"):
+            return line[len("title:") :].strip()
+    return None
+
+
+def parse_sections(text):
+    """Split the post-frontmatter body into (preamble, [(title, [bullet_lines])]).
+
+    preamble is any text before the first `## ` header. bullet_lines are the raw
+    board bullet lines of each section (lines matching `^\\s*- `)."""
+    lines = text.split("\n")
+    preamble = []
+    i = 0
+    while i < len(lines) and not lines[i].startswith("## "):
+        preamble.append(lines[i])
+        i += 1
+    sections = []
+    while i < len(lines):
+        title = lines[i][len("## ") :].strip()
+        i += 1
+        bullets = []
+        while i < len(lines) and not lines[i].startswith("## "):
+            if lines[i].lstrip().startswith("- "):
+                bullets.append(lines[i])
+            i += 1
+        sections.append((title, bullets))
+    return "\n".join(preamble), sections
+
+
+# --------------------------------------------------------------------------- #
+# board  ->  outline
+# --------------------------------------------------------------------------- #
+def board_to_outline(board_text):
+    fm, body = split_frontmatter(board_text)
+    title = frontmatter_title(fm) or "board"
+    _, sections = parse_sections(body)
+    out = ["# " + title]
+    for stitle, bullets in sections:
+        if not bullets:
+            continue  # empty sections don't clutter the map (restored on the way back)
+        out.append("- " + stitle)
+        for b in bullets:
+            out.append("  " + b)  # exact 2-space shift == one level deeper
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# outline  ->  board
+# --------------------------------------------------------------------------- #
+def outline_to_sections(outline_text):
+    """Parse the edited outline into an ordered list of (title, [board_bullet])."""
+    lines = outline_text.split("\n")
+    sections = []
+    cur = None
+    for line in lines:
+        if not line.strip():
+            continue
+        if line.startswith("# "):
+            continue  # center node (title) — display only
+        if line.startswith("- "):  # top-level bullet == section
+            cur = (line[2:].strip(), [])
+            sections.append(cur)
+        elif line.startswith("  ") and cur is not None:
+            # section bullet: strip exactly one level (2 spaces) to de-indent
+            cur[1].append(line[2:])
+        # anything else (stray) is ignored
+    return sections
+
+
+def section_lines(title, bullets):
+    """Line list for one section in the board's canonical layout:
+    header, blank line, bullets, then a trailing blank line that separates it
+    from the next section. An empty section is just header + blank line (its
+    blank doubles as the separator)."""
+    lines = ["## " + title, ""]
+    if bullets:
+        lines += bullets
+        lines.append("")
+    return lines
+
+
+def outline_to_board(outline_text, base_board):
+    """Reconstruct a board from the edited outline, restoring the base skeleton."""
+    fm, body = split_frontmatter(base_board)
+    _, base_sections = parse_sections(body)
+    base_order = [t for t, _ in base_sections]
+
+    edited = outline_to_sections(outline_text)
+    edited_map = {t: b for t, b in edited}
+
+    lines = []
+    seen = set()
+    for title in base_order:
+        seen.add(title)
+        bullets = edited_map.get(title, [])  # missing in map => emptied
+        lines += section_lines(title, bullets)
+    for title, bullets in edited:
+        if title not in seen:  # brand-new section from mm, appended at the end
+            seen.add(title)
+            lines += section_lines(title, bullets)
+
+    body_out = "\n".join(lines)
+    if fm:
+        return fm + "\n" + body_out
+    return body_out
+
+
+# --------------------------------------------------------------------------- #
+# merge + write
+# --------------------------------------------------------------------------- #
+def git_merge_file(mine, base, theirs):
+    """3-way merge. Return (merged_text, conflicts:int) or (None, -1) if git
+    could not run."""
+    fs = {}
+    try:
+        for k, v in (("mine", mine), ("base", base), ("theirs", theirs)):
+            fd, p = tempfile.mkstemp(suffix=".md")
+            os.write(fd, v.encode())
+            os.close(fd)
+            fs[k] = p
+        proc = subprocess.run(
+            [
+                "git", "merge-file", "-p",
+                "-L", "your mm edit", "-L", "board (base)", "-L", "claude",
+                fs["mine"], fs["base"], fs["theirs"],
+            ],
+            capture_output=True,
+        )
+        if proc.returncode < 0 or proc.returncode == 255:
+            return None, -1
+        return proc.stdout.decode(), proc.returncode
+    except FileNotFoundError:
+        return None, -1
+    finally:
+        for p in fs.values():
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def _atomic_write(path, content):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)))
+    os.write(fd, content.encode())
+    os.close(fd)
+    os.rename(tmp, path)
+
+
+def merge_and_write(board_path, base, edit, snap_path=SNAP):
+    """Under the board flock: 3-way merge `edit` onto the current board, write,
+    refresh the snapshot. Returns (content_written, conflicts:int)."""
+    lock = open(board_path + ".lock", "w")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        try:
+            current = open(board_path).read()
+        except FileNotFoundError:
+            current = ""
+        if current == "" or current == base:
+            content, conflicts = edit, 0
+        else:
+            merged, conflicts = git_merge_file(edit, base, current)
+            if merged is None:
+                # git unavailable: never drop the user's edit — keep Claude's
+                # board and append the whole edit under a reconcile section.
+                content = (
+                    current.rstrip("\n")
+                    + "\n\n## Editor Merge (needs reconcile)\n"
+                    + edit
+                )
+                conflicts = 1
+            else:
+                content = merged
+        _atomic_write(board_path, content)
+        if snap_path:
+            _atomic_write(snap_path, content)
+        return content, conflicts
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+
+
+# --------------------------------------------------------------------------- #
+# interactive
+# --------------------------------------------------------------------------- #
+def run(board_path):
+    with open(board_path) as f:
+        base = f.read()
+    outline = board_to_outline(base)
+    fd, tmp = tempfile.mkstemp(suffix=".md")
+    os.write(fd, outline.encode())
+    os.close(fd)
+    try:
+        subprocess.run(["bun", "src/cli.ts", tmp], cwd=MM_DIR)  # inherits tty
+        with open(tmp) as f:
+            edited_outline = f.read()
+        edit = outline_to_board(edited_outline, base)
+        content, conflicts = merge_and_write(board_path, base, edit)
+        if conflicts:
+            sys.stderr.write(
+                "merged with %d conflict(s) — markers left for Claude to reconcile\n"
+                % conflicts
+            )
+        else:
+            sys.stderr.write("board updated\n")
+    finally:
+        os.unlink(tmp)
+
+
+# --------------------------------------------------------------------------- #
+# tests
+# --------------------------------------------------------------------------- #
+def _run_tests():
+    import shutil
+
+    real = os.path.expanduser(
+        "~/.claude/boards/d9a79043-56f3-4e38-9a81-1c8f1a730a70.md"
+    )
+    workdir = tempfile.mkdtemp(prefix="boardmm-test-")
+    board = os.path.join(workdir, "board.md")
+    snap = os.path.join(workdir, "board.snap")
+    shutil.copy(real, board)
+    # Inject fixtures the real board lacks: a [?] marker and a reply with tricky
+    # characters, so the round trip is exercised on both.
+    special = "reply: → and `code` and \"quotes\" and [x] literal"
+    raw = open(board).read()
+    raw = raw.replace(
+        "## Ideas\n\n",
+        "## Ideas\n\n- [?] a lurking question\n  - " + special + "\n\n",
+        1,
+    )
+    open(board, "w").write(raw)
+    base = open(board).read()
+    n_pass = 0
+
+    def check(name, cond, detail=""):
+        nonlocal n_pass
+        mark = "PASS" if cond else "FAIL"
+        print("[%s] %s%s" % (mark, name, ("  " + detail) if detail and not cond else ""))
+        if cond:
+            n_pass += 1
+        else:
+            check.failed = True
+
+    check.failed = False
+
+    # 1. no-op round trip is byte-identical
+    outline = board_to_outline(base)
+    rt = outline_to_board(outline, base)
+    check("no-op round trip byte-identical", rt == base,
+          "diff at " + repr(_first_diff(base, rt)))
+
+    # 2. markers survive in the outline losslessly
+    check("[>] kept literal in outline", "- [>] idea" in outline.replace("  - ", "- "))
+    check("[?] kept literal in outline", "- [?] " in outline)
+    check("[ ]/[x] kept native", "- [ ] " in outline and "- [x] " in outline)
+
+    # 3. special chars survive byte-identical through the round trip
+    check("special-char reply survives", special in rt and special in base)
+
+    # 4. simulated mm edits: add a bullet, toggle a checkbox, rename a node
+    edited = outline
+    # toggle first [ ] -> [x]
+    edited = edited.replace("- [ ] lean on opus", "- [x] lean on opus", 1)
+    # rename a section node
+    edited = edited.replace("- Working Agreements", "- Working Agreements (edited)", 1)
+    # add a child bullet under Log (append at end of that section's block)
+    lines = edited.split("\n")
+    out = []
+    for i, l in enumerate(lines):
+        out.append(l)
+    # add a brand-new top-level section bullet at the very end
+    edited = "\n".join(out).rstrip("\n") + "\n- New Section\n  - [ ] fresh item\n"
+    b2 = outline_to_board(edited, base)
+    check("checkbox toggle applied", "- [x] lean on opus" in b2)
+    check("section rename creates new section, old emptied",
+          "## Working Agreements (edited)" in b2 and "## Working Agreements\n" in b2)
+    check("new section appended at end",
+          b2.rstrip().endswith("- [ ] fresh item") and "## New Section" in b2)
+    check("untouched reply survives edit round trip", special in b2)
+    # frontmatter verbatim
+    check("frontmatter restored verbatim",
+          b2.startswith(base[: base.index("\n---\n") + 5]))
+    # full skeleton preserved (all base sections still present)
+    _, base_secs = parse_sections(split_frontmatter(base)[1])
+    _, b2_secs = parse_sections(split_frontmatter(b2)[1])
+    base_titles = {t for t, _ in base_secs}
+    b2_titles = {t for t, _ in b2_secs}
+    check("all base sections preserved (minus renamed)",
+          base_titles - {"Working Agreements"} <= b2_titles)
+
+    # 5. write path, unchanged board -> exact edit written, snap refreshed
+    _atomic_write(snap, "stale\n")
+    content, conflicts = merge_and_write(board, base, b2, snap_path=snap)
+    check("unchanged board: edit written verbatim", content == b2 and conflicts == 0)
+    check("snapshot refreshed under lock", open(snap).read() == b2)
+
+    # 6. concurrent-edit merge path (disjoint change -> clean auto-merge)
+    shutil.copy(real, board)  # reset to base
+    # Claude concurrently adds an item to an untouched section (Questions)
+    claude_board = base.replace(
+        "## Questions\n", "## Questions\n- [ ] claude added this\n", 1
+    )
+    _atomic_write(board, claude_board)
+    content, conflicts = merge_and_write(board, base, b2, snap_path=snap)
+    check("concurrent disjoint merge is clean", conflicts == 0,
+          "conflicts=%d" % conflicts)
+    check("concurrent merge keeps Claude's addition",
+          "- [ ] claude added this" in content)
+    check("concurrent merge keeps our edit",
+          "- [x] lean on opus" in content and "## New Section" in content)
+
+    # 7. concurrent CONFLICT path (both edit the same line)
+    shutil.copy(real, board)
+    claude_board = base.replace(
+        "- [ ] lean on opus", "- [x] lean on opus (claude touched)", 1
+    )
+    _atomic_write(board, claude_board)
+    # our edit also changes that exact line differently
+    our_edit = outline_to_board(
+        outline.replace("- [ ] lean on opus", "- [x] lean on opus (mm touched)", 1),
+        base,
+    )
+    content, conflicts = merge_and_write(board, base, our_edit, snap_path=snap)
+    check("conflicting edit produces conflict markers",
+          conflicts >= 1 and "<<<<<<<" in content and ">>>>>>>" in content,
+          "conflicts=%d markers=%s" % (conflicts, "<<<<<<<" in content))
+    check("conflict keeps both sides",
+          "(claude touched)" in content and "(mm touched)" in content)
+
+    shutil.rmtree(workdir, ignore_errors=True)
+    print("\n%d checks passed%s" % (n_pass, "" if not check.failed else " — FAILURES ABOVE"))
+    return 0 if not check.failed else 1
+
+
+def _first_diff(a, b):
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return (i, a[max(0, i - 20):i + 20], b[max(0, i - 20):i + 20])
+    if len(a) != len(b):
+        return ("len", len(a), len(b))
+    return None
+
+
+# --------------------------------------------------------------------------- #
+def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "--test":
+        sys.exit(_run_tests())
+    if len(sys.argv) != 2:
+        sys.exit("usage: boardmm <board.md>  |  boardmm --test")
+    run(sys.argv[1])
+
+
+if __name__ == "__main__":
+    main()

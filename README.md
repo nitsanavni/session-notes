@@ -352,6 +352,21 @@ echoing Claude's own edits back at it, the recommended setup has Claude refresh
 the watch's snapshot inside the same locked write it uses to edit the board, with
 the watcher diffing under the same lock — then only your edits emit events.
 
+## Editing the board as a mindmap (mm)
+
+`scripts/boardmm <board.md>` opens the board in [mm](https://github.com/nitsanavni/mm),
+a center-outward terminal mindmap editor: the board title is the center node,
+non-empty `##` sections the first ring, bullets nested outward. `[ ]`/`[x]`
+stay native (mm toggles them), `[>]`/`[?]` ride along as literal text. On exit
+the outline converts back losslessly (frontmatter verbatim, full section
+skeleton preserved) and merges onto the board under the usual lock — 3-way
+against the snapshot taken on open, so concurrent TUI or Claude edits survive;
+true conflicts are left as markers for reconciliation per the write protocol.
+
+Requires a checkout of mm (default `~/code/mm`, override with `MM_DIR`) and
+bun. `scripts/boardmm --test` runs its round-trip and merge test suite —
+self-contained, never touches `~/.claude/boards`.
+
 **Write protocol (avoiding lost updates).** You and Claude edit the same file
 concurrently, so every writer serializes on an advisory lock. Before any
 read-modify-write of the board, take an exclusive `flock` on the sidecar lock
