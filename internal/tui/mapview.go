@@ -623,6 +623,8 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.undo()
 	case "ctrl+r":
 		m.redo()
+	case "y":
+		m.yankBoardPath()
 	case "r":
 		m.reloadExternal()
 		m.status = "reloaded"
@@ -1000,7 +1002,20 @@ func (m *model) viewMap() string {
 		lines = append(lines, renderMapRow(grid[gy], cellStyle[gy], styles, offX, bodyW))
 	}
 
-	header := styleTitle.Render(ansi.Truncate(boardTitle(m.board), m.width, ""))
+	// When a frontmatter title is set it stands in for the session id (both in
+	// the header and the center node), so tag the header with a dimmed short id
+	// for reference. Without a title the session id already serves as the title.
+	var idTag string
+	if strings.TrimSpace(m.board.Frontmatter.Title) != "" {
+		if id := shortSessionID(strings.TrimSpace(m.board.Frontmatter.Session)); id != "" {
+			idTag = " " + styleDim.Render(id)
+		}
+	}
+	titleW := m.width - lipgloss.Width(idTag)
+	if titleW < 1 {
+		titleW = 1
+	}
+	header := styleTitle.Render(ansi.Truncate(boardTitle(m.board), titleW, "")) + idTag
 	return header + "\n" + strings.Join(lines, "\n") + "\n" + footer
 }
 
@@ -1116,7 +1131,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · enter fold · w wrap · a add · A sibling · e edit · space status · d archive · D delete · M log · m list · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · enter fold · w wrap · a add · A sibling · e edit · space status · d archive · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

@@ -77,6 +77,7 @@ Item conventions (parse leniently; unknown lines are kept verbatim):
 - Urgency: leading `!!` in the text. Removing `!!` or checking the box acknowledges it.
 - Addressing: `@claude` / `@user` anywhere in the text.
 - Log is append-only, `- HH:MM author: text`.
+- Links: `[[name]]` (no slash) is a side note at `<boards-dir>/<session-id>.notes/name.md` (opening a missing one creates it). `[[path/with/slash.md]]` (contains `/`, or starts with `~/` or `/`) is a file path relative to the session cwd (`~` expanded, absolute as-is); opening a missing path errors rather than creating a stub. `o` opens the current item's first link.
 - Round-trip rule: the TUI/hooks must never destroy content they don't understand.
 
 ## Concurrency (avoiding lost updates)
@@ -126,10 +127,11 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
 
 ## TUI (bubbletea + lipgloss + bubbles)
 
-- Layout: board rendered as sections; cursor moves across items; active section highlighted.
+- Layout: board rendered as sections; cursor moves across items; active section highlighted. The sticky header shows the title (frontmatter `title`, else session id, else path); when a `title` is set, a shortened session id (first 8 chars) is shown dimmed next to it (list header and map header) so the id stays visible.
 - Keys: `j/k` move · `tab`/`shift-tab` next/prev section · `a` add item to current section ·
   `space` cycle status `[ ]→[>]→[x]` · `!` toggle urgent · `d` delete item ·
   `e` edit item inline (textinput) · `E` open board in `$EDITOR` (suspend TUI) ·
+  `o` open item's first `[[link]]` · `y` copy board file path to clipboard ·
   `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
 - Map view (`m`): the board as a center-outward mindmap (ported from mm — see
   docs/mm-port.md). Title at center, all `##` sections as the protected first ring,

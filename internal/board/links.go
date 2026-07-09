@@ -1,6 +1,7 @@
 package board
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -33,8 +34,30 @@ func NotesDir(b *Board) string {
 	return filepath.Join(BoardsDir(), b.Frontmatter.Session+".notes")
 }
 
-// ResolveLink resolves a [[name]] wiki-link found on board b to the path of
-// its side markdown file: <boards-dir>/<session-id>.notes/name.md.
+// ResolveLink resolves a [[name]] wiki-link found on board b. A plain name is
+// a side note: <boards-dir>/<session-id>.notes/name.md. A path-like name (has
+// a slash, or starts with ./ ../ ~ /) is a file path: absolute and ~ names as
+// themselves, relative names against the board's frontmatter cwd (where
+// Claude runs). Path links keep an existing extension; extensionless ones get
+// ".md" only in the side-notes case.
 func ResolveLink(b *Board, name string) string {
+	if IsPathLink(name) {
+		p := name
+		if strings.HasPrefix(p, "~/") || p == "~" {
+			if home, err := os.UserHomeDir(); err == nil {
+				p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+			}
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(b.Frontmatter.Cwd, p)
+		}
+		return filepath.Clean(p)
+	}
 	return filepath.Join(NotesDir(b), name+".md")
+}
+
+// IsPathLink reports whether a [[link]] name addresses a file path rather
+// than a session side note.
+func IsPathLink(name string) bool {
+	return strings.ContainsRune(name, '/') || strings.HasPrefix(name, "~")
 }

@@ -409,6 +409,30 @@ func (m *model) reload() { m.doReload(false) }
 // write. Our own atomic-save echoes match what we hold and so are ignored.
 func (m *model) reloadExternal() { m.doReload(true) }
 
+// yankBoardPath copies the board's path to the system clipboard (pbcopy /
+// xclip / wl-copy, best effort) and always shows it in the status line, so the
+// path is revealed even when no clipboard tool is available.
+func (m *model) yankBoardPath() {
+	path := m.board.Path
+	copied := false
+	for _, tool := range [][]string{{"pbcopy"}, {"xclip", "-selection", "clipboard"}, {"wl-copy"}} {
+		if _, err := exec.LookPath(tool[0]); err != nil {
+			continue
+		}
+		cmd := exec.Command(tool[0], tool[1:]...)
+		cmd.Stdin = strings.NewReader(path)
+		if cmd.Run() == nil {
+			copied = true
+		}
+		break
+	}
+	if copied {
+		m.status = "copied " + path
+	} else {
+		m.status = path
+	}
+}
+
 func (m *model) doReload(recordExternal bool) {
 	if m.path == "" {
 		return
@@ -680,6 +704,8 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.openLink()
 	case "L":
 		m.startInput(modeInputLog, "", "log entry")
+	case "y":
+		m.yankBoardPath()
 	case "B":
 		// Back to the board picker: list all boards and pick another.
 		return m, m.enterPicker()
@@ -1099,7 +1125,13 @@ func (m *model) openLink() tea.Cmd {
 
 func (m *model) openLinkByName(name string) tea.Cmd {
 	path := board.ResolveLink(m.board, name)
-	if err := ensureNoteFile(path, name); err != nil {
+	if board.IsPathLink(name) {
+		// A path link points at a real file; don't fabricate a missing one.
+		if _, err := os.Stat(path); err != nil {
+			m.status = "no such file: " + path
+			return nil
+		}
+	} else if err := ensureNoteFile(path, name); err != nil {
 		m.status = "open link failed: " + err.Error()
 		return nil
 	}

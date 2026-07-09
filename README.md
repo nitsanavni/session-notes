@@ -30,7 +30,7 @@ plain Markdown file that both sides can safely edit at the same time.
 ├───────────────────────────────────────────────────────────────────────┤
 │ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
 │ d archive · D delete · enter expand · e edit · E $EDITOR · o open link ·│
-│ u undo · ctrl+r redo · L log · m map view · r reload · ? help · q quit   │
+│ y copy path · u undo · ctrl+r redo · L log · m map · r reload · ? · q    │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -153,7 +153,9 @@ destroyed):
 
 - **Title** (`title:` in the frontmatter): an optional short human name for the
   session — "auth refactor", not a uuid. When set, the board header and the
-  dashboard/picker show it in place of the session id. Claude is nudged (by the
+  dashboard/picker show it in place of the session id (the header also tags on a
+  shortened session id, first 8 chars, dimmed, so the id stays visible in both
+  the list and map views). Claude is nudged (by the
   `session-start` blurb) to set one early. Any frontmatter keys the tool doesn't
   model are still preserved round-trip.
 - **Status**: `[ ]` open, `[>]` in progress, `[x]` done, `[?]` blocked. Plain `- `
@@ -214,16 +216,23 @@ destroyed):
 
 ### Linked notes
 
-An item's text can contain `[[name]]` to link to a side markdown file for
-longer-form content that doesn't belong inline in the board — a design writeup,
-a full error dump, Claude's detailed answer to a question. `[[name]]` renders
-in a distinct color in the TUI (display only; the file text is untouched).
+An item's text can contain a `[[link]]` for longer-form content that doesn't
+belong inline in the board — a design writeup, a full error dump, Claude's
+detailed answer to a question. Links come in two forms and both render in a
+distinct color in the TUI (display only; the file text is untouched):
 
-Linked files live at `~/.claude/boards/<session-id>.notes/name.md` (next to the
-board itself, scoped to the session). In the TUI, `o` opens the item's first
-link in `$EDITOR` (same suspend-and-resume as `E`), creating the notes
-directory and the file — seeded with a `# name` heading — if it doesn't exist
-yet. `o` is a no-op on items with no links.
+- `[[name]]` (a plain name, no slash) is a **side note**, living at
+  `~/.claude/boards/<session-id>.notes/name.md` (next to the board itself,
+  scoped to the session). Opening a missing side note creates it — seeded with a
+  `# name` heading.
+- `[[path/with/slash.md]]` (contains a `/`, or starts with `~/` or `/`) is a
+  **file path**, resolved relative to the session cwd (`~` expanded, absolute
+  paths as-is). Use this to link real repo files like `[[docs/foo.md]]`. Opening
+  a path that doesn't exist shows an error rather than creating a stub.
+
+In the TUI, `o` opens the item's first link in `$EDITOR` (same
+suspend-and-resume as `E`); with several links a chooser picks which one. `o` is
+a no-op on items with no links.
 
 Claude is expected to write its long-form answers into these files rather than
 bloating the board itself — e.g. drop `[[legacy-endpoint-audit]]` into a
@@ -322,6 +331,7 @@ items, and the last Log line.
 | `e`           | edit item inline (the bullet line only)  |
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
 | `o`           | open item's first `[[link]]` in `$EDITOR` (suspends TUI) |
+| `y`           | copy board file path to clipboard (shown in status) |
 | `L`           | quick log entry                          |
 | `d`           | archive item / section (into `## Archive`)|
 | `D`           | hard-delete item / section from the file |

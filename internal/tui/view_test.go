@@ -206,6 +206,51 @@ func TestStickyTitleAndReadout(t *testing.T) {
 	}
 }
 
+func TestHeaderShowsShortSessionIDWithTitle(t *testing.T) {
+	src := "---\nsession: 0123456789abcdef\ntitle: My Board\n---\n## Threads\n- [ ] one\n"
+	m := newTestModel(src, 80, 24)
+	out := stripANSI(m.viewBoard())
+	row0 := strings.Split(out, "\n")[0]
+	if !strings.Contains(row0, "My Board") {
+		t.Errorf("title missing from header: %q", row0)
+	}
+	if !strings.Contains(row0, "01234567") {
+		t.Errorf("short session id missing from header: %q", row0)
+	}
+	if strings.Contains(row0, "0123456789abcdef") {
+		t.Errorf("header should show only the shortened id, not the full one: %q", row0)
+	}
+
+	// Map view header carries the short id too.
+	m.mapView = true
+	m.mp = nil
+	m.ensureMap()
+	mout := stripANSI(m.viewMap())
+	mrow0 := strings.Split(mout, "\n")[0]
+	if !strings.Contains(mrow0, "01234567") {
+		t.Errorf("short session id missing from map header: %q", mrow0)
+	}
+}
+
+func TestHeaderNoDoubledSessionWithoutTitle(t *testing.T) {
+	src := "---\nsession: 0123456789abcdef\n---\n## Threads\n- [ ] one\n"
+	m := newTestModel(src, 80, 24)
+	out := stripANSI(m.viewBoard())
+	row0 := strings.Split(out, "\n")[0]
+	// Session id serves as the title; the short tag must not be appended.
+	if strings.Count(row0, "01234567") != 1 {
+		t.Errorf("session id should appear once (as the title), got: %q", row0)
+	}
+}
+
+func TestYankBoardPathStatus(t *testing.T) {
+	m := newTestModel("## Threads\n- [ ] one\n", 80, 24)
+	m.yankBoardPath()
+	if !strings.Contains(m.status, m.board.Path) {
+		t.Errorf("status should reveal the board path, got %q", m.status)
+	}
+}
+
 func TestArchiveCollapsedByDefault(t *testing.T) {
 	src := "## Threads\n- [>] t\n\n## Archive\n- [x] one\n- [x] two\n"
 	m := newTestModel(src, 80, 24)

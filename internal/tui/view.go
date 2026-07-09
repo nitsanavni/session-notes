@@ -95,7 +95,13 @@ func (m *model) viewBoard() string {
 	// truncated from the right (dropping the trailing dim Cwd first).
 	titleTail := true
 	if fm := m.board.Frontmatter; fm.Title != "" {
-		title = fmt.Sprintf("%s  %s", fm.Title, styleDim.Render(fm.Cwd))
+		// A frontmatter title replaces the session id as the heading, so surface
+		// a shortened id (first 8 chars) dimmed alongside it for reference.
+		id := shortSessionID(fm.Session)
+		if id != "" {
+			id = " " + styleDim.Render(id)
+		}
+		title = fmt.Sprintf("%s%s  %s", fm.Title, id, styleDim.Render(fm.Cwd))
 		titleTail = false
 	} else if fm.Session != "" {
 		title = fmt.Sprintf("%s  %s", fm.Session, styleDim.Render(fm.Cwd))
@@ -279,6 +285,16 @@ func scrollReadout(scroll, start, end, total int) string {
 		down = "▼"
 	}
 	return styleDim.Render(fmt.Sprintf("%s %d–%d/%d %s", up, start, end, total, down))
+}
+
+// shortSessionID returns the first 8 characters of a session id (its whole
+// value when shorter), used to tag a titled board's header with a compact,
+// dimmed reference to its session. Empty in, empty out.
+func shortSessionID(session string) string {
+	if len(session) <= 8 {
+		return session
+	}
+	return session[:8]
 }
 
 // boardHeader renders the sticky title row: the board title, truncated to fit,
@@ -476,7 +492,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · o open link · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -502,6 +518,7 @@ func (m *model) viewHelp() string {
 		{"e", "edit item inline (the bullet line only)"},
 		{"E", "open board in $EDITOR"},
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
+		{"y", "copy board file path to clipboard (shown in status)"},
 		{"m", "toggle the mindmap view (hjkl move · enter fold · a/e/space/D edit)"},
 		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},
 		{"! (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl"},

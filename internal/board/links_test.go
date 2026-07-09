@@ -69,3 +69,53 @@ func TestResolveLink(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveLinkPaths(t *testing.T) {
+	t.Setenv("HOME", filepath.FromSlash("/home/tester"))
+	cwd := filepath.FromSlash("/work/repo")
+	cases := []struct {
+		name string
+		link string
+		want string
+	}{
+		{"nested slash name", "docs/foo.md", "/work/repo/docs/foo.md"},
+		{"dot relative", "./notes/plan.md", "/work/repo/notes/plan.md"},
+		{"dot-dot relative", "../sibling/x.md", "/work/sibling/x.md"},
+		{"absolute", "/etc/hosts", "/etc/hosts"},
+		{"tilde home", "~/todo.md", "/home/tester/todo.md"},
+		{"extension preserved", "src/main.go", "/work/repo/src/main.go"},
+		{"no extension kept as-is", "bin/tool", "/work/repo/bin/tool"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := &Board{Frontmatter: Frontmatter{Session: "sess", Cwd: cwd}}
+			got := ResolveLink(b, c.link)
+			want := filepath.FromSlash(c.want)
+			if got != want {
+				t.Errorf("ResolveLink(%q) = %q, want %q", c.link, got, want)
+			}
+		})
+	}
+}
+
+func TestIsPathLink(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"plain", false},
+		{"open questions", false},
+		{"design.notes", false},
+		{"docs/foo.md", true},
+		{"./x", true},
+		{"../y", true},
+		{"~/z", true},
+		{"~", true},
+		{"/abs/path", true},
+	}
+	for _, c := range cases {
+		if got := IsPathLink(c.name); got != c.want {
+			t.Errorf("IsPathLink(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
