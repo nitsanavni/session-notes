@@ -54,6 +54,11 @@ func main() {
 		os.Exit(runDocs(args[1:]))
 	}
 
+	// Serve subcommand: the web UI for non-tmux use. See serve.go.
+	if len(args) >= 1 && args[0] == "serve" {
+		os.Exit(runServe(args[1:]))
+	}
+
 	// The TUI surfaces the upgrade hint asynchronously off the UI thread; give
 	// it the installed version to compare against.
 	tui.Version = versionString()
@@ -267,6 +272,9 @@ Usage:
                                       <path> or --session <id>); --due prints only
                                       when due on the re-injection cadence and
                                       updates the shared state (for monitors)
+  session-notes serve                 web UI (dashboard + boards) on
+                                      127.0.0.1:7080; --addr <host:port> to
+                                      change, --board <path> to serve one board
   session-notes docs <topic>          print a protocol/recipe topic
                                       (protocol|monitor|conflicts|cli); no topic
                                       lists them
