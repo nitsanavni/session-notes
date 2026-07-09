@@ -57,6 +57,12 @@ func statusMarker(s board.Status) string {
 }
 
 func (m *model) View() string {
+	if m.mapView {
+		switch m.mode {
+		case modeBoard, modeMapAdd, modeMapEdit:
+			return m.viewMap()
+		}
+	}
 	switch m.mode {
 	case modeDash:
 		return m.viewDash()
@@ -470,7 +476,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · o open link · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · o open link · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -496,6 +502,7 @@ func (m *model) viewHelp() string {
 		{"e", "edit item inline (the bullet line only)"},
 		{"E", "open board in $EDITOR"},
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
+		{"m", "toggle the mindmap view (hjkl move · enter fold · a/e/space/D edit)"},
 		{"L", "quick log entry"},
 		{"u", "undo last change"},
 		{"ctrl+r", "redo"},

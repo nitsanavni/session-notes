@@ -33,6 +33,8 @@ const (
 	modeLinkPick
 	modeHelp
 	modeDash
+	modeMapAdd
+	modeMapEdit
 )
 
 // customSectionLabel is the final, always-present entry in the add-sections
@@ -110,6 +112,19 @@ type model struct {
 	editorBuf  string
 
 	hist *history // bounded undo/redo of full board snapshots
+
+	// Map (mindmap) view state. mapView toggles the whole board between the list
+	// view and the center-outward map (see mapview.go). mapFolded and mapFocusKey
+	// persist collapse and focus across the frequent tree rebuilds (every board
+	// mutation nils mp so it re-lays out); mp is the transient built layout.
+	// mapInput* capture the target of an inline map add/edit until enter.
+	mapView         bool
+	mapFolded       map[string]bool
+	mapFocusKey     string
+	mp              *mapState
+	mapInputParent  *board.Item // add-child target when adding under an item
+	mapInputItem    *board.Item // edit target
+	mapInputSection string      // section the add/edit acts within
 
 	watch  *watcher
 	width  int
@@ -254,6 +269,9 @@ func (m *model) rebuildPositions() {
 	if m.cursor >= 0 {
 		m.selSec = m.positions[m.cursor].sec
 	}
+	// The board tree changed, so any built map layout is stale; drop it and let
+	// the next map render/nav rebuild it (re-resolving focus from mapFocusKey).
+	m.mp = nil
 }
 
 func (m *model) currentItem() *board.Item {
@@ -478,7 +496,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // isInputMode reports whether the model is currently capturing textinput.
 func (m *model) isInputMode() bool {
 	switch m.mode {
-	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection,
+		modeMapAdd, modeMapEdit:
 		return true
 	}
 	return false
@@ -492,6 +511,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePickerKey(msg)
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
 		return m.handleInputKey(msg)
+	case modeMapAdd, modeMapEdit:
+		return m.handleMapInputKey(msg)
 	case modeAddSections:
 		return m.handleAddSectionsKey(msg)
 	case modeLinkPick:
@@ -499,6 +520,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeHelp:
 		m.mode = m.prevMode
 		return m, nil
+	}
+	if m.mapView {
+		return m.handleMapKey(msg)
 	}
 	return m.handleBoardKey(msg)
 }
@@ -647,6 +671,8 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.reloadExternal()
 		m.status = "reloaded"
+	case "m":
+		m.enterMap()
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp
@@ -793,6 +819,7 @@ const (
 	opDeleteItem                   // hard-delete an item (+ subtree)
 	opDeleteSection                // hard-delete a whole section
 	opAddSection                   // add one or more sections (idempotent)
+	opAddChild                     // append a plain child bullet under an existing item
 )
 
 // pendingOp captures the one mutation a keystroke or inline input produced, in a
@@ -927,6 +954,15 @@ func applyOp(fresh *board.Board, op pendingOp) string {
 			return "board changed, section deleted"
 		}
 		return "board changed, section already gone"
+	case opAddChild:
+		// Map's `a`: a plain child bullet under the focused item. If the parent
+		// vanished, keep the text as a new item in its section rather than lose it.
+		if it := resolveTarget(fresh, op, true, true); it != nil {
+			fresh.AddReply(it, op.payload)
+			return "board changed, child re-added"
+		}
+		fresh.AddItem(op.section, op.payload)
+		return "board changed, child target was gone — kept your text"
 	case opAddSection:
 		for _, title := range op.sections {
 			fresh.AddSection(title) // idempotent: existing titles are not duplicated
