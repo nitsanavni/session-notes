@@ -83,7 +83,7 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
 - Phase 2 landed (338c523): `m` toggles the interactive map view in the TUI;
   spatial nav, folding, edits through the shared locked-save/rebase path.
 - Phase 3 landed: reply-aware styling (dim `user:`/`claude:` sub-bullets) with
-  automatic collapse into a `[N replies]` suffix in the default view; the `Log`
+  automatic collapse into a `[+N]` suffix in the default view; the `Log`
   section excluded from the map by default with a
   "Log hidden · M" footer hint (`M` toggles it on); and the pane-resolution
   fallback — a pane with no mapping resolves to the newest board matching the
@@ -138,7 +138,7 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   **collapsed → default → replies-shown → collapsed**. Each `enter` reveals more
   until the whole subtree is visible, then one more press collapses it fully to a
   single suffix — `[+N]` over every hidden descendant (replies included), or
-  `[N replies]` when the hidden set is replies only. States that render
+  always `[+N]`. States that render
   identically for a given node are skipped, so a no-reply node is a two-state
   default↔collapsed toggle and a replies-only node is summary↔expanded. Collapse
   is done by simply not emitting hidden children (never `mindmap.Folded`), so the

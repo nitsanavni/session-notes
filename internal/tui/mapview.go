@@ -175,13 +175,10 @@ func hasNonReplyChild(items []*board.Item) bool {
 	return false
 }
 
-// replyCountSuffix is the collapsed-reply indicator appended to a parent node,
-// e.g. " [3 replies]" / " [1 reply]".
+// replyCountSuffix is the collapsed-children indicator appended to a parent
+// node. One compact form for everything (user preference): " [+N]".
 func replyCountSuffix(n int) string {
-	if n == 1 {
-		return " [1 reply]"
-	}
-	return fmt.Sprintf(" [%d replies]", n)
+	return fmt.Sprintf(" [+%d]", n)
 }
 
 // foldState is a node's place in the unified fold cycle. A node has one state,
@@ -190,10 +187,10 @@ type foldState int
 
 const (
 	// foldDefault is the resting view: non-reply children shown, reply children
-	// summarized into a "[N replies]" suffix.
+	// summarized into a "[+N]" suffix.
 	foldDefault foldState = iota
 	// foldCollapsed hides ALL children behind one suffix ("[+N]" over every
-	// hidden descendant, or "[N replies]" when the hidden set is replies only).
+	// hidden descendant, always "[+N]").
 	foldCollapsed
 	// foldRepliesExpanded shows everything: non-reply children AND the reply
 	// thread, no suffix.
@@ -202,7 +199,7 @@ const (
 
 // foldSuffix is the "[…]" summary a node in state st shows for the children of
 // the given slice. Empty when nothing is hidden (a leaf, or a fully-expanded
-// node). "[+N]" counts every hidden descendant (replies included); "[N replies]"
+// node). "[+N]" counts every hidden descendant (replies included).
 // is used when the hidden set is replies only.
 func foldSuffix(items []*board.Item, st foldState) string {
 	replies := countRepliesIn(items)
@@ -308,7 +305,7 @@ func buildMapTree(b *board.Board, fold map[string]foldState, showLog bool) (*min
 			ck := parentKey + "/" + strconv.Itoa(idx)
 			idx++
 			if isReplyItem(it) && !showReplies {
-				continue // folded into the parent's "[N replies]" suffix
+				continue // folded into the parent's "[+N]" suffix
 			}
 			st := fold[ck]
 			cn := &mindmap.Node{Text: mapNodeText(it), Suffix: foldSuffix(it.Children, st)}
@@ -960,6 +957,11 @@ func (m *model) mapArchive() {
 
 func (m *model) startMapEdit() {
 	ref := m.mp.refs[m.mp.focus]
+	if ref.kind == refCenter {
+		// The center node stands for the board title; e edits the frontmatter title.
+		m.startTitleInput()
+		return
+	}
 	if ref.kind != refItem {
 		m.status = "only items are editable"
 		return
@@ -1276,6 +1278,9 @@ func mapFocusDetail(ms *mapState) string {
 }
 
 func (m *model) viewMapFooter() string {
+	if m.mode == modeInputTitle {
+		return styleStatus.Render("title: ") + m.input.View()
+	}
 	if m.mode == modeMapAdd || m.mode == modeMapEdit {
 		label := "add"
 		if m.mode == modeMapEdit {
@@ -1311,7 +1316,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add · A sibling · e edit · space status · d archive · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add · A sibling · e edit (title on center) · space status · d archive · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

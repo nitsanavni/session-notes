@@ -49,7 +49,7 @@ to 40 columns with a `…` (the full text shows in the footer); `w` expands the
 focused node in place as a wrapped multi-line block. `enter` cycles the focused
 node's fold — collapsed → default → replies-shown → collapsed: each press reveals
 more until the whole subtree is visible, then one more collapses it to a single
-`[+N]` (or `[N replies]`) summary of everything hidden — the summary suffix is
+`[+N]` summary of everything hidden — the summary suffix is
 always kept even when the node's text is truncated. When a move surprises you (focus
 didn't land where your fingers expected), press `!`: a prompt shows what just
 happened ("you hit k · focus moved 'Log' → 'Working Agreements' — where did you
@@ -161,7 +161,9 @@ destroyed):
   dashboard/picker show it in place of the session id (the header also tags on a
   shortened session id, first 8 chars, dimmed, so the id stays visible in both
   the list and map views). Claude is nudged (by the
-  `session-start` blurb) to set one early. Any frontmatter keys the tool doesn't
+  `session-start` blurb) to set one early; you can also edit it from the TUI with
+  `T` (list view) or `e` on the map's center node — an empty value clears it, so
+  the header falls back to the session id. Any frontmatter keys the tool doesn't
   model are still preserved round-trip.
 - **Status**: `[ ]` open, `[>]` in progress, `[x]` done, `[?]` blocked. Plain `- `
   items are fine in Ideas/Log, which don't track status.

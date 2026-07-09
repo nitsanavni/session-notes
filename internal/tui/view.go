@@ -59,7 +59,7 @@ func statusMarker(s board.Status) string {
 func (m *model) View() string {
 	if m.mapView {
 		switch m.mode {
-		case modeBoard, modeMapAdd, modeMapEdit, modeMapFeedback:
+		case modeBoard, modeMapAdd, modeMapEdit, modeMapFeedback, modeInputTitle:
 			return m.viewMap()
 		}
 	}
@@ -476,13 +476,14 @@ func continuationRow(raw string, width int) string {
 
 func (m *model) viewFooter() string {
 	switch m.mode {
-	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection, modeInputTitle:
 		label := map[mode]string{
 			modeInputAdd:           "add",
 			modeInputEdit:          "edit",
 			modeInputLog:           "log",
 			modeInputReply:         "reply",
 			modeInputCustomSection: "section",
+			modeInputTitle:         "title",
 		}[m.mode]
 		// Reply mode's human message is always authored "user:", so tint its
 		// label user-blue; add/edit/log/section keep the neutral status color.
@@ -492,7 +493,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -516,10 +517,12 @@ func (m *model) viewHelp() string {
 		{"D", "hard-delete item (or whole section) from the file"},
 		{"enter / l", "collapse / expand the section under the cursor (on its header)"},
 		{"e", "edit item inline (the bullet line only)"},
+		{"T", "edit the board title (frontmatter title:; empty clears it)"},
 		{"E", "open board in $EDITOR"},
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
 		{"y", "copy board file path to clipboard (shown in status)"},
 		{"m", "toggle the mindmap view (hjkl move · enter fold · a/e/space/D edit)"},
+		{"e (map center)", "edit the board title (same as T in the list view)"},
 		{"f / b (map)", "focus into subtree (breadcrumbs) / focus out one level (also esc)"},
 		{"o (map)", "open the focused item's [[linked note]] (chooser if several)"},
 		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},

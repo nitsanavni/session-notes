@@ -370,15 +370,15 @@ func TestCountReplies(t *testing.T) {
 	if got := countReplies(q); got != 3 {
 		t.Errorf("countReplies = %d, want 3", got)
 	}
-	if got := replyCountSuffix(1); got != " [1 reply]" {
+	if got := replyCountSuffix(1); got != " [+1]" {
 		t.Errorf("singular suffix = %q", got)
 	}
-	if got := replyCountSuffix(3); got != " [3 replies]" {
+	if got := replyCountSuffix(3); got != " [+3]" {
 		t.Errorf("plural suffix = %q", got)
 	}
 }
 
-// TestMapReplyCollapse asserts reply children collapse into a "[N replies]"
+// TestMapReplyCollapse asserts reply children collapse into a "[+N]"
 // suffix by default, enter on the parent expands them, and enter again
 // re-collapses.
 func TestMapReplyCollapse(t *testing.T) {
@@ -388,7 +388,7 @@ func TestMapReplyCollapse(t *testing.T) {
 	if mapHasReplyNode(m) {
 		t.Fatalf("reply nodes laid out while collapsed by default")
 	}
-	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[+2]") {
 		t.Errorf("missing collapsed reply-count suffix:\n%s", out)
 	}
 
@@ -398,7 +398,7 @@ func TestMapReplyCollapse(t *testing.T) {
 	if !mapHasReplyNode(m) {
 		t.Fatalf("reply nodes not shown after expand")
 	}
-	if out := stripANSI(m.viewMap()); strings.Contains(out, "[2 replies]") {
+	if out := stripANSI(m.viewMap()); strings.Contains(out, "[+2]") {
 		t.Errorf("count suffix should be gone once expanded:\n%s", out)
 	}
 
@@ -407,7 +407,7 @@ func TestMapReplyCollapse(t *testing.T) {
 	if mapHasReplyNode(m) {
 		t.Errorf("reply nodes still laid out after re-collapse")
 	}
-	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[+2]") {
 		t.Errorf("re-collapse did not restore the count suffix:\n%s", out)
 	}
 }
@@ -478,7 +478,7 @@ func TestMapFoldCycleRepliesOnly(t *testing.T) {
 	if mapHasReplyNode(m) {
 		t.Fatalf("replies still shown after re-collapse")
 	}
-	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[+2]") {
 		t.Errorf("summary suffix missing after re-collapse:\n%s", out)
 	}
 }
@@ -498,7 +498,7 @@ func TestMapFoldCycleMixed(t *testing.T) {
 	if mapHasReplyNode(m) {
 		t.Fatalf("replies shown in default view")
 	}
-	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[+2]") {
 		t.Errorf("default view missing reply summary:\n%s", out)
 	}
 
@@ -611,8 +611,8 @@ func TestFoldSuffixCounts(t *testing.T) {
 	src := "## Threads\n- [ ] parent\n  - [ ] sub\n  - user: hi\n    - claude: hey\n"
 	b := board.Parse(src)
 	kids := b.Sections[0].Items[0].Children
-	if got := foldSuffix(kids, foldDefault); got != " [2 replies]" {
-		t.Errorf("default suffix = %q, want ' [2 replies]'", got)
+	if got := foldSuffix(kids, foldDefault); got != " [+2]" {
+		t.Errorf("default suffix = %q, want ' [+2]'", got)
 	}
 	if got := foldSuffix(kids, foldRepliesExpanded); got != "" {
 		t.Errorf("expanded suffix = %q, want empty", got)
@@ -624,8 +624,8 @@ func TestFoldSuffixCounts(t *testing.T) {
 	rsrc := "## Threads\n- [ ] q\n  - user: a\n    - claude: b\n"
 	rb := board.Parse(rsrc)
 	rkids := rb.Sections[0].Items[0].Children
-	if got := foldSuffix(rkids, foldCollapsed); got != " [2 replies]" {
-		t.Errorf("replies-only collapsed = %q, want ' [2 replies]'", got)
+	if got := foldSuffix(rkids, foldCollapsed); got != " [+2]" {
+		t.Errorf("replies-only collapsed = %q, want ' [+2]'", got)
 	}
 	// no replies: collapsed is [+N], default is empty.
 	nsrc := "## Threads\n- [ ] p\n  - [ ] a\n  - [ ] b\n"

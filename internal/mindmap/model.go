@@ -38,7 +38,7 @@ type Node struct {
 	Checkbox Checkbox // "", " " or "x"
 	Folded   bool     // subtree collapsed (runtime editor state; never serialized)
 	Heading  bool     // a `# Title` map root, serialized as a heading line
-	// Suffix is a short trailing annotation (e.g. a "[+3]"/"[2 replies]" fold
+	// Suffix is a short trailing annotation (e.g. a "[+3]" fold
 	// count) that is ALWAYS kept when the node is truncated: the base Text is
 	// clipped first, then the suffix appended, so it can never be cut off. Never
 	// serialized; used only by the TUI bridge. Empty by default (mm fixtures).

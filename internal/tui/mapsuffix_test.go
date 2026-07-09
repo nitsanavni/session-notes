@@ -31,7 +31,7 @@ func TestCollapsedSuffixSurvivesTruncation(t *testing.T) {
 	}
 }
 
-// TestReplySuffixSurvivesTruncation covers the "[N replies]" suffix on a long
+// TestReplySuffixSurvivesTruncation covers the reply-fold suffix on a long
 // default-view node, on BOTH sides of the map (side must not matter).
 func TestReplySuffixSurvivesTruncation(t *testing.T) {
 	// Two long-titled threads so one lands left and one right of center.
@@ -44,7 +44,7 @@ func TestReplySuffixSurvivesTruncation(t *testing.T) {
 	for _, base := range []string{longLabel + " one", longLabel + " two"} {
 		p := placementForText(t, m, base)
 		joined := strings.Join(p.Lines, "")
-		if !strings.Contains(joined, "[2 replies]") {
+		if !strings.Contains(joined, "[+2]") {
 			t.Errorf("node %q lost its reply suffix (side %d): %q", base, p.Side, p.Lines)
 		}
 		if p.Side < 0 {

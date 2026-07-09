@@ -130,7 +130,8 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
 - Layout: board rendered as sections; cursor moves across items; active section highlighted. The sticky header shows the title (frontmatter `title`, else session id, else path); when a `title` is set, a shortened session id (first 8 chars) is shown dimmed next to it (list header and map header) so the id stays visible.
 - Keys: `j/k` move · `tab`/`shift-tab` next/prev section · `a` add item to current section ·
   `space` cycle status `[ ]→[>]→[x]` · `!` toggle urgent · `d` delete item ·
-  `e` edit item inline (textinput) · `E` open board in `$EDITOR` (suspend TUI) ·
+  `e` edit item inline (textinput) · `T` edit the frontmatter title (empty clears it) ·
+  `E` open board in `$EDITOR` (suspend TUI) ·
   `o` open item's first `[[link]]` · `y` copy board file path to clipboard ·
   `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
 - Map view (`m`): the board as a center-outward mindmap (ported from mm — see
@@ -154,7 +155,7 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   reusing the list view's link machinery (a chooser overlay when the item has
   several links, then back to the map); sections and the center have no links.
   Node text is truncated to 40 display columns (unicode-width aware) with a `…`
-  so maps don't sprawl (the fold summary suffix — `[+N]`/`[N replies]` — is
+  so maps don't sprawl (the fold summary suffix — `[+N]` — is
   truncation-exempt: the base text is clipped first, then the suffix appended, so
   a collapsed node always shows its hidden-child count regardless of side or
   text length); the focused node's full text still shows in the detail
@@ -165,14 +166,17 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   collapsed**. Each press reveals more (the default view, then the full reply
   thread) until everything is shown, then one more press collapses the whole
   subtree to a single summary suffix — `[+N]` counting every hidden descendant,
-  or `[N replies]` when the hidden set is replies only. States that would render
+  always `[+N]`. States that would render
   identically are skipped, so a node with no replies just toggles
   default↔collapsed and a replies-only node toggles summary↔expanded. Nested fold
   state survives a parent's collapse/expand round trip. `a`/`e`/`space`/`D` edit
-  (sections aren't editable/markable/deletable); every mutation saves through the
+  (sections aren't editable/markable/deletable); on the center node `e` edits the
+  board title (same as `T` in the list view). Every mutation saves through the
   same locked write + rebase path as the list view and shares its undo history.
+  The title edit is a single-field, last-writer-wins op under the lock (no
+  per-item merge — the whole value is set absolutely on rebase).
   Conversational reply children (`user:`/`claude:` sub-bullets) render dim and, in
-  the default view, collapse into a `[N replies]` suffix on their parent. The
+  the default view, collapse into a `[+N]` suffix on their parent. The
   append-only `Log` section is excluded from the map by default (a "Log hidden ·
   M" footer hint shows when it is); `M` toggles it back on. When a move surprises
   you (focus didn't land where your fingers expected), `!` opens a prompt showing

@@ -169,6 +169,16 @@ func (it *Item) ToggleUrgent() {
 	}
 }
 
+// SetTitle sets the frontmatter title (the empty string clears it). Setting a
+// title on a board that had no frontmatter block promotes it to one so the title
+// actually renders; clearing on such a board leaves it frontmatter-less.
+func (b *Board) SetTitle(title string) {
+	b.Frontmatter.Title = title
+	if title != "" {
+		b.hadFrontmatter = true
+	}
+}
+
 // Section returns the section with the given title, or nil.
 func (b *Board) Section(title string) *Section {
 	for _, s := range b.Sections {

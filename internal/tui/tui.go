@@ -29,6 +29,7 @@ const (
 	modeInputLog
 	modeInputReply
 	modeInputCustomSection
+	modeInputTitle
 	modeAddSections
 	modeLinkPick
 	modeHelp
@@ -129,7 +130,7 @@ type model struct {
 	// mapFold holds, keyed by stable node key, each node's fold state in the
 	// unified three-state cycle (see foldState in mapview.go). Absent keys are
 	// foldDefault: non-reply children visible, reply children summarized into a
-	// "[N replies]" suffix. `enter` cycles a node collapsed -> default ->
+	// "[+N]" suffix. `enter` cycles a node collapsed -> default ->
 	// replies-expanded -> collapsed (skipping states that render identically).
 	mapFold map[string]foldState
 	// mapShowLog includes the append-only Log section in the map. It is excluded
@@ -543,7 +544,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) isInputMode() bool {
 	switch m.mode {
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection,
-		modeMapAdd, modeMapEdit, modeMapFeedback:
+		modeInputTitle, modeMapAdd, modeMapEdit, modeMapFeedback:
 		return true
 	}
 	return false
@@ -557,6 +558,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePickerKey(msg)
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
 		return m.handleInputKey(msg)
+	case modeInputTitle:
+		return m.handleTitleInputKey(msg)
 	case modeMapAdd, modeMapEdit:
 		return m.handleMapInputKey(msg)
 	case modeMapFeedback:
@@ -685,6 +688,8 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.target = it
 			m.startInput(modeInputEdit, it.DisplayText(), "edit item")
 		}
+	case "T":
+		m.startTitleInput()
 	case "R":
 		// Reply in-thread: on a reply the new message continues the conversation
 		// as a sibling (appended to the thread's parent); on a top-level item it
@@ -853,6 +858,52 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// setBoardTitle applies a (possibly empty) frontmatter title to b.
+func setBoardTitle(b *board.Board, title string) { b.SetTitle(strings.TrimSpace(title)) }
+
+// startTitleInput opens the inline title editor, pre-filled with the board's
+// current frontmatter title. Shared by the list view (T) and the map center (e).
+func (m *model) startTitleInput() {
+	cur := ""
+	if m.board != nil {
+		cur = m.board.Frontmatter.Title
+	}
+	m.startInput(modeInputTitle, cur, "board title (empty clears)")
+}
+
+// handleTitleInputKey drives the frontmatter-title editor. Enter saves the new
+// title through the same locked save+rebase path as every other mutation (an
+// empty value clears the title, so the header falls back to the session id).
+// Because the title is a single scalar field, the rebase op (opSetTitle) is
+// last-writer-wins under the lock rather than a per-item merge — documented on
+// applyOp's opSetTitle case.
+func (m *model) handleTitleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.mode = modeBoard
+		m.input.Blur()
+		m.reloadExternal()
+		return m, nil
+	case "enter":
+		text := strings.TrimSpace(m.input.Value())
+		m.mode = modeBoard
+		m.input.Blur()
+		// Unlike item text entry, an empty title is meaningful (it clears), so we
+		// do not early-return on "".
+		if m.board != nil && text == m.board.Frontmatter.Title {
+			return m, nil // no change: skip a no-op undo entry and save
+		}
+		m.snapshot()
+		setBoardTitle(m.board, text)
+		m.saveWithRebase(pendingOp{typ: opSetTitle, payload: text})
+		m.mp = nil // center node text changed -> re-layout the map
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
 // opType identifies a text-entry mutation that save-with-rebase can re-apply
 // onto a freshly-reparsed disk tree.
 type opType int
@@ -870,6 +921,7 @@ const (
 	opDeleteSection                // hard-delete a whole section
 	opAddSection                   // add one or more sections (idempotent)
 	opAddChild                     // append a plain child bullet under an existing item
+	opSetTitle                     // set the frontmatter title (absolute, last-writer-wins)
 )
 
 // pendingOp captures the one mutation a keystroke or inline input produced, in a
@@ -1013,6 +1065,14 @@ func applyOp(fresh *board.Board, op pendingOp) string {
 		}
 		fresh.AddItem(op.section, op.payload)
 		return "board changed, child target was gone — kept your text"
+	case opSetTitle:
+		// The frontmatter title is a single scalar field, so there is no per-item
+		// tree to rebase: whoever saves last under the lock wins. We set the value
+		// absolutely on the fresh disk tree (payload "" clears it). This overwrites
+		// a title an external writer may have set meanwhile, which is acceptable for
+		// a single-field, deliberate user edit — no text can be lost as with items.
+		setBoardTitle(fresh, op.payload)
+		return "board changed, title reapplied"
 	case opAddSection:
 		for _, title := range op.sections {
 			fresh.AddSection(title) // idempotent: existing titles are not duplicated
