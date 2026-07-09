@@ -110,6 +110,69 @@ func TestJournalSkipsNoopsAndTrims(t *testing.T) {
 	}
 }
 
+func TestSavePathsJournal(t *testing.T) {
+	path := journalBoard(t)
+
+	// SaveTo journals with SaveAuthor.
+	b, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.AddItem("Plan", "from the tui")
+	if err := b.Save(); err != nil {
+		t.Fatal(err)
+	}
+	h := History(path)
+	if len(h) != 1 || h[0].Author != "user" {
+		t.Fatalf("SaveTo journal: %+v", h)
+	}
+
+	// SaveRebasing journals both branches.
+	b2, _ := Load(path)
+	last := read(t, path)
+	b2.AddItem("Plan", "rebased in")
+	if _, err := b2.SaveRebasing(path, last, nil); err != nil {
+		t.Fatal(err)
+	}
+	if h = History(path); len(h) != 2 {
+		t.Fatalf("SaveRebasing journal: %d entries", len(h))
+	}
+
+	// Creating a fresh board (no file yet) journals nothing.
+	fresh := filepath.Join(t.TempDir(), "new.md")
+	nb := Parse("## Plan\n")
+	if err := nb.SaveTo(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := UndoDepths(fresh); u != 0 {
+		t.Fatal("board creation must not journal")
+	}
+
+	// So a TUI-style edit is undoable from the shared journal too.
+	if err := Undo(path); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(read(t, path), "rebased in") {
+		t.Fatal("undo did not revert the SaveRebasing write")
+	}
+}
+
+func TestDiffLines(t *testing.T) {
+	added, removed := DiffLines(
+		"## Plan\n- [ ] one\n- [ ] two\n",
+		"## Plan\n- [x] one\n- [ ] two\n- [ ] three\n")
+	wantAdd := []string{"- [x] one", "- [ ] three"}
+	wantDel := []string{"- [ ] one"}
+	if fmt.Sprint(added) != fmt.Sprint(wantAdd) || fmt.Sprint(removed) != fmt.Sprint(wantDel) {
+		t.Fatalf("added %v removed %v", added, removed)
+	}
+	// A moved line is a multiset no-op, and blank lines never show.
+	added, removed = DiffLines("a\n\nb\n", "b\n\na\n")
+	if len(added) != 0 || len(removed) != 0 {
+		t.Fatalf("move should diff empty: +%v -%v", added, removed)
+	}
+}
+
 func TestCorruptJournalDegradesGracefully(t *testing.T) {
 	path := journalBoard(t)
 	if err := os.WriteFile(UndoPath(path), []byte("not json"), 0o644); err != nil {

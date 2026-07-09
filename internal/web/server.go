@@ -79,6 +79,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/board/{id}/note/{name}", s.handleNoteGet)
 	mux.HandleFunc("POST /api/board/{id}/note/{name}", s.handleNotePut)
 	mux.HandleFunc("GET /api/board/{id}/raw", s.handleRaw)
+	mux.HandleFunc("GET /api/board/{id}/history", s.handleHistory)
 	return mux
 }
 
@@ -600,6 +601,31 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"content": string(data)})
+}
+
+// handleHistory returns the board's journaled edits as line-diff summaries,
+// newest first — the "what changed while I was away" timeline. Undone entries
+// are not history; they were reverted.
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	path := s.resolve(r.PathValue("id"))
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	type entryJSON struct {
+		Time    string   `json:"ts"`
+		Author  string   `json:"author"`
+		Added   []string `json:"added,omitempty"`
+		Removed []string `json:"removed,omitempty"`
+	}
+	entries := board.History(path)
+	out := make([]entryJSON, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		added, removed := board.DiffLines(e.Before, e.After)
+		out = append(out, entryJSON{Time: e.Time, Author: e.Author, Added: added, Removed: removed})
+	}
+	writeJSON(w, map[string]any{"entries": out})
 }
 
 // ---- side notes ----

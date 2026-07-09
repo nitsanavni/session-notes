@@ -155,19 +155,29 @@ atomic-write step — the CLI does not hand-roll a second lock protocol).
 
 `<board>.md.undo.json` (sidecar, like `.feedback.jsonl`) holds one undo
 timeline per board: `{undo: [entries], redo: [entries]}`, each entry the full
-before/after content plus author (`web`, `claude`) and timestamp, capped at
-100. It is read and written ONLY inside the board's advisory lock:
-`board.EditUnderLockJournaled(path, snapshot, author, transform)` journals any
-content-changing write (the web server and the edit CLI both use it), and
-`board.Undo`/`board.Redo` pop an entry, verify the board still reads exactly
-the state that entry left behind, and restore the other side — an intervening
-write from a non-journaling writer (TUI, `$EDITOR`, hooks) returns
+before/after content plus author and timestamp, capped at 100. It is read and
+written ONLY inside the board's advisory lock. EVERY writer journals:
+`board.EditUnderLockJournaled(path, snapshot, author, transform)` (web:
+author `web`; edit CLI: `claude`) and the `Save`/`SaveTo`/`SaveRebasing`
+paths (author `board.SaveAuthor` — the TUI's default `user`; hooks set
+`hook`). Board creation (no file yet) is not journaled — there is no state to
+undo back to. `board.Undo`/`board.Redo` pop an entry, verify the board still
+reads exactly the state that entry left behind, and restore the other side —
+an intervening unjournaled write (raw `$EDITOR` save) returns
 `ErrUndoConflict` (web: 409; CLI: exit non-zero) instead of clobbering it. A
-fresh journaled edit clears the redo line; a corrupt journal degrades to empty
-(history is a convenience — never worth failing a write over); no-op
+fresh journaled edit clears the redo line; a corrupt journal degrades to
+empty (history is a convenience — never worth failing a write over); no-op
 transforms are not journaled. `board.UndoDepths` backs the web UI's button
-states. The TUI keeps its richer in-memory undo (rebase-aware) for now; its
-writes simply make journal undo refuse, never lose data.
+states. The TUI keeps its richer in-memory undo (rebase-aware) for its own
+`u`; its writes are journaled like everyone's.
+
+History readers: `board.History` returns the undo stack oldest-first (undone
+entries are not history — they were reverted) and `board.DiffLines` summarizes
+an entry as added/removed lines (multiset diff — a moved line is a no-op;
+blank lines ignored). `session-notes history --board <p> | --session <id>
+[-n N]` prints the tail as compact diffs stamped with time + author (the
+catch-up command); the web serves `GET /api/board/{id}/history` (newest
+first) behind the `H` history view.
 
 ## Hooks behavior
 

@@ -43,6 +43,12 @@ func main() {
 		os.Exit(runEdit(args[1:]))
 	}
 
+	// History subcommand: print a board's journaled edits as compact diffs
+	// (the catch-up command for agents and returning humans). See history.go.
+	if len(args) >= 1 && args[0] == "history" {
+		os.Exit(runHistory(args[1:]))
+	}
+
 	// Pins subcommand: surface a board's pinned items outside the prompt path
 	// (monitors can call `pins --due` on the shared cadence). See pins.go.
 	if len(args) >= 1 && args[0] == "pins" {
@@ -269,6 +275,9 @@ Usage:
                                       log title replace undo redo.
                                       --refresh-snapshot <p> refreshes a
                                       monitor snapshot in-lock
+  session-notes history …             print a board's journaled edits as compact
+                                      line-diffs, oldest first (--board <path> or
+                                      --session <id>; -n <N> limits, default 20)
   session-notes pins [--due] …        print a board's pinned-item block (--board
                                       <path> or --session <id>); --due prints only
                                       when due on the re-injection cadence and

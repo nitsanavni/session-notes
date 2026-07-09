@@ -95,6 +95,7 @@ func readInput(r io.Reader) (*hookInput, bool) {
 // SessionStart handles the SessionStart hook: create the board if missing,
 // record the tmux pane mapping, and print the protocol blurb for Claude.
 func SessionStart(stdin io.Reader, stdout io.Writer) {
+	board.SaveAuthor = "hook" // attribute journal entries to the hook, not the user
 	in, ok := readInput(stdin)
 	if !ok {
 		return
@@ -339,6 +340,7 @@ func trackWip(wipPath string, current []string, now time.Time) int {
 // SessionEnd handles the SessionEnd hook: log the end and remove the pane
 // mapping if it points at this session.
 func SessionEnd(stdin io.Reader, stdout io.Writer) {
+	board.SaveAuthor = "hook" // attribute journal entries to the hook, not the user
 	in, ok := readInput(stdin)
 	if !ok {
 		return

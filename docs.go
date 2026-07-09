@@ -134,7 +134,11 @@ Why the lock: the user edits the file concurrently, so writes serialize on an
 exclusive flock of the sidecar "<board>.lock" (not the board — it is replaced by
 atomic rename each save). Do NOT hand-roll this; use the CLI.
 
-Read-side helper (not a write):
+Read-side helpers (not writes):
+  history --board <p> [-n N]    print the board's journaled edits as compact
+                                line-diffs, oldest first, stamped time+author.
+                                THE CATCH-UP COMMAND: after context compaction,
+                                read this instead of re-deriving what changed.
   pins [--due] --board <p>      print the board's pinned-item block. Plain: always
                                 print (silent when no pins). --due: print only when
                                 due on the re-injection cadence (default 15m, or the

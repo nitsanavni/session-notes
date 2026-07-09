@@ -188,6 +188,34 @@ func TestEditUndoRedo(t *testing.T) {
 	}
 }
 
+func TestHistoryCommand(t *testing.T) {
+	p := writeSample(t)
+	if code := runEdit([]string{"add", "Plan", "step one", "--board", p}); code != 0 {
+		t.Fatal("add 1")
+	}
+	if code := runEdit([]string{"status", "step one", "done", "--board", p}); code != 0 {
+		t.Fatal("status")
+	}
+
+	out := captureStdout(t, func() {
+		if code := runHistory([]string{"--board", p}); code != 0 {
+			t.Fatal("history failed")
+		}
+	})
+	if !strings.Contains(out, "claude") ||
+		!strings.Contains(out, "+ - [ ] step one") ||
+		!strings.Contains(out, "- - [ ] step one") ||
+		!strings.Contains(out, "+ - [x] step one") {
+		t.Fatalf("history output:\n%s", out)
+	}
+
+	// -n limits to the tail.
+	out = captureStdout(t, func() { runHistory([]string{"-n", "1", "--board", p}) })
+	if strings.Contains(out, "+ - [ ] step one") || !strings.Contains(out, "+ - [x] step one") {
+		t.Fatalf("history -n 1 output:\n%s", out)
+	}
+}
+
 func TestEditResolveBySession(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SESSION_NOTES_DIR", dir)

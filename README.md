@@ -379,11 +379,13 @@ you loaded: if Claude or the TUI wrote meanwhile, the save is refused and your
 text stays in the editor. `[[side-note]]` links open in the same kind of
 overlay (created on first save, seeded like the TUI); path-form links render
 inert — open those in your editor. Undo/redo walks the board's **shared undo
-journal** (`<board>.undo.json`, last 100 journaled edits): the web UI and
-Claude's `session-notes edit` record into one timeline, so `u` in the browser
-can revert Claude's CLI edit and `session-notes edit undo` can revert yours —
-and it survives server restarts. An undo that would overwrite an intervening
-write from a non-journaling writer (the TUI, `$EDITOR`) is refused instead.
+journal** (`<board>.md.undo.json`, last 100 journaled edits): every writer —
+the web UI, Claude's `session-notes edit`, the TUI, the hooks — records into
+one timeline, so `u` in the browser can revert Claude's CLI edit and
+`session-notes edit undo` can revert yours, surviving server restarts. An
+undo that would overwrite an intervening unjournaled write (a raw `$EDITOR`
+save) is refused instead. `H` opens the **history** view: the journal as a
+timeline of who changed what, each entry a compact added/removed line diff.
 
 Every write goes through the same advisory lock + atomic rename as the TUI and
 `session-notes edit`, so browser, terminal, and Claude can all edit the same
@@ -516,7 +518,14 @@ or `--session <id>` (resolved to `~/.claude/boards/<id>.md`). Every write is
 | `edit log <text>` | Append `- HH:MM claude: <text>` to Log (`--as <author>` overrides the author). |
 | `edit title <text>` | Set the frontmatter `title` (`""` clears it). |
 | `edit replace <old> <new>` | Exact first-occurrence string replace over the raw file — the escape hatch for anything the structural subcommands don't cover, and for reconciling conflict markers. Errors if `<old>` is not found. Quote multi-word arguments. |
-| `edit undo` / `edit redo` | Walk the board's shared undo journal (`<board>.undo.json`, last 100 journaled edits — the CLI's and the web UI's, one timeline). Refuses when the board changed through a non-journaling writer (TUI, `$EDITOR`) since the journaled edit, rather than clobbering it. |
+| `edit undo` / `edit redo` | Walk the board's shared undo journal (`<board>.md.undo.json`, last 100 journaled edits — CLI, web UI, TUI, and hooks, one timeline). Refuses when the board changed through an unjournaled write (raw `$EDITOR` save) since, rather than clobbering it. |
+
+Beyond `edit`, `session-notes history --board <path>` (or `--session <id>`;
+`-n <N>` limits, default 20) prints the journal as compact line-diffs, oldest
+first, each entry stamped with time and author (`user`, `claude`, `web`,
+`hook`) — the catch-up command: an agent whose context was compacted, or a
+human returning to a long session, reads the tail of `history` instead of
+re-deriving what changed.
 
 Pass `--refresh-snapshot <path>` to any of them to copy the freshly written
 content over `<path>` **inside the same lock**, right after the atomic replace.

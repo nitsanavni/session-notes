@@ -195,6 +195,26 @@ run({
     t.log('undo button lit from the shared journal');
   },
 
+  'H opens history showing who changed what': async t => {
+    const { execFileSync } = require('child_process');
+    await t.open();
+    await t.key('2');
+    await t.key('a');
+    await t.type('web item');
+    await t.key('Enter');
+    await t.waitBoardContains('- [ ] web item');
+    execFileSync(process.env.SN_BIN, ['edit', 'add', 'Plan', 'cli item', '--board', t.boardPath]);
+    await t.waitBoardContains('- [ ] cli item');
+    await t.page.click('body');
+    await t.key('H');
+    await t.page.waitForSelector('#histmodal.open');
+    const text = await t.page.textContent('#histlist');
+    t.assert(text.includes('claude') && text.includes('+ - [ ] cli item'), 'CLI edit attributed');
+    t.assert(text.includes('web') && text.includes('+ - [ ] web item'), 'web edit attributed');
+    // newest first: the cli entry appears before the web entry
+    t.assert(text.indexOf('cli item') < text.indexOf('web item'), 'newest first');
+  },
+
   'map: m toggles and selection carries over both ways': async t => {
     await t.open();
     await t.key('3'); // Threads head
