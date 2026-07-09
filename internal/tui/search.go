@@ -132,6 +132,24 @@ func (m *model) searchNext(dir int) bool {
 	return true
 }
 
+// endSearchFollow ends confirmed-search follow mode — and with it the match
+// highlighting — when the pressed key is anything other than the search verbs
+// themselves. After `enter` confirms a search, `n`/`N` step through matches and
+// `/` reopens the prompt; those keep search live. Any other board/map action
+// (a move, an edit, a fold, a mode switch, quit) clears searchActive and the
+// stored query, so highlighting disappears the moment the user does something
+// else. Esc's own clearing is handled in handleSearchKey (prompt) and the map's
+// focusOut path. A no-op while the prompt is open (modeSearch never reaches the
+// board/map key handlers).
+func (m *model) endSearchFollow(key string) {
+	switch key {
+	case "n", "N", "/":
+		return // the search verbs keep follow mode (and highlighting) alive
+	}
+	m.searchActive = false
+	m.searchQuery = ""
+}
+
 // setSearchStatus writes the "k/N matches" tally (1-based current index).
 func (m *model) setSearchStatus(total int) {
 	m.status = fmt.Sprintf("%d/%d matches", m.searchIdx+1, total)

@@ -710,6 +710,46 @@ func (m *model) mapMove(dir rune) {
 	}
 }
 
+// rememberChild records, for parentKey on the given side, that descent last came
+// from childKey — so a later re-entry of that branch returns to childKey instead
+// of the first child (mm's lastVisited). Per parent + side, session-scoped.
+func (m *model) rememberChild(parentKey string, side int, childKey string) {
+	if m.mapChildMem == nil {
+		m.mapChildMem = map[string]map[int]string{}
+	}
+	rec := m.mapChildMem[parentKey]
+	if rec == nil {
+		rec = map[int]string{}
+		m.mapChildMem[parentKey] = rec
+	}
+	rec[side] = childKey
+}
+
+// rememberedChild returns the remembered child key for parentKey on side, or "".
+func (m *model) rememberedChild(parentKey string, side int) string {
+	if rec := m.mapChildMem[parentKey]; rec != nil {
+		return rec[side]
+	}
+	return ""
+}
+
+// preferredChild picks which of parent's visible children on the given side to
+// land on when descending: the remembered one if it is still a visible child on
+// that side, otherwise fall back to fallback (the first child). parent is the
+// mindmap node whose stable key holds the memory.
+func (m *model) preferredChild(parent *mindmap.Node, side int, fallback *mindmap.Node) *mindmap.Node {
+	ms := m.mp
+	pkey := ms.keys[parent]
+	memKey := m.rememberedChild(pkey, side)
+	if memKey == "" {
+		return fallback
+	}
+	if n, ok := ms.nodeByKey[memKey]; ok && ms.parentOf(n) == parent && ms.sideOf(n) == side {
+		return n
+	}
+	return fallback
+}
+
 // setMapFocus points focus (and the persisted key) at a node.
 func (m *model) setMapFocus(n *mindmap.Node) {
 	if n == nil {
@@ -772,20 +812,27 @@ func (m *model) centerVertical(delta int) {
 func (m *model) mapLateral(dir int) {
 	ms := m.mp
 	if ms.focus == ms.root {
-		// From the center, enter the first child on the chosen side.
+		// From the center, enter that side's remembered branch (mm), falling back
+		// to the first child on the chosen side.
+		var first *mindmap.Node
 		for _, c := range ms.root.Children {
 			if ms.sideOf(c) == dir {
-				m.setMapFocus(c)
-				return
+				first = c
+				break
 			}
 		}
+		if first == nil {
+			return
+		}
+		m.setMapFocus(m.preferredChild(ms.root, dir, first))
 		return
 	}
 	side := ms.sideOf(ms.focus)
 	if side == dir {
-		// Outward, deeper into this node's own branch: its first visible child.
+		// Outward, deeper into this node's own branch: the remembered child (mm),
+		// else its first visible child.
 		if len(ms.focus.Children) > 0 {
-			m.setMapFocus(ms.focus.Children[0])
+			m.setMapFocus(m.preferredChild(ms.focus, dir, ms.focus.Children[0]))
 			return
 		}
 		// No visible children: the node may still have hidden ones (a collapsed
@@ -795,8 +842,13 @@ func (m *model) mapLateral(dir int) {
 		m.expandInto()
 		return
 	}
-	// Inward, toward the center: the parent.
-	m.setMapFocus(ms.parentOf(ms.focus))
+	// Inward, toward the center: the parent remembers which child (and side) we
+	// left, so re-descending returns here (mm's lastVisited).
+	parent := ms.parentOf(ms.focus)
+	if parent != nil {
+		m.rememberChild(ms.keys[parent], side, ms.keys[ms.focus])
+	}
+	m.setMapFocus(parent)
 }
 
 // expandInto handles a lateral away-from-center move onto a node with no visible
@@ -853,9 +905,10 @@ func (m *model) expandInto() {
 	}
 	m.mp = nil
 	m.ensureMap()
-	// Land on the first child the new fold state revealed, if any.
+	// Land on the child the new fold state revealed: the remembered one (mm's
+	// child memory composes with auto-expand), else the first.
 	if n, ok := m.mp.nodeByKey[key]; ok && len(n.Children) > 0 {
-		m.setMapFocus(n.Children[0])
+		m.setMapFocus(m.preferredChild(n, m.mp.sideOf(n), n.Children[0]))
 	} else {
 		// The step revealed a suffix but no child node (e.g. collapsed -> default
 		// on a replies-only node): keep focus on this node for the next press.
@@ -924,6 +977,7 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.ensureMap()
 	key := msg.String()
+	m.endSearchFollow(key)
 	// Surprise recorder: capture a replayable before-state for map actions so
 	// `!` can attach the recent trail to a feedback note (see feedback.go).
 	var before *feedbackState
@@ -1350,7 +1404,7 @@ var mapConnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 // mapNodeStyle is the base style for a node from its board ref, with the focus
 // overlay (a bright reverse-video bar, matching the list view's selection)
 // applied after so it is uniform across every status.
-func mapNodeStyle(ref mapRef, focus bool) lipgloss.Style {
+func mapNodeStyle(ref mapRef, focus, search bool) lipgloss.Style {
 	var base lipgloss.Style
 	switch ref.kind {
 	case refCenter:
@@ -1375,6 +1429,14 @@ func mapNodeStyle(ref mapRef, focus bool) lipgloss.Style {
 		default:
 			base = lipgloss.NewStyle()
 		}
+	}
+	// A node matching the active search is tinted (styleSearch), unless it is the
+	// focused node — the reverse-video focus bar wins there, as in the outline.
+	// The map layer groups cells by whole-node style id, so search highlighting is
+	// a whole-node tint here rather than a substring span (the outline does the
+	// substring accent).
+	if search && !focus {
+		base = base.Foreground(styleSearch.GetForeground())
 	}
 	if focus {
 		base = base.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
@@ -1436,11 +1498,13 @@ func (m *model) viewMap() string {
 		grid[i] = row
 		cellStyle[i] = ids
 	}
+	query := m.searchHighlight()
 	var styles []lipgloss.Style
 	for _, p := range layout.Placements {
 		ref := ms.refs[p.Node]
 		id := len(styles)
-		styles = append(styles, mapNodeStyle(ref, p.Node == ms.focus))
+		matched := ref.kind == refItem && ref.item != nil && itemMatchesSearch(ref.item, query)
+		styles = append(styles, mapNodeStyle(ref, p.Node == ms.focus, matched))
 		c0 := p.Col - layout.MinCol
 		top := p.Row - (p.Height-1)/2 - minRow
 		// Style every row of the node's block across its full width, so an

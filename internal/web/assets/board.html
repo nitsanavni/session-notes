@@ -157,7 +157,12 @@ body.mapmode #mapwrap { display: block; }
   border-radius: 6px; white-space: pre; font-size: .9em; cursor: pointer;
   max-width: none; line-height: 20px;
 }
+/* `w` wraps a node to multiple lines at ~40 cols instead of a single long line. */
+.mapnode.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 .mapnode.focus { border-color: var(--accent); background: var(--cursor); }
+/* search: matching items/nodes get a subtle outline; the matched substring a stronger tint. */
+.searchhit { outline: 1px dashed var(--accent); outline-offset: 1px; }
+.searchmark { background: var(--accent); color: var(--bg); border-radius: 2px; }
 .mapnode.center { font-weight: 700; }
 .mapnode.section { color: var(--accent); font-weight: 600; }
 .mapnode.reply { color: var(--dim); }
@@ -493,6 +498,7 @@ function itemNode(section, it) {
   if (it.urgent) text.append(el('span', { class: 'urgentflag' }, '!! '));
   if (it.pinned) text.append(el('span', { class: 'pinflag' }, '⚲ '));
   linkify(text, tintAuthor(text, it.text));
+  if (searchHit(it)) { row.classList.add('searchhit'); markSearch(text); }
   text.addEventListener('dblclick', () => act.edit(section, it, row));
   row.append(text);
 
@@ -863,8 +869,31 @@ function splitSides(children) {
 // Layout: measure (monospace estimate), stack subtrees vertically, columns
 // per depth per side. Node text truncates at 40 columns; the [+N] suffix is
 // truncation-exempt, like the TUI.
-const NODE_H = 24, GAP = 8, COL_GAP = 40, TRUNC = 40;
+const NODE_H = 24, LINE_H = 20, GAP = 8, COL_GAP = 40, TRUNC = 40;
 let CHAR_W = 8; // measured at first map render
+
+// wrapText word-wraps str to at most `width` columns, hard-breaking any single
+// word longer than the width. Mirrors the TUI's expanded-node wrapping (mindmap
+// Options{MaxWidth}), producing the multi-line node box `w` toggles.
+function wrapText(str, width) {
+  const lines = [];
+  let line = '';
+  const push = () => { if (line !== '') { lines.push(line); line = ''; } };
+  for (const word of str.split(' ')) {
+    let w = word;
+    // Hard-break an over-long word across lines.
+    while ([...w].length > width) {
+      push();
+      lines.push([...w].slice(0, width).join(''));
+      w = [...w].slice(width).join('');
+    }
+    if (line === '') line = w;
+    else if ([...line].length + 1 + [...w].length <= width) line += ' ' + w;
+    else { push(); line = w; }
+  }
+  push();
+  return lines.length ? lines : [''];
+}
 function measureCharW() {
   const r = el('span', { style: 'position:absolute;visibility:hidden;font-size:.9em;white-space:pre' }, 'M'.repeat(40));
   document.body.append(r);
@@ -873,14 +902,21 @@ function measureCharW() {
 }
 
 function mapLabel(n) {
-  let text = n.text;
-  // `w` expands the node: show its full text instead of the 40-col truncation.
-  if (!mapState.expanded[n.key] && [...text].length > TRUNC) text = [...text].slice(0, TRUNC - 1).join('') + '…';
+  const full = n.text;
+  let lines;
+  if (mapState.expanded[n.key]) {
+    // `w`: wrap the full text across multiple lines at ~40 cols (TUI parity).
+    lines = [...full].length > TRUNC ? wrapText(full, TRUNC) : [full];
+  } else if ([...full].length > TRUNC) {
+    lines = [[...full].slice(0, TRUNC - 1).join('') + '…']; // single truncated line
+  } else {
+    lines = [full];
+  }
   // [+N] counts only what THIS node hides (each shown child's subtree counts
   // as fully present — deeper folds carry their own suffix, like the TUI).
   const shown = visKids(n).reduce((s, c) => s + 1 + descCount(c), 0);
   const hidden = descCount(n) - shown;
-  return { text, suffix: hidden > 0 ? ` [+${hidden}]` : '' };
+  return { lines, text: lines.join('\n'), suffix: hidden > 0 ? ` [+${hidden}]` : '' };
 }
 
 function renderMap(b) {
@@ -909,14 +945,17 @@ function renderMap(b) {
   if ((mapState.folds[root.key] || 'default') === 'closed') mapState.folds[root.key] = 'default';
 
   // measure + place
-  const label = new Map(), width = new Map(), h = new Map();
+  const label = new Map(), width = new Map(), h = new Map(), ownH = new Map();
   const measure = n => {
     const l = mapLabel(n);
     label.set(n, l);
-    width.set(n, ([...l.text].length + [...l.suffix].length) * CHAR_W + 16);
+    // Longest line drives the box width; the [+N] suffix rides the last line.
+    const lineLen = (ln, i) => [...ln].length + (i === l.lines.length - 1 ? [...l.suffix].length : 0);
+    width.set(n, Math.max(...l.lines.map(lineLen)) * CHAR_W + 16);
+    ownH.set(n, Math.max(NODE_H, l.lines.length * LINE_H + 4));
     const kids = visKids(n);
     kids.forEach(measure);
-    h.set(n, Math.max(NODE_H, kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1)));
+    h.set(n, Math.max(ownH.get(n), kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1)));
   };
   measure(root);
 
@@ -966,7 +1005,7 @@ function renderMap(b) {
   walk(root, n => {
     const x = xOf(n), p = pos.get(n);
     minX = Math.min(minX, x); maxX = Math.max(maxX, x + width.get(n));
-    minY = Math.min(minY, p.cy - NODE_H / 2); maxY = Math.max(maxY, p.cy + NODE_H / 2);
+    minY = Math.min(minY, p.cy - ownH.get(n) / 2); maxY = Math.max(maxY, p.cy + ownH.get(n) / 2);
   });
   const PAD = 24, ox = PAD - minX, oy = PAD - minY;
   const canvas = document.getElementById('mapcanvas');
@@ -987,11 +1026,15 @@ function renderMap(b) {
       if (n.isReply) cls.push('reply');
       if (n.it.status === 'done') cls.push('done');
       if (n.it.urgent) cls.push('urgent');
+      if (searchHit(n.it)) cls.push('searchhit');
     }
+    if (l.lines.length > 1) cls.push('wrap'); // multi-line (w) node box
     if (n.key === mapState.focus) cls.push('focus');
-    const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - NODE_H / 2}px` });
+    const wStyle = l.lines.length > 1 ? `;width:${width.get(n)}px` : '';
+    const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - ownH.get(n) / 2}px${wStyle}` });
     d.append(tintAuthor(d, l.text)); // tints a leading claude:/user: token
     if (l.suffix) d.append(el('span', { class: 'suffix' }, l.suffix));
+    if (n.kind === 'item') markSearch(d); // tint matched substring during search
     d.addEventListener('click', () => { mapState.focus = n.key; renderMap(cur); });
     d.addEventListener('dblclick', () => mapEdit(n));
     canvas.append(d);
@@ -1107,6 +1150,34 @@ function mapSiblings(n) {
   if (n.parent.key === mapState.root) sibs = sibs.filter(s => sideSign(s) === sideSign(n));
   return sibs;
 }
+// --- child memory (mm's lastVisited): per parent node + side, the child that
+// descent last came from, so re-entering that branch returns there instead of
+// the first child. Keyed by stable node key -> side; session-scoped, not
+// persisted; falls back gracefully when the remembered child no longer exists.
+mapState.childMem = mapState.childMem || {};
+function rememberChildNav(parent, side, child) {
+  const rec = mapState.childMem[parent.key] || (mapState.childMem[parent.key] = {});
+  rec[side] = child.key;
+}
+// childMemPick returns the remembered child among `kids` for parent+side, else
+// the first (kids must already be the visible children on that side).
+function childMemPick(parent, side, kids) {
+  const memKey = (mapState.childMem[parent.key] || {})[side];
+  return kids.find(c => c.key === memKey) || kids[0];
+}
+// descendInto enters n's own branch (outward move): auto-unfolds a collapsed
+// node so its children show, then lands on the remembered child (else first).
+function descendInto(n, side, refocus) {
+  let kids = visKids(n);
+  if (!kids.length && n.children.length) {
+    // Collapsed (or replies-only default): step the fold toward visible so the
+    // descent lands on a child instead of dead-ending (TUI's expandInto).
+    const f = mapState.folds[n.key] || 'default';
+    mapState.folds[n.key] = f === 'closed' ? 'default' : 'all';
+    kids = visKids(n);
+  }
+  if (kids.length) refocus(childMemPick(n, side, kids).key);
+}
 const sideSign = n => {
   // Recover a node's side from its rendered position vs its parent.
   if (!n.el || !n.parent || !n.parent.el) return 1;
@@ -1114,6 +1185,8 @@ const sideSign = n => {
 };
 
 function handleMapKey(e) {
+  // A non-search action after a search clears the highlights (n/N/'/' keep them).
+  if (searchHL !== '' && !['n', 'N', '/'].includes(e.key)) endSearch();
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
     'Enter', 'f', 'b', 'e', 'a', 'w', ' ', '!', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
@@ -1139,12 +1212,12 @@ function handleMapKey(e) {
       // Without this, a focused (re-rooted) subtree traps nav to the right side.
       if (n.kind === 'center' || n.key === mapState.root) {
         const kids = visKids(n).filter(c => sideSign(c) === toward);
-        if (kids.length) refocus(kids[0].key);
+        if (kids.length) refocus(childMemPick(n, toward, kids).key);
         break;
       }
       const side = sideSign(n);
-      if (toward === side) { const kids = visKids(n); if (kids.length) refocus(kids[0].key); }
-      else if (n.parent) refocus(n.parent.key);
+      if (toward === side) descendInto(n, side, refocus);
+      else if (n.parent) { rememberChildNav(n.parent, side, n); refocus(n.parent.key); }
       break;
     }
     case 'Enter': if (n) cycleFold(n); break;
@@ -1202,6 +1275,45 @@ function handleMapKey(e) {
 // (map) are revealed on the way in, reusing the existing reveal machinery.
 let searchActive = false, searchQuery = '', searchIdx = 0;
 let searchSaveCursor = null, searchSaveMapFocus = null, searchSaveMapRoot = null;
+// searchHL is the substring currently highlighted across both views: the live
+// prompt text while typing, or the confirmed query while n/N stepping. Empty
+// clears all highlights. Kept separate from searchActive so highlights show
+// during typing (before Enter) too.
+let searchHL = '';
+
+// searchHit reports whether an item matches the active highlight query.
+function searchHit(it) {
+  return searchHL !== '' && !it.continuation && (it.text || '').toLowerCase().includes(searchHL.toLowerCase());
+}
+// markSearch wraps every occurrence of the highlight query inside container's
+// text nodes in a <span class="searchmark">, tinting the matched substring.
+function markSearch(container) {
+  if (searchHL === '') return;
+  const q = searchHL.toLowerCase();
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+    if (t.nodeValue.toLowerCase().includes(q)) targets.push(t);
+  }
+  for (const t of targets) {
+    const s = t.nodeValue, low = s.toLowerCase(), frag = document.createDocumentFragment();
+    let i = 0, at;
+    while ((at = low.indexOf(q, i)) !== -1) {
+      if (at > i) frag.append(s.slice(i, at));
+      frag.append(el('span', { class: 'searchmark' }, s.slice(at, at + q.length)));
+      i = at + q.length;
+    }
+    if (i < s.length) frag.append(s.slice(i));
+    t.replaceWith(frag);
+  }
+}
+// endSearch fully clears search highlighting and re-renders the active view.
+// Called when a non-search action follows a search (see the key handlers).
+function endSearch() {
+  if (!searchActive && searchHL === '' && searchQuery === '') return;
+  searchActive = false; searchHL = ''; searchQuery = '';
+  if (mapState.in) renderMap(cur); else renderOutline(cur);
+}
 
 // searchMatches: every non-continuation item whose text contains q (case-
 // insensitive), in document order across all sections, replies included.
@@ -1255,9 +1367,10 @@ function startSearch() {
   box.classList.add('open');
   inputsOpen++; // defer live SSE re-renders while typing, like the add/map inputs
   inp.oninput = () => {
+    searchHL = inp.value.trim(); // highlight live as you type
     const matches = searchMatches(inp.value);
     if (matches.length) { searchIdx = 0; jumpToMatch(matches[0]); setSearchStatus(matches.length); }
-    else if (inp.value.trim()) toast('no matches', true);
+    else { if (inp.value.trim()) toast('no matches', true); if (mapState.in) renderMap(cur); else renderOutline(cur); }
   };
   inp.onkeydown = e => {
     e.stopPropagation();
@@ -1280,16 +1393,19 @@ function confirmSearch(q) {
   searchQuery = (q || '').trim();
   const matches = searchMatches(searchQuery);
   if (!searchQuery || !matches.length) {
-    searchActive = false;
+    searchActive = false; searchHL = '';
     if (searchQuery) toast('no matches', true);
+    if (mapState.in) renderMap(cur); else renderOutline(cur);
     return;
   }
   searchActive = true;
+  searchHL = searchQuery; // keep matches highlighted while n/N steps
   setSearchStatus(matches.length); // current match is matches[searchIdx]
+  if (mapState.in) renderMap(cur); else renderOutline(cur);
 }
 
 function cancelSearch() {
-  searchActive = false; searchQuery = '';
+  searchActive = false; searchQuery = ''; searchHL = '';
   if (mapState.in) {
     mapState.root = searchSaveMapRoot; mapState.focus = searchSaveMapFocus;
     renderMap(cur);
@@ -1317,6 +1433,8 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape' || e.key === 'q') document.querySelectorAll('.modal.open .bar button:last-child, #helpclose').forEach(b => b.click());
     return;
   }
+  // A non-search action after a search clears the outline highlights.
+  if (searchHL !== '' && !['n', 'N', '/'].includes(e.key)) endSearch();
   if (mapState.in) { handleMapKey(e); return; }
   const s = cursorStop();
   const onItem = s && s.type === 'item';
@@ -1408,7 +1526,7 @@ window.__sn = {
   // index, total match count, and whether the prompt is open.
   get search() {
     return {
-      active: searchActive, query: searchQuery, idx: searchIdx,
+      active: searchActive, query: searchQuery, idx: searchIdx, hl: searchHL,
       matches: searchMatches(searchQuery).length,
       promptOpen: document.getElementById('searchprompt').classList.contains('open'),
     };

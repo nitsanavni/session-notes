@@ -148,7 +148,14 @@ type model struct {
 	// mapExpanded holds, keyed by stable node key, which nodes the user has
 	// expanded in place (the `w` toggle): rendered as a wrapped multi-line block
 	// instead of a single truncated line.
-	mapExpanded     map[string]bool
+	mapExpanded map[string]bool
+	// mapChildMem remembers, per parent node and per side, the stable key of the
+	// child that descent last came from, so re-entering that parent's branch (l/h
+	// through the center or outward) returns to that child instead of the first
+	// one. Keyed by parent stable key -> side (1 right, -1 left) -> child key.
+	// Session-scoped (not persisted); stale entries fall back gracefully when the
+	// child no longer maps. Mirrors mm's lastVisited WeakMap.
+	mapChildMem     map[string]map[int]string
 	mp              *mapState
 	mapInputParent  *board.Item // add-child target when adding under an item
 	mapInputItem    *board.Item // edit target
@@ -603,6 +610,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
+	m.endSearchFollow(msg.String())
 	switch msg.String() {
 	case "q", "esc":
 		// When the board was opened from the dashboard, q/esc returns there

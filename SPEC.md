@@ -228,7 +228,15 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   `k/N matches`), leaving `n`/`N` to step to the next/previous match, wrapping. `esc` cancels and
   restores the pre-search cursor/focus. A match hidden behind a collapsed section (outline) or a
   folded subtree (map) is revealed on the way in, reusing the same auto-expand machinery as ordinary
-  navigation. There is no separate highlighter — the match is shown by moving the selection onto it.
+  navigation. While a search is active — the prompt open, or confirmed with `n`/`N` still live — every
+  visible matching item is highlighted in both views: a subtle green whole-line/whole-node tint
+  (distinct from the reverse-video cursor/focus bar, which wins on the current selection), and, in the
+  outline, the matched substring itself is accented (bold underlined yellow) within the item text. The
+  map layer groups cells by whole-node style, so it tints the whole node rather than the substring.
+  Highlighting clears when the search ends: `esc` (in the prompt) closes search entirely; after `enter`
+  confirms, `n`/`N` keep search-follow mode (and the highlight) alive and `/` reopens the prompt, but
+  any other action — a move, an edit, a fold, a mode switch, quit — ends follow mode and clears the
+  highlight.
 - Long items render as a single line truncated with `…`; `w` toggles the item at the cursor
   to a wrapped multi-line block (continuation rows hang-indented to the text column, reply
   indent preserved) and back. The toggle is per item and lasts the session only, like the map's `w`.
@@ -246,7 +254,16 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   top-to-bottom, so up/down always reach the node visually above/below and never
   dive into a subtree or jump across the map; `h`/`l` (left/right) move along the
   parent/child axis — toward the center is the parent, away enters the branch at
-  its first child, so left/right cross between the two sides via the center.
+  its remembered child (see below), so left/right cross between the two sides via
+  the center. Descending toward a branch remembers where you last were:
+  ascending from a child to its parent records that child (per parent, and — for
+  the two-sided center — per side), and the next descent into that parent returns
+  to the remembered child instead of the first one. The memory is session-scoped
+  (not persisted) and falls back to the first child when the remembered one no
+  longer exists (matching mm's `lastVisited`; keyed by stable node key). A descent
+  into a fully-collapsed node (or a default node whose only children are its
+  hidden reply thread) auto-expands one fold step so the move lands on a child
+  rather than dead-ending — and still honours the remembered child.
   `f` focuses into the selected subtree (mm's focus feature): the map re-roots on
   that node — it becomes the center, its children fan out — with a breadcrumb
   trail (e.g. `board › Threads › port mm…`) rendered under the header naming the

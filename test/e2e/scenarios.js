@@ -224,11 +224,15 @@ run({
     let map = (await t.sn2()).map;
     t.assert(map.in, 'map mode entered');
     t.assert(map.focus === key, `map focused the outline cursor (got ${map.focus})`);
-    // Move toward the center: the parent. Which physical key that is depends
-    // on which side the balancer put Threads on, so try h then l.
-    await t.key('h');
+    // Move toward the center: the parent. Which physical key that is depends on
+    // which side the balancer put Threads on — read it from the layout (an
+    // outward press would instead auto-expand this node's folded reply child).
+    const side = await t.page.evaluate(() => {
+      const f = document.querySelector('.mapnode.focus'), c = document.querySelector('.mapnode.center');
+      return f.offsetLeft >= c.offsetLeft ? 1 : -1;
+    });
+    await t.key(side === 1 ? 'h' : 'l');
     map = (await t.sn2()).map;
-    if (map.focus !== 'sec:Threads') { await t.key('l'); map = (await t.sn2()).map; }
     t.assert(map.focus === 'sec:Threads', `toward-center reached parent (got ${map.focus})`);
     await t.key('m');
     await t.assertCursor('sec:Threads');
@@ -547,6 +551,82 @@ run({
     t.assert(t.file() === before, 'board unchanged by typed hotkey letters');
     const val = await t.page.$eval('#searchprompt input', i => i.value);
     t.assert(val === 'add design ??', `query captured verbatim (got ${JSON.stringify(val)})`);
+  },
+
+  // Which side of the center the focused map node sits on (1 right, -1 left),
+  // read from the rendered layout, so descent tests are side-agnostic.
+  // (defined inline per test via t.page.evaluate)
+
+  'map: descent returns to the child you came from (child memory)': async t => {
+    await t.open();
+    await t.key('2'); // Plan
+    await t.key('j'); await t.key('j'); // second item: wire sessions
+    await t.assertCursor('it:Plan:- [>] wire sessions through it');
+    await t.key('m');
+    const child = (await t.sn2()).map.focus;
+    t.assert(child === 'it:Plan:- [>] wire sessions through it', `map focus on the child (got ${child})`);
+    const side = await t.page.evaluate(() => {
+      const f = document.querySelector('.mapnode.focus'), c = document.querySelector('.mapnode.center');
+      return f.offsetLeft >= c.offsetLeft ? 1 : -1;
+    });
+    const inward = side === 1 ? 'h' : 'l', outward = side === 1 ? 'l' : 'h';
+    await t.key(inward); // ascend to the parent section (records the child)
+    t.assert((await t.sn2()).map.focus === 'sec:Plan', 'ascended to parent Plan');
+    await t.key(outward); // descend again
+    const got = (await t.sn2()).map.focus;
+    t.assert(got === child, `descent returned to the remembered child, not the first (got ${got})`);
+    // And it is NOT the first child.
+    t.assert(got !== 'it:Plan:- [x] extract middleware', 'did not fall to the first child');
+  },
+
+  'map: descending into a folded node auto-expands and lands on the child': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('j'); // auth refactor (has a hidden reply child)
+    await t.assertCursor('it:Threads:- [>] auth refactor — extracting middleware');
+    await t.key('m');
+    const replyKey = 'it:Threads:  - claude: extracted, tests green';
+    t.assert(!(await t.sn2()).map.nodes.includes(replyKey), 'reply hidden behind the default fold');
+    const side = await t.page.evaluate(() => {
+      const f = document.querySelector('.mapnode.focus'), c = document.querySelector('.mapnode.center');
+      return f.offsetLeft >= c.offsetLeft ? 1 : -1;
+    });
+    const outward = side === 1 ? 'l' : 'h';
+    await t.key(outward); // descend into the folded node
+    const map = (await t.sn2()).map;
+    t.assert(map.nodes.includes(replyKey), 'fold auto-expanded to reveal the child');
+    t.assert(map.focus === replyKey, `focus landed on the revealed child (got ${map.focus})`);
+  },
+
+  'map: w wraps a long node across multiple lines': async t => {
+    await t.open();
+    await t.key('5'); // Ideas
+    await t.key('j'); await t.key('j'); await t.key('j'); // the deliberately long idea
+    const key = await t.cursorKey();
+    t.assert(key.startsWith('it:Ideas:- this is a deliberately very long idea'), `on the long idea (got ${key})`);
+    await t.key('m');
+    const box1 = await t.page.locator('.mapnode.focus').boundingBox();
+    await t.key('w');
+    await t.page.waitForSelector('.mapnode.focus.wrap');
+    const box2 = await t.page.locator('.mapnode.focus').boundingBox();
+    t.assert(box2.height > box1.height * 1.5, `wrapped node grew taller (${Math.round(box1.height)} -> ${Math.round(box2.height)})`);
+    t.assert(box2.width <= box1.width, `wrapped node no wider than the truncated line (${Math.round(box1.width)} -> ${Math.round(box2.width)})`);
+  },
+
+  'search highlights all matches and clears when it closes': async t => {
+    await t.open();
+    await t.key('/');
+    await t.type('middleware');
+    await t.page.waitForSelector('.searchhit');
+    t.assert((await t.page.locator('.searchhit').count()) >= 2, 'multiple matches highlighted while typing');
+    t.assert((await t.page.locator('.searchmark').count()) >= 2, 'matched substrings tinted');
+    await t.key('Enter'); // confirm: highlights persist while n/N steps
+    await t.page.waitForSelector('.searchhit');
+    t.assert((await t.page.locator('.searchhit').count()) >= 2, 'matches stay highlighted after confirm');
+    await t.key('j'); // a non-search action clears the highlights
+    await t.page.waitForFunction(() => document.querySelectorAll('.searchhit').length === 0);
+    t.assert((await t.page.locator('.searchmark').count()) === 0, 'substring tints cleared too');
+    t.assert((await t.searchState()).hl === '', 'highlight query cleared');
   },
 
   'dashboard lists the board and enter opens it': async t => {

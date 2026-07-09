@@ -28,6 +28,15 @@ var (
 
 	styleAuthorClaude = lipgloss.NewStyle().Foreground(lipgloss.Color("208")) // orange — claude's turn
 	styleAuthorUser   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))  // blue — user's turn
+
+	// styleSearch tints a whole item/node that matches the active search — a
+	// subtle green foreground, distinct from the reverse-video cursor bar, applied
+	// only when the item is not itself the current selection/focus.
+	styleSearch = lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
+	// searchMatchFG is the accent foreground for the matched SUBSTRING within an
+	// item's text (stronger than the whole-line tint): a bold, underlined bright
+	// yellow span layered over whichever base style the segment already carries.
+	searchMatchFG = lipgloss.Color("228")
 )
 
 // linkDisplayRe matches [[name]] spans for display-only highlighting. It
@@ -41,6 +50,29 @@ var linkDisplayRe = regexp.MustCompile(`\[\[[^\[\]]+\]\]`)
 // included) is tinted; the match's full length tells wrapRows where the token
 // ends so the rest of the row renders as a plain sibling segment.
 var authorRe = regexp.MustCompile(`^(?:!!\s+)?(?:\d{2}:\d{2}\s+)?(claude|user):`)
+
+// searchHighlight returns the lowercased query whose matches should be
+// highlighted in the current render, or "" when nothing is highlighted. While
+// the prompt is open (modeSearch) the live input text drives it so highlighting
+// tracks the query keystroke-by-keystroke; once the prompt is confirmed the
+// stored searchQuery drives it for as long as search-follow mode (n/N) stays
+// live. Esc, or any board/map action other than n/N, clears searchActive and so
+// ends highlighting (see handleBoardKey / handleMapKey).
+func (m *model) searchHighlight() string {
+	if m.mode == modeSearch {
+		return strings.ToLower(strings.TrimSpace(m.input.Value()))
+	}
+	if m.searchActive {
+		return strings.ToLower(strings.TrimSpace(m.searchQuery))
+	}
+	return ""
+}
+
+// itemMatchesSearch reports whether it's display text contains the (already
+// lowercased) query, mirroring searchMatches' case-insensitive substring test.
+func itemMatchesSearch(it *board.Item, query string) bool {
+	return query != "" && strings.Contains(strings.ToLower(it.DisplayText()), query)
+}
 
 func statusMarker(s board.Status) string {
 	switch s {
@@ -383,7 +415,19 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	if selected {
 		style = style.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
 	}
-	return wrapRows(head, text, hang, m.width, style, m.listExpanded[it.Raw()])
+	// Search highlight: a matching item that is not itself the selection gets a
+	// subtle whole-line tint (styleSearch); the matched substring is accented on
+	// every matching item (selected or not) inside wrapRows.
+	query := m.searchHighlight()
+	matched := itemMatchesSearch(it, query)
+	if matched && !selected {
+		style = style.Foreground(styleSearch.GetForeground())
+	}
+	hlQuery := ""
+	if matched {
+		hlQuery = query
+	}
+	return wrapRows(head, text, hang, m.width, style, m.listExpanded[it.Raw()], hlQuery)
 }
 
 // wrapRows renders an item's text as display rows. By default the text is a
@@ -392,7 +436,7 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 // carries head (gutter + marker); continuation rows are padded with hang spaces
 // so wrapped text lines up under the text start. style is applied per row so the
 // whole block reads as one item.
-func wrapRows(head, text string, hang, width int, style lipgloss.Style, wrap bool) []string {
+func wrapRows(head, text string, hang, width int, style lipgloss.Style, wrap bool, query string) []string {
 	avail := width - hang
 	if avail < 1 {
 		avail = 1
@@ -407,12 +451,42 @@ func wrapRows(head, text string, hang, width int, style lipgloss.Style, wrap boo
 	pad := strings.Repeat(" ", hang)
 	for i, r := range rows {
 		if i == 0 {
-			out = append(out, head+renderRow0(r, style))
+			out = append(out, head+renderRow0(r, style, query))
 		} else {
-			out = append(out, pad+renderRowWithLinks(r, style))
+			out = append(out, pad+renderRowWithLinks(r, style, query))
 		}
 	}
 	return out
+}
+
+// highlightSegment renders a plain-text segment in style, accenting every
+// occurrence of query (already lowercased; "" means no highlight) with a bold,
+// underlined bright-yellow span derived from style so it inherits any selection
+// background. Occurrences are found case-insensitively over the segment's own
+// bytes; the display text is ASCII-oriented so byte offsets track columns.
+func highlightSegment(seg string, style lipgloss.Style, query string) string {
+	if query == "" || !strings.Contains(strings.ToLower(seg), query) {
+		return style.Render(seg)
+	}
+	matchStyle := style.Foreground(searchMatchFG).Bold(true).Underline(true)
+	low := strings.ToLower(seg)
+	var b strings.Builder
+	i := 0
+	for i < len(seg) {
+		j := strings.Index(low[i:], query)
+		if j < 0 {
+			b.WriteString(style.Render(seg[i:]))
+			break
+		}
+		start := i + j
+		end := start + len(query)
+		if start > i {
+			b.WriteString(style.Render(seg[i:start]))
+		}
+		b.WriteString(matchStyle.Render(seg[start:end]))
+		i = end
+	}
+	return b.String()
 }
 
 // renderRow0 renders the first wrapped row of an item. If the row opens with an
@@ -423,10 +497,10 @@ func wrapRows(head, text string, hang, width int, style lipgloss.Style, wrap boo
 // style is derived from the base style so it inherits the selection background
 // and any dim. Continuation rows never carry an author token, so they
 // call renderRowWithLinks directly.
-func renderRow0(row string, style lipgloss.Style) string {
+func renderRow0(row string, style lipgloss.Style, query string) string {
 	loc := authorRe.FindStringSubmatchIndex(row)
 	if loc == nil {
-		return renderRowWithLinks(row, style)
+		return renderRowWithLinks(row, style, query)
 	}
 	tokStart, tokEnd := loc[2], loc[3]
 	authorStyle := style.Foreground(styleAuthorUser.GetForeground())
@@ -435,11 +509,11 @@ func renderRow0(row string, style lipgloss.Style) string {
 	}
 	var b strings.Builder
 	if tokStart > 0 {
-		b.WriteString(style.Render(row[:tokStart]))
+		b.WriteString(highlightSegment(row[:tokStart], style, query))
 	}
-	b.WriteString(authorStyle.Render(row[tokStart:tokEnd]))
+	b.WriteString(highlightSegment(row[tokStart:tokEnd], authorStyle, query))
 	if tokEnd < len(row) {
-		b.WriteString(renderRowWithLinks(row[tokEnd:], style))
+		b.WriteString(renderRowWithLinks(row[tokEnd:], style, query))
 	}
 	return b.String()
 }
@@ -451,23 +525,23 @@ func renderRow0(row string, style lipgloss.Style) string {
 // self-contained styled string — concatenating sibling Render calls, never
 // nesting one inside another, which would let an inner reset code clobber the
 // outer style for the remainder of the row.
-func renderRowWithLinks(row string, style lipgloss.Style) string {
+func renderRowWithLinks(row string, style lipgloss.Style, query string) string {
 	locs := linkDisplayRe.FindAllStringIndex(row, -1)
 	if locs == nil {
-		return style.Render(row)
+		return highlightSegment(row, style, query)
 	}
 	linkStyle := style.Foreground(styleLink.GetForeground()).Underline(true)
 	var b strings.Builder
 	last := 0
 	for _, loc := range locs {
 		if loc[0] > last {
-			b.WriteString(style.Render(row[last:loc[0]]))
+			b.WriteString(highlightSegment(row[last:loc[0]], style, query))
 		}
-		b.WriteString(linkStyle.Render(row[loc[0]:loc[1]]))
+		b.WriteString(highlightSegment(row[loc[0]:loc[1]], linkStyle, query))
 		last = loc[1]
 	}
 	if last < len(row) {
-		b.WriteString(style.Render(row[last:]))
+		b.WriteString(highlightSegment(row[last:], style, query))
 	}
 	return b.String()
 }

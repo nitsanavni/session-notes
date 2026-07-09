@@ -1,11 +1,24 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/nitsanavni/session-notes/internal/board"
 )
+
+// forceColor forces a 256-color profile for the test's duration; the default
+// renderer strips color outside a TTY, so the highlight tests need this to see
+// the SGR sequences they assert on.
+func forceColor(t *testing.T) {
+	t.Helper()
+	orig := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(orig) })
+}
 
 // searchBoard has matches spread across sections and a reply thread so tests can
 // assert document-order iteration, replies included.
@@ -129,6 +142,71 @@ func TestSearchEscRestoresCursor(t *testing.T) {
 	}
 	if m.searchActive {
 		t.Error("esc should leave search inactive")
+	}
+}
+
+// searchTint is the SGR foreground for a whole matching line/node (color 120);
+// searchAccent (228) is the substring accent. Both appear only while search is
+// active, letting the highlight tests assert presence/absence.
+const (
+	searchTint   = "38;5;120"
+	searchAccent = "38;5;228"
+)
+
+func TestSearchHighlightOutline(t *testing.T) {
+	forceColor(t)
+	m := newTestModel(searchBoard, 80, 40)
+	// Live (prompt open): "alpha" matches three items; the cursor lands on the
+	// first, the other two get the whole-line tint, and the substring is accented.
+	typeSearch(m, "alpha")
+	out := m.viewBoard()
+	if !strings.Contains(out, searchTint) {
+		t.Errorf("expected whole-line search tint (%s) during active search:\n%q", searchTint, out)
+	}
+	if !strings.Contains(out, searchAccent) {
+		t.Errorf("expected matched-substring accent (%s) during active search:\n%q", searchAccent, out)
+	}
+	// Esc closes search entirely: the highlight clears.
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEsc})
+	out = m.viewBoard()
+	if strings.Contains(out, searchTint) || strings.Contains(out, searchAccent) {
+		t.Errorf("expected no search highlight after esc:\n%q", out)
+	}
+}
+
+func TestSearchHighlightClearsOnNav(t *testing.T) {
+	forceColor(t)
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter}) // confirm: n/N live, highlight stays
+	if !strings.Contains(m.viewBoard(), searchTint) {
+		t.Fatal("expected highlight to persist after enter (search-follow mode)")
+	}
+	// n keeps follow mode (and highlight) alive.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if !strings.Contains(m.viewBoard(), searchTint) {
+		t.Error("n should keep the highlight alive")
+	}
+	// Any other action (a move) ends follow mode and clears the highlight.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.searchActive {
+		t.Error("j should end search-follow mode")
+	}
+	if strings.Contains(m.viewBoard(), searchTint) {
+		t.Errorf("expected highlight cleared after a nav action:\n%q", m.viewBoard())
+	}
+}
+
+func TestSearchHighlightMap(t *testing.T) {
+	forceColor(t)
+	m := newMapModel(t, searchBoard, 120, 40)
+	typeSearch(m, "alpha") // focus lands on a match; other matches tint
+	if out := m.viewMap(); !strings.Contains(out, searchTint) {
+		t.Errorf("expected search tint (%s) in map during active search:\n%q", searchTint, out)
+	}
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if out := m.viewMap(); strings.Contains(out, searchTint) {
+		t.Errorf("expected no search tint in map after esc:\n%q", out)
 	}
 }
 
