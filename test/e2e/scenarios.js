@@ -171,6 +171,90 @@ run({
     await t.waitBoardContains('- [?] !! drop legacy endpoint');
   },
 
+  'map: m toggles and selection carries over both ways': async t => {
+    await t.open();
+    await t.key('3'); // Threads head
+    await t.key('j'); // first thread item
+    const key = await t.cursorKey();
+    await t.key('m');
+    let map = (await t.sn2()).map;
+    t.assert(map.in, 'map mode entered');
+    t.assert(map.focus === key, `map focused the outline cursor (got ${map.focus})`);
+    // Move toward the center: the parent. Which physical key that is depends
+    // on which side the balancer put Threads on, so try h then l.
+    await t.key('h');
+    map = (await t.sn2()).map;
+    if (map.focus !== 'sec:Threads') { await t.key('l'); map = (await t.sn2()).map; }
+    t.assert(map.focus === 'sec:Threads', `toward-center reached parent (got ${map.focus})`);
+    await t.key('m');
+    await t.assertCursor('sec:Threads');
+  },
+
+  'map: enter cycles fold states with [+N] suffix': async t => {
+    await t.open();
+    await t.key('3');
+    await t.key('j'); // thread with one reply
+    await t.key('m');
+    // default: reply (status-none child) hidden behind [+1]
+    let map = (await t.sn2()).map;
+    const replyKey = 'it:Threads:  - claude: extracted, tests green';
+    t.assert(!map.nodes.includes(replyKey), 'reply hidden in default view');
+    t.assert(await t.page.locator('.mapnode.focus .suffix').textContent() === ' [+1]', 'suffix [+1]');
+    await t.key('Enter'); // reveal replies
+    map = (await t.sn2()).map;
+    t.assert(map.nodes.includes(replyKey), 'reply shown after enter');
+    await t.key('Enter'); // collapse whole subtree
+    map = (await t.sn2()).map;
+    t.assert(!map.nodes.includes(replyKey), 'collapsed after second enter');
+    await t.key('Enter'); // back to default
+    map = (await t.sn2()).map;
+    t.assert(!map.nodes.includes(replyKey), 'default again');
+  },
+
+  'map: f focuses a subtree, b steps out': async t => {
+    await t.open();
+    await t.key('3'); // Threads head
+    await t.key('m');
+    await t.key('f'); // re-root on Threads
+    let map = (await t.sn2()).map;
+    t.assert(map.root === 'sec:Threads', `re-rooted (got ${map.root})`);
+    t.assert(map.focus.startsWith('it:Threads:'), 'focus on first child');
+    const crumb = await t.page.textContent('#mapcrumb');
+    t.assert(crumb.includes('Threads'), 'breadcrumb shows path');
+    await t.key('b');
+    map = (await t.sn2()).map;
+    t.assert(map.root === 'center', 'stepped back out');
+    t.assert(map.focus === 'sec:Threads', 'focus rests on the stepped-out node');
+  },
+
+  'map: edits work on the focused node': async t => {
+    await t.open();
+    await t.key('3');
+    await t.key('j');
+    await t.key('m');
+    await t.key(' '); // cycle [>] -> [x]
+    await t.waitBoardContains('- [x] auth refactor — extracting middleware');
+    await t.settled();
+    const map = (await t.sn2()).map;
+    t.assert(map.focus === 'it:Threads:- [x] auth refactor — extracting middleware',
+      `focus followed the status change (got ${map.focus})`);
+    await t.key('a'); // add child (fork)
+    await t.page.waitForSelector('#mapprompt.open');
+    await t.type('from the map');
+    await t.key('Enter');
+    await t.waitBoardContains('  - user: from the map');
+  },
+
+  'map: M toggles the Log ring': async t => {
+    await t.open();
+    await t.key('m');
+    let map = (await t.sn2()).map;
+    t.assert(!map.nodes.includes('sec:Log'), 'Log hidden by default');
+    await t.key('M');
+    map = (await t.sn2()).map;
+    t.assert(map.nodes.includes('sec:Log'), 'Log shown after M');
+  },
+
   'dashboard lists the board and enter opens it': async t => {
     await t.openDash();
     await t.key('j');
