@@ -30,7 +30,7 @@ plain Markdown file that both sides can safely edit at the same time.
 ├───────────────────────────────────────────────────────────────────────┤
 │ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
 │ d archive · D delete · enter expand · e edit · E $EDITOR · o open link ·│
-│ u undo · ctrl+r redo · L log · r reload · ? help · q quit                │
+│ u undo · ctrl+r redo · L log · m map view · r reload · ? help · q quit   │
 └───────────────────────────────────────────────────────────────────────┘
 ```
 

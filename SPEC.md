@@ -126,7 +126,13 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
 - Keys: `j/k` move · `tab`/`shift-tab` next/prev section · `a` add item to current section ·
   `space` cycle status `[ ]→[>]→[x]` · `!` toggle urgent · `d` delete item ·
   `e` edit item inline (textinput) · `E` open board in `$EDITOR` (suspend TUI) ·
-  `L` quick log entry · `r` reload · `q`/`esc` quit · `?` help.
+  `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
+- Map view (`m`): the board as a center-outward mindmap (ported from mm — see
+  docs/mm-port.md). Title at center, all `##` sections as the protected first ring,
+  items as subtrees. `hjkl`/arrows move focus spatially, `enter` folds a subtree,
+  `a`/`e`/`space`/`D` edit (sections aren't editable/markable/deletable); every
+  mutation saves through the same locked write + rebase path as the list view and
+  shares its undo history.
 - Live reload: watch the board file (fsnotify) and re-render on external change (Claude's
   edits appear live). Writes are atomic (temp file + rename) to avoid torn reads. While an
   inline input is open the reload is deferred (it must not touch the input buffer or the

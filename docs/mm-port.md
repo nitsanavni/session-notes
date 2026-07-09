@@ -75,3 +75,12 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   structural edits, marker cycle).
 - Phase 3: board specials — protected sections, reply styling, !! highlight,
   locked saves + concurrent-edit rebase wiring.
+
+## Status
+
+- Phase 1 landed (f81de40): internal/mindmap — model, layout, renderer;
+  byte-identical to mm on 7 golden fixtures.
+- Phase 2 landed (338c523): `m` toggles the interactive map view in the TUI;
+  spatial nav, folding, edits through the shared locked-save/rebase path.
+- Phase 3 in progress: reply-aware styling/collapse, Log exclusion toggle,
+  pane-resolution fallback.
