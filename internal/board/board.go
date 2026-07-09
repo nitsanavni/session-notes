@@ -51,7 +51,8 @@ func (s Status) marker() string {
 type Item struct {
 	Status   Status
 	Urgent   bool    // leading "!!" in the text
-	Text     string  // item text with status marker and "!!" stripped
+	Pinned   bool    // leading "!pin" in the text (re-injected on cadence)
+	Text     string  // item text with status marker and "!!"/"!pin" stripped
 	Children []*Item // nested items (replies), in document order
 	indent   string  // leading whitespace before the bullet
 	raw      string  // original line, used when the line is not a recognized item
@@ -140,6 +141,8 @@ func (it *Item) render() string {
 	}
 	if it.Urgent {
 		b.WriteString("!! ")
+	} else if it.Pinned {
+		b.WriteString("!pin ")
 	}
 	b.WriteString(it.Text)
 	return b.String()
@@ -296,6 +299,94 @@ func (b *Board) UrgentOpenItems() []*Item {
 		walk(s.Items)
 	}
 	return out
+}
+
+// PinnedItems returns all recognized items that are pinned and not done,
+// including nested replies, in document order. Pinned items are re-injected into
+// Claude's context on a cadence by the prompt-submit hook (see internal/hooks).
+func (b *Board) PinnedItems() []*Item {
+	var out []*Item
+	var walk func(items []*Item)
+	walk = func(items []*Item) {
+		for _, it := range items {
+			if it.parsed && it.Pinned && it.Status != StatusDone {
+				out = append(out, it)
+			}
+			walk(it.Children)
+		}
+	}
+	for _, s := range b.Sections {
+		walk(s.Items)
+	}
+	return out
+}
+
+// InProgressRawLines returns the verbatim source lines of every "[>]" item on
+// the board (any depth), in document order. The prompt-submit hook uses these
+// as stable per-item identities to age "[>]" items in its wip state file.
+func (b *Board) InProgressRawLines() []string {
+	var out []string
+	var walk func(items []*Item)
+	walk = func(items []*Item) {
+		for _, it := range items {
+			if it.parsed && it.Status == StatusInProgress {
+				out = append(out, it.Raw())
+			}
+			walk(it.Children)
+		}
+	}
+	for _, s := range b.Sections {
+		walk(s.Items)
+	}
+	return out
+}
+
+// UnansweredClaudeQuestions returns open ("[ ]") items whose text mentions
+// "@claude" but which have no "claude:"-authored reply anywhere in their
+// subtree — questions addressed to Claude that Claude has not answered yet.
+func (b *Board) UnansweredClaudeQuestions() []*Item {
+	var out []*Item
+	var hasClaudeReply func(items []*Item) bool
+	hasClaudeReply = func(items []*Item) bool {
+		for _, it := range items {
+			if it.parsed && strings.HasPrefix(strings.TrimSpace(it.Text), "claude:") {
+				return true
+			}
+			if hasClaudeReply(it.Children) {
+				return true
+			}
+		}
+		return false
+	}
+	var walk func(items []*Item)
+	walk = func(items []*Item) {
+		for _, it := range items {
+			if it.parsed && it.Status == StatusOpen && strings.Contains(it.Text, "@claude") && !hasClaudeReply(it.Children) {
+				out = append(out, it)
+			}
+			walk(it.Children)
+		}
+	}
+	for _, s := range b.Sections {
+		walk(s.Items)
+	}
+	return out
+}
+
+// WaitingOnUserCount reports the number of top-level recognized items in the
+// "Waiting on User" section (the human's attention queue), or 0 if absent.
+func (b *Board) WaitingOnUserCount() int {
+	s := b.Section("Waiting on User")
+	if s == nil {
+		return 0
+	}
+	n := 0
+	for _, it := range s.Items {
+		if it.parsed {
+			n++
+		}
+	}
+	return n
 }
 
 // AppendLog appends a log line "- HH:MM author: text" to the Log section,

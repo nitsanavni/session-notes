@@ -17,6 +17,7 @@ var (
 	styleCursor     = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
 	styleDone       = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Strikethrough(true)
 	styleUrgent     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	stylePin        = lipgloss.NewStyle().Foreground(lipgloss.Color("108")) // muted teal — calmer than urgent
 	styleBlocked    = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 	styleInProg     = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
 	styleDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
@@ -356,6 +357,8 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	text := it.DisplayText()
 	if it.Urgent {
 		text = "!! " + text
+	} else if it.Pinned {
+		text = "!pin " + text
 	}
 	// Status/urgency set the base foreground + decoration, independent of
 	// selection.
@@ -365,6 +368,8 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 		style = styleDone
 	case it.Urgent:
 		style = styleUrgent
+	case it.Pinned: // subtle, calmer than urgent
+		style = stylePin
 	case depth > 0: // replies read slightly dimmer than top-level items
 		style = styleDim
 	default:

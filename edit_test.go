@@ -211,3 +211,17 @@ func TestEditConcurrentWritersSerialize(t *testing.T) {
 		}
 	}
 }
+
+func TestEditAddLeadingStatusMarker(t *testing.T) {
+	path := writeSample(t)
+	if code := runEdit([]string{"add", "Plan", "[>] already in progress", "--board", path}); code != 0 {
+		t.Fatalf("add exited %d", code)
+	}
+	data := read(t, path)
+	if !strings.Contains(data, "- [>] already in progress") {
+		t.Fatalf("leading marker not honored:\n%s", data)
+	}
+	if strings.Contains(data, "[ ] [>]") {
+		t.Fatalf("double marker present:\n%s", data)
+	}
+}

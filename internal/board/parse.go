@@ -128,11 +128,22 @@ func parseLine(line string) *Item {
 		it.Status = StatusBlocked
 	}
 	text := m[3]
-	if rest, ok := strings.CutPrefix(text, "!! "); ok {
+	// Leading item markers are mutually exclusive and analogous: "!!" is urgent
+	// (inject once), "!pin" is pinned (re-inject on cadence). Strip whichever is
+	// present so the marker survives save round-trips via render() but never
+	// pollutes the display Text.
+	switch {
+	case strings.HasPrefix(text, "!! "):
 		it.Urgent = true
-		text = rest
-	} else if text == "!!" {
+		text = text[len("!! "):]
+	case text == "!!":
 		it.Urgent = true
+		text = ""
+	case strings.HasPrefix(text, "!pin "):
+		it.Pinned = true
+		text = text[len("!pin "):]
+	case text == "!pin":
+		it.Pinned = true
 		text = ""
 	}
 	it.Text = text

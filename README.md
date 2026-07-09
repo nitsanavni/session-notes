@@ -173,7 +173,15 @@ destroyed):
 - **Status**: `[ ]` open, `[>]` in progress, `[x]` done, `[?]` blocked. Plain `- `
   items are fine in Ideas/Log, which don't track status.
 - **Urgency**: a leading `!!` in the item text. Checking the box or removing `!!`
-  acknowledges it.
+  acknowledges it. Urgent open items are injected into Claude's context once, on
+  the next prompt (`hook prompt-submit`).
+- **Pin**: a leading `!pin` in the item text (mutually exclusive with `!!`, and
+  *not* urgent). Pinned items are **re-injected on a cadence** — whenever the
+  pinned set changes, or more than 35 minutes pass since the last injection — so
+  standing instructions (typically the Working Agreements section) survive long
+  sessions and context compaction. You type `!pin` into the item text; the TUI
+  renders it with a subtle, calmer indicator than `!!`. There is no per-pin
+  frequency knob — a single global cadence.
 - **Addressing**: `@claude` / `@user` anywhere in the text.
 - **Replies (threads)**: an item indented two spaces under another item is a
   forum-style reply to it. Rather than editing an item's text to answer it, add a
@@ -382,8 +390,18 @@ global, see Install):
 - **`hook prompt-submit`** — runs before each prompt is processed. If the board
   has unacknowledged `!!` (urgent) items, it prints them so they're injected into
   Claude's context on the spot, rather than waiting for Claude to notice them on
-  its own. It also prints a one-line notice if you've edited the board since
-  Claude last looked (tracked via `~/.claude/boards/.state/<session-id>.last-seen`).
+  its own. It then **re-injects pinned (`!pin`) items on a cadence** — when the
+  pinned set changed since the last injection, or >35 min elapsed (tracked via
+  `~/.claude/boards/.state/<session-id>.pins`, timestamp + content hash). It then
+  prints a one-line **coherence digest** when anything is off — `Board health: N
+  threads [>] untouched >2h · M questions @claude unanswered · K items in Waiting
+  on User` — showing only the nonzero clauses, and nothing when the board is
+  healthy. `[>]` age is tracked per raw line in
+  `~/.claude/boards/.state/<session-id>.wip` (an item leaves the file once it is
+  no longer `[>]`); "unanswered" means a `[ ]` item mentioning `@claude` with no
+  `claude:` reply. It also prints a one-line notice if you've edited the board
+  since Claude last looked (tracked via
+  `~/.claude/boards/.state/<session-id>.last-seen`).
 - **`hook session-end`** — appends an `end` line to the Log and cleans up the pane
   mapping if it still points at this session.
 
@@ -440,6 +458,23 @@ external writer must go through the CLI (or follow the same convention). Readers
 need no lock — the atomic rename keeps reads torn-free. The TUI additionally
 rebases an in-flight inline edit onto concurrent external writes rather than
 clobbering them.
+
+### On-demand docs
+
+The `session-start` blurb is deliberately small — the board path plus the handful
+of essential habits — and ends by pointing Claude at `session-notes docs <topic>`
+for the full recipes. This keeps every session's context lean while the detailed
+protocol stays one command away and versioned with the binary (so it never drifts
+from actual behavior). Topics:
+
+| Topic | Covers |
+| --- | --- |
+| `docs protocol` | Board conventions: sections, statuses, replies/threading, `[[links]]` (both forms), `!!`/`!pin`. |
+| `docs monitor` | The `Monitor` watcher recipe with self-edit suppression via `edit --refresh-snapshot`. |
+| `docs conflicts` | Reconciling `<<<<<<<`/`=======`/`>>>>>>>` markers under the lock with `edit replace`. |
+| `docs cli` | The `session-notes edit` subcommand reference. |
+
+Running `session-notes docs` with no topic (or an unknown one) lists the topics.
 
 ## Footprint — what lives outside this repo
 

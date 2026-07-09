@@ -43,6 +43,11 @@ func main() {
 		os.Exit(runEdit(args[1:]))
 	}
 
+	// Docs subcommand: print an on-demand protocol/recipe topic. See docs.go.
+	if len(args) >= 1 && args[0] == "docs" {
+		os.Exit(runDocs(args[1:]))
+	}
+
 	// The TUI surfaces the upgrade hint asynchronously off the UI thread; give
 	// it the installed version to compare against.
 	tui.Version = versionString()
@@ -252,6 +257,9 @@ Usage:
                                       --session <id>); subs: add reply status
                                       log title replace. --refresh-snapshot <p>
                                       refreshes a monitor snapshot in-lock
+  session-notes docs <topic>          print a protocol/recipe topic
+                                      (protocol|monitor|conflicts|cli); no topic
+                                      lists them
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook

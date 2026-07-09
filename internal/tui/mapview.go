@@ -115,6 +115,8 @@ func mapNodeText(it *board.Item) string {
 	}
 	if it.Urgent {
 		b.WriteString("!! ")
+	} else if it.Pinned {
+		b.WriteString("!pin ")
 	}
 	b.WriteString(it.Text)
 	return b.String()
@@ -1194,6 +1196,8 @@ func mapNodeStyle(ref mapRef, focus bool) lipgloss.Style {
 			base = styleDone
 		case it.Urgent:
 			base = styleUrgent
+		case it.Pinned:
+			base = stylePin
 		case isReplyItem(it): // conversational sub-bullets read dim
 			base = styleDim
 		case it.Status == board.StatusBlocked:

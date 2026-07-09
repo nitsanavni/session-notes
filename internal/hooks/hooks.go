@@ -6,15 +6,28 @@
 package hooks
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
 )
+
+// pinCadence is the maximum age of a pinned-item injection before the
+// prompt-submit hook re-injects the pins even when their content is unchanged.
+const pinCadence = 35 * time.Minute
+
+// wipStaleAfter is how long a "[>]" item must have been continuously in-progress
+// before the coherence digest flags it as untouched.
+const wipStaleAfter = 2 * time.Hour
 
 // hookInput is the subset of the Claude Code hook JSON we care about.
 type hookInput struct {
@@ -65,32 +78,16 @@ func SessionStart(stdin io.Reader, stdout io.Writer) {
 
 	fmt.Fprintf(stdout, `Session board: %s
 
-This session has a shared board (markdown) that you and the user both maintain:
-- Early on, set a short "title:" in the board frontmatter describing the task (e.g. "auth refactor") so dashboards/pickers show a name instead of a uuid.
-- Keep "Threads" and "Plan" up to date as you work (statuses: [ ] open, [>] in progress, [x] done, [?] blocked).
-- Answer questions addressed @claude in "Questions"; raise your own with "- [ ] question @user".
-- To answer or react to a specific item, append an indented sub-bullet reply under it, forum-style ("  - claude: text"), instead of rewriting the item's text inline. Replies nest 2 spaces per level.
-- Discussions run FLAT: continue a back-and-forth as sibling bullets at the same level; nest deeper only to fork a sub-topic off one specific message.
-- Append milestones to "Log" as "- HH:MM claude: text" (append-only).
-- WRITE THE BOARD WITH THE CLI, not by editing the file yourself. "session-notes edit <sub> --board %s [--refresh-snapshot <snap>] args…" does the whole locked read → modify → atomic-replace for you (same lock the TUI uses), so your write never clobbers the user's concurrent edit. Subcommands:
-    session-notes edit add <section> <text>       append a top-level item to a section
-    session-notes edit reply <query> <text>       append an indented reply under the first item matching <query>
-    session-notes edit status <query> <state>     set an item's checkbox (open|wip|done|blocked|none)
-    session-notes edit log <text>                 append "- HH:MM claude: <text>" to Log
-    session-notes edit title <text>               set the frontmatter title
-    session-notes edit replace <old> <new>        exact first-occurrence string replace (raw escape hatch)
-  Each write is silent on success and exits non-zero with a one-line reason on failure (missing section lists the sections; an unmatched query/old string says so).
-- The user edits the board live in a TUI; consider watching the file with the Monitor tool. Have the watch emit the diff itself so events carry the change and you don't need to re-read the file, e.g.:
-    cp %s snap; while true; do sleep 1; cmp -s %s snap && continue; diff -U0 snap %s | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp %s snap; done
-  To keep the watch from firing on YOUR OWN board edits, pass "--refresh-snapshot snap" to every "session-notes edit" call: it copies the new content over the snapshot inside the same lock, right after the atomic replace, so a watcher that also takes the lock around its compare-and-snapshot cycle only ever emits the user's edits.
-- [[link]] wiki-links on the board come in two forms, both opened with the o key in the TUI:
-  - [[name]] (a plain name, no slash) is a SIDE NOTE, resolved to "<boards-dir>/<session-id>.notes/name.md". For longer content (designs, scoping docs, research) write the file there and link it as [[name]]; opening a missing side note creates it.
-  - [[path/with/slash.md]] (contains a slash, or starts with ~/ or /) is a FILE PATH, resolved relative to the session cwd (~ expanded, absolute paths as-is). Use this to link real repo files like [[docs/foo.md]]; opening a path that doesn't exist shows an error rather than creating a stub.
-- Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
-- Preserve any content you don't understand; edit surgically.
-- If you see <<<<<<< / ======= / >>>>>>> conflict markers on the board, a merge needs reconciling: integrate BOTH sides, NEVER delete the user's text, remove the markers, and write the result with "session-notes edit replace <old> <new>" (or several) so it happens under the lock.
-- Why the CLI: the user edits this file concurrently, so writes must be serialized. "session-notes edit" takes an exclusive flock on the sidecar lock file "%s.lock" (NOT the board — the board is replaced by atomic rename each save), reads, modifies, writes a temp file, renames it over the board, and releases — the same lock the TUI uses, so your edits and the user's never clobber each other. Do NOT hand-roll this with your own flock script; use the CLI.
-`, path, path, path, path, path, path, path)
+This session has a shared markdown board you and the user both maintain:
+- Set a short "title:" in the frontmatter early (e.g. "auth refactor") so pickers show a name, not a uuid.
+- Keep Threads and Plan current as you work (statuses: [ ] open, [>] wip, [x] done, [?] blocked); append milestones to Log (append-only).
+- Reply forum-style: append an indented "  - claude: text" sub-bullet under an item rather than rewriting it. Discussions run FLAT (sibling bullets); nest deeper only to fork a sub-topic.
+- "!!" marks an item urgent (injected once, next prompt); "!pin" keeps an item re-injected on a cadence (good for working agreements). Both go in the item text.
+- WRITE THE BOARD VIA THE CLI, never by editing the file: "session-notes edit <add|reply|status|log|title|replace> --board %s [--refresh-snapshot <snap>] args…" does the whole locked read → modify → atomic-replace (the same lock the TUI uses), so your write never clobbers the user's concurrent edit.
+- The user edits live in a TUI; watch the board with the Monitor tool and pass --refresh-snapshot to every edit so the watch ignores your own writes.
+- Preserve content you don't understand; edit surgically.
+- Run "session-notes docs <topic>" (protocol|monitor|conflicts|cli) for the full recipes (reply/threading, [[links]], watcher setup, conflict reconciliation, edit reference).
+`, path, path)
 
 	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
 		fmt.Fprintf(stdout, "\nBoards from previous sessions in this project (read them for history/context if useful):\n")
@@ -163,6 +160,27 @@ func PromptSubmit(stdin io.Reader, stdout io.Writer) {
 		}
 	}
 
+	// Pinned items re-inject on a cadence: whenever their content changed since
+	// the last injection, or more than pinCadence has passed.
+	now := time.Now()
+	if pinned := b.PinnedItems(); len(pinned) > 0 {
+		texts := make([]string, len(pinned))
+		for i, it := range pinned {
+			texts[i] = it.DisplayText()
+		}
+		if pinsDue(pinsPath(in.SessionID), texts, now) {
+			fmt.Fprintf(stdout, "Pinned board items (reinjected on cadence):\n")
+			for _, t := range texts {
+				fmt.Fprintf(stdout, "- %s\n", t)
+			}
+		}
+	}
+
+	// Coherence digest: one cheap, deterministic health line.
+	if line := coherenceDigest(b, wipPath(in.SessionID), now); line != "" {
+		fmt.Fprintln(stdout, line)
+	}
+
 	statePath := lastSeenPath(in.SessionID)
 	if sfi, err := os.Stat(statePath); err != nil || fi.ModTime().After(sfi.ModTime()) {
 		if err == nil { // state exists and board is newer => it changed
@@ -170,6 +188,107 @@ func PromptSubmit(stdin io.Reader, stdout io.Writer) {
 		}
 	}
 	touch(statePath)
+}
+
+// pinsDue reports whether the pinned items (identified by texts) are due for
+// re-injection, updating the pins state file when they are. The state file holds
+// one line "<unix-ts>\t<hash>": injection is due when the file is missing, the
+// content hash changed, or now is more than pinCadence past the stored ts. On a
+// due result the file is rewritten with now + the current hash; otherwise it is
+// left untouched so staleness keeps accruing from the last real injection.
+func pinsDue(statePath string, texts []string, now time.Time) bool {
+	hash := hashTexts(texts)
+	due := true
+	if data, err := os.ReadFile(statePath); err == nil {
+		if ts, h, ok := strings.Cut(strings.TrimSpace(string(data)), "\t"); ok {
+			if h == hash {
+				if sec, perr := strconv.ParseInt(ts, 10, 64); perr == nil {
+					due = now.Sub(time.Unix(sec, 0)) > pinCadence
+				}
+			}
+		}
+	}
+	if due {
+		_ = os.MkdirAll(board.StateDir(), 0o755)
+		_ = os.WriteFile(statePath, []byte(fmt.Sprintf("%d\t%s\n", now.Unix(), hash)), 0o644)
+	}
+	return due
+}
+
+func hashTexts(texts []string) string {
+	h := sha256.Sum256([]byte(strings.Join(texts, "\n")))
+	return hex.EncodeToString(h[:])
+}
+
+// coherenceDigest returns a one-line board-health summary, or "" when every
+// count is zero. It also ages "[>]" items via the wip state file at wipPath.
+// Clauses (only nonzero ones appear):
+//   - N threads [>] untouched >2h (age tracked in the wip state file)
+//   - M questions @claude unanswered ([ ] items mentioning @claude, no claude: reply)
+//   - K items in Waiting on User
+func coherenceDigest(b *board.Board, wipPath string, now time.Time) string {
+	stale := trackWip(wipPath, b.InProgressRawLines(), now)
+	unanswered := len(b.UnansweredClaudeQuestions())
+	waiting := b.WaitingOnUserCount()
+
+	var clauses []string
+	if stale > 0 {
+		clauses = append(clauses, fmt.Sprintf("%d threads [>] untouched >2h", stale))
+	}
+	if unanswered > 0 {
+		clauses = append(clauses, fmt.Sprintf("%d questions @claude unanswered", unanswered))
+	}
+	if waiting > 0 {
+		clauses = append(clauses, fmt.Sprintf("%d items in Waiting on User", waiting))
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return "Board health: " + strings.Join(clauses, " · ")
+}
+
+// trackWip records the first-seen time of each currently-in-progress raw line in
+// the wip state file, drops lines that are no longer "[>]", and returns how many
+// surviving entries were first seen more than wipStaleAfter ago. The file holds
+// one "<unix-ts>\t<raw-line>" per line.
+func trackWip(wipPath string, current []string, now time.Time) int {
+	seen := map[string]int64{}
+	if f, err := os.Open(wipPath); err == nil {
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for sc.Scan() {
+			ts, raw, ok := strings.Cut(sc.Text(), "\t")
+			if !ok {
+				continue
+			}
+			if sec, perr := strconv.ParseInt(ts, 10, 64); perr == nil {
+				seen[raw] = sec
+			}
+		}
+		f.Close()
+	}
+
+	stale := 0
+	var sb strings.Builder
+	// Iterate current (document order) so the rewritten file stays ordered and
+	// only carries lines that are still in progress.
+	for _, raw := range current {
+		first, ok := seen[raw]
+		if !ok {
+			first = now.Unix()
+		}
+		fmt.Fprintf(&sb, "%d\t%s\n", first, raw)
+		if now.Sub(time.Unix(first, 0)) > wipStaleAfter {
+			stale++
+		}
+	}
+	if len(current) == 0 {
+		_ = os.Remove(wipPath)
+	} else {
+		_ = os.MkdirAll(board.StateDir(), 0o755)
+		_ = os.WriteFile(wipPath, []byte(sb.String()), 0o644)
+	}
+	return stale
 }
 
 // SessionEnd handles the SessionEnd hook: log the end and remove the pane
@@ -204,6 +323,16 @@ func SessionEnd(stdin io.Reader, stdout io.Writer) {
 
 func lastSeenPath(sessionID string) string {
 	return board.StateDir() + string(os.PathSeparator) + sessionID + ".last-seen"
+}
+
+// pinsPath is the pinned-item cadence state file (timestamp + content hash).
+func pinsPath(sessionID string) string {
+	return board.StateDir() + string(os.PathSeparator) + sessionID + ".pins"
+}
+
+// wipPath is the "[>]" age-tracking state file for the coherence digest.
+func wipPath(sessionID string) string {
+	return board.StateDir() + string(os.PathSeparator) + sessionID + ".wip"
 }
 
 func touch(path string) {

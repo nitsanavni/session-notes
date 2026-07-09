@@ -9,6 +9,7 @@ maintains it during the session via hooks + file watching.
 - `session-notes` (no args) — open the TUI for the current session's board.
 - `session-notes --pane <tmux-pane-id>` — resolve board via pane mapping (used by tmux keybind).
 - `session-notes --board <path>` — open a specific board file.
+- `session-notes docs <topic>` — print an on-demand protocol/recipe topic (`protocol`, `monitor`, `conflicts`, `cli`); no/unknown topic lists them. Versioned with the binary; keeps the session-start blurb small.
 - `session-notes hook session-start` — Claude Code SessionStart hook (JSON on stdin).
 - `session-notes hook session-end` — SessionEnd hook.
 - `session-notes hook prompt-submit` — UserPromptSubmit hook.
@@ -75,6 +76,7 @@ Item conventions (parse leniently; unknown lines are kept verbatim):
 
 - Status: `- [ ]` open · `- [>]` in progress · `- [x]` done · `- [?]` blocked. Plain `- ` items allowed (Ideas/Log).
 - Urgency: leading `!!` in the text. Removing `!!` or checking the box acknowledges it.
+- Pin: leading `!pin` in the text (mutually exclusive with `!!`, and NOT urgent). Pinned items are re-injected into Claude's context by `prompt-submit` on a cadence (see below). Rendered with a subtle, calmer indicator than `!!`.
 - Addressing: `@claude` / `@user` anywhere in the text.
 - Log is append-only, `- HH:MM author: text`.
 - Links: `[[name]]` (no slash) is a side note at `<boards-dir>/<session-id>.notes/name.md` (opening a missing one creates it). `[[path/with/slash.md]]` (contains `/`, or starts with `~/` or `/`) is a file path relative to the session cwd (`~` expanded, absolute as-is); opening a missing path errors rather than creating a stub. `o` opens the current item's first link.
@@ -150,12 +152,20 @@ atomic-write step — the CLI does not hand-roll a second lock protocol).
 - **session-start**: read `{session_id, cwd, ...}` from stdin JSON. Create
   `~/.claude/boards/<session-id>.md` from template if missing (frontmatter + empty sections,
   log line). If `$TMUX_PANE` set, write `panes/$TMUX_PANE.json`. Print to stdout a short
-  protocol blurb for Claude's context: board path + instructions (maintain Threads/Plan as
-  you work, answer/raise Questions, append Log on milestones, watch for user edits with the
-  Monitor tool, urgent items are injected automatically).
+  protocol blurb for Claude's context: board path + the essential habits only (title early,
+  maintain Threads/Plan, reply etiquette, `!!`/`!pin`, write via `session-notes edit`, watch
+  with the Monitor tool), ending with a pointer to `session-notes docs <topic>` for the full
+  recipes. Kept under ~12 lines so it doesn't bloat every session's context.
 - **prompt-submit**: read stdin JSON (has `session_id`). If the board has unchecked `!!`
-  items, print them to stdout (they enter Claude's context). Also print a one-line notice
-  if board mtime is newer than a `.last-seen` state file (then touch the state file:
+  items, print them to stdout (they enter Claude's context). Then re-inject pinned (`!pin`)
+  items when due — the pinned set changed since the last injection, or >35 min elapsed —
+  tracked via `~/.claude/boards/.state/<session-id>.pins` (timestamp + content hash). Then
+  print a one-line coherence digest ("Board health: N threads `[>]` untouched >2h · M
+  questions @claude unanswered · K items in Waiting on User"), only the nonzero clauses, and
+  only when at least one is nonzero — `[>]` age is tracked in
+  `~/.claude/boards/.state/<session-id>.wip` (first-seen time per raw `[>]` line; an item
+  leaves the file when it is no longer `[>]`). Also print a one-line notice if board mtime is
+  newer than a `.last-seen` state file (then touch the state file:
   `~/.claude/boards/.state/<session-id>.last-seen`).
 - **session-end**: append `- HH:MM end: session ended` to Log; delete the pane mapping file
   if it points at this session.

@@ -78,7 +78,14 @@ func runEdit(args []string) int {
 			if b.Section(rest[0]) == nil {
 				return fmt.Errorf("no section %q; sections: %s", rest[0], strings.Join(sectionTitles(b), ", "))
 			}
-			b.AddItem(rest[0], rest[1])
+			// A leading status marker in <text> ("[>] foo") sets the item's
+			// status instead of ending up as literal text after the default one.
+			text := rest[1]
+			it := b.AddItem(rest[0], text)
+			if st, remainder, ok := leadingStatus(text); ok {
+				it.Status = st
+				it.Text = remainder
+			}
 			return nil
 		})
 	case "reply":
@@ -221,4 +228,26 @@ func sectionTitles(b *board.Board) []string {
 func editErr(msg string) int {
 	fmt.Fprintln(os.Stderr, "session-notes:", msg)
 	return 2
+}
+
+// leadingStatus parses an explicit "[ ]/[>]/[x]/[?]" marker at the start of an
+// add's text, returning the status and the text without it.
+func leadingStatus(text string) (board.Status, string, bool) {
+	if len(text) < 4 || text[0] != '[' || text[2] != ']' || text[3] != ' ' {
+		return 0, "", false
+	}
+	var st board.Status
+	switch text[1] {
+	case ' ':
+		st = board.StatusOpen
+	case '>':
+		st = board.StatusInProgress
+	case 'x', 'X':
+		st = board.StatusDone
+	case '?':
+		st = board.StatusBlocked
+	default:
+		return 0, "", false
+	}
+	return st, text[4:], true
 }

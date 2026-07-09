@@ -945,3 +945,95 @@ func TestFindByTextInSection(t *testing.T) {
 		t.Errorf("missing section count = %d, want 0", n)
 	}
 }
+
+func TestPinnedParseRoundTripAndStrip(t *testing.T) {
+	src := `## Working Agreements
+- !pin always run gofmt before committing
+- [ ] !pin verify the build @claude
+- !! urgent not pinned
+- plain item
+
+## Plan
+- [>] !pin wip pinned
+`
+	b := Parse(src)
+	// Round-trip must preserve the !pin marker byte-for-byte (marker survives
+	// through Text-stripping and render, exactly like !!).
+	if got := b.Render(); got != src {
+		t.Fatalf("round-trip mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, src)
+	}
+
+	wa := b.Section("Working Agreements")
+	// Marker stripped from display Text.
+	if wa.Items[0].Text != "always run gofmt before committing" {
+		t.Errorf("Text = %q, marker not stripped", wa.Items[0].Text)
+	}
+	if !wa.Items[0].Pinned || wa.Items[0].Urgent {
+		t.Errorf("item0 Pinned=%v Urgent=%v, want pinned only", wa.Items[0].Pinned, wa.Items[0].Urgent)
+	}
+	// "!!" is urgent, not pinned (not conflated).
+	if wa.Items[2].Pinned || !wa.Items[2].Urgent {
+		t.Errorf("!! item: Pinned=%v Urgent=%v", wa.Items[2].Pinned, wa.Items[2].Urgent)
+	}
+	// Bare "!pin" (no text) parses as pinned with empty text.
+	bare := parseLine("- !pin")
+	if bare.Text != "" || !bare.Pinned {
+		t.Errorf("bare !pin: Text=%q Pinned=%v", bare.Text, bare.Pinned)
+	}
+}
+
+func TestPinnedItems(t *testing.T) {
+	b := Parse(`## Working Agreements
+- !pin agreement one
+- [ ] !pin agreement two @claude
+- [x] !pin done pinned
+- !! urgent
+- plain
+
+## Plan
+- [>] !pin wip pinned
+`)
+	pinned := b.PinnedItems()
+	var texts []string
+	for _, it := range pinned {
+		texts = append(texts, it.Text)
+	}
+	want := []string{"agreement one", "agreement two @claude", "wip pinned"}
+	if len(texts) != len(want) {
+		t.Fatalf("got %d pinned %v, want %d %v", len(texts), texts, len(want), want)
+	}
+	for i := range want {
+		if texts[i] != want[i] {
+			t.Errorf("pinned[%d] = %q, want %q", i, texts[i], want[i])
+		}
+	}
+}
+
+func TestCoherenceQueries(t *testing.T) {
+	b := Parse(`## Waiting on User
+- [ ] approve the plan
+- [ ] pick a color
+
+## Threads
+- [>] refactor auth
+- [>] migrate db
+- [ ] not wip
+
+## Questions
+- [ ] which db? @claude
+  - claude: postgres
+- [ ] deploy target? @claude
+- [x] done question @claude
+- [ ] no mention here
+`)
+	if got := len(b.InProgressRawLines()); got != 2 {
+		t.Errorf("InProgressRawLines = %d, want 2", got)
+	}
+	unanswered := b.UnansweredClaudeQuestions()
+	if len(unanswered) != 1 || unanswered[0].Text != "deploy target? @claude" {
+		t.Errorf("UnansweredClaudeQuestions = %v, want [deploy target?]", unanswered)
+	}
+	if got := b.WaitingOnUserCount(); got != 2 {
+		t.Errorf("WaitingOnUserCount = %d, want 2", got)
+	}
+}
