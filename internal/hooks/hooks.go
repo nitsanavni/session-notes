@@ -74,6 +74,7 @@ This session has a shared board (markdown) that you and the user both maintain:
 - Append milestones to "Log" as "- HH:MM claude: text" (append-only).
 - The user edits the board live in a TUI; consider watching the file with the Monitor tool. Have the watch emit the diff itself so events carry the change and you don't need to re-read the file, e.g.:
     cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp board snap; done
+  To keep the watch from firing on YOUR OWN board edits, refresh that snapshot as part of every write you make: inside the same locked write (see below), after renaming the temp file over the board, also copy the new content over the snapshot before releasing the lock. If the watcher also takes the lock around its compare-and-snapshot cycle, only the user's edits emit events. (Note: macOS has no flock(1) binary; use python3 fcntl.flock for both writer and watcher.)
 - Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
 - Preserve any content you don't understand; edit surgically.
 - If you see <<<<<<< / ======= / >>>>>>> conflict markers on the board, a merge needs reconciling: integrate BOTH sides, NEVER delete the user's text, remove the markers, and save under the lock (flock <board>.lock, then atomic replace).

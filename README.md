@@ -347,7 +347,10 @@ internal error they exit `0` silently rather than failing the hook.
 
 Beyond the hooks, Claude is expected to use the `Monitor` tool during the session
 to react promptly when you edit the board live (e.g. you drop a `!!` question or
-reprioritize a thread) — not just at the next prompt boundary.
+reprioritize a thread) — not just at the next prompt boundary. To avoid the watch
+echoing Claude's own edits back at it, the recommended setup has Claude refresh
+the watch's snapshot inside the same locked write it uses to edit the board, with
+the watcher diffing under the same lock — then only your edits emit events.
 
 **Write protocol (avoiding lost updates).** You and Claude edit the same file
 concurrently, so every writer serializes on an advisory lock. Before any
