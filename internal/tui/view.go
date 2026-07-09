@@ -380,19 +380,26 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	if selected {
 		style = style.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
 	}
-	return wrapRows(head, text, hang, m.width, style)
+	return wrapRows(head, text, hang, m.width, style, m.listExpanded[it.Raw()])
 }
 
-// wrapRows word-wraps text to the viewport width and returns one string per
-// visual row. The first row carries head (gutter + marker); continuation rows
-// are padded with hang spaces so wrapped text lines up under the text start.
-// style is applied per row so the whole block reads as one item.
-func wrapRows(head, text string, hang, width int, style lipgloss.Style) []string {
+// wrapRows renders an item's text as display rows. By default the text is a
+// single line, truncated with an ellipsis at the viewport width; when wrap is
+// set (the `w` toggle) it is soft-wrapped into multiple rows. The first row
+// carries head (gutter + marker); continuation rows are padded with hang spaces
+// so wrapped text lines up under the text start. style is applied per row so the
+// whole block reads as one item.
+func wrapRows(head, text string, hang, width int, style lipgloss.Style, wrap bool) []string {
 	avail := width - hang
 	if avail < 1 {
 		avail = 1
 	}
-	rows := strings.Split(ansi.Wrap(text, avail, ""), "\n")
+	var rows []string
+	if wrap {
+		rows = strings.Split(ansi.Wrap(text, avail, ""), "\n")
+	} else {
+		rows = []string{ansi.Truncate(text, avail, "…")}
+	}
 	out := make([]string, 0, len(rows))
 	pad := strings.Repeat(" ", hang)
 	for i, r := range rows {
@@ -493,7 +500,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · e edit · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · w wrap · e edit · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -516,6 +523,7 @@ func (m *model) viewHelp() string {
 		{"d", "archive item (or whole section) into ## Archive"},
 		{"D", "hard-delete item (or whole section) from the file"},
 		{"enter / l", "collapse / expand the section under the cursor (on its header)"},
+		{"w", "wrap the item at the cursor (toggle single-line <-> full multi-line)"},
 		{"e", "edit item inline (the bullet line only)"},
 		{"T", "edit the board title (frontmatter title:; empty clears it)"},
 		{"E", "open board in $EDITOR"},
@@ -556,7 +564,8 @@ func (m *model) viewHelp() string {
 		"to a single \"[+N]\" summary of everything hidden.",
 		"Continuation lines (indented text under a bullet, not \"- \") render verbatim as",
 		"part of that bullet's block — a single cursor stop. Author them with " + styleKey.Render("E") + " ($EDITOR).",
-		"Long lines soft-wrap; ASCII-art continuation lines clip at the edge, not wrap.",
+		"Long items show as one truncated line; " + styleKey.Render("w") + " wraps the one at the cursor to",
+		"its full height. ASCII-art continuation lines clip at the edge, never wrap.",
 		styleUrgent.Render("Urgent (!!)") + " open items are injected into Claude's context on your next prompt.",
 		styleLink.Render("[[name]]") + " in an item's text links to a side notes file; " + styleKey.Render("o") + " opens it in",
 		"$EDITOR, creating it (with a \"# name\" heading) if missing.",

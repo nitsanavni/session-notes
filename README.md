@@ -29,7 +29,7 @@ plain Markdown file that both sides can safely edit at the same time.
 │   21:42 claude: finished thread "fix flaky test"                        │
 ├───────────────────────────────────────────────────────────────────────┤
 │ j/k move · tab section · a add · R reply · space status · ! urgent ·    │
-│ d archive · D delete · enter expand · e edit · E $EDITOR · o open link ·│
+│ d archive · D delete · enter expand · w wrap · e edit · o open link ·   │
 │ y copy path · u undo · ctrl+r redo · L log · m map · r reload · ? · q    │
 └───────────────────────────────────────────────────────────────────────┘
 ```
@@ -167,7 +167,7 @@ destroyed):
   shortened session id, first 8 chars, dimmed, so the id stays visible in both
   the list and map views). Claude is nudged (by the
   `session-start` blurb) to set one early; you can also edit it from the TUI with
-  `T` (list view) or `e` on the map's center node — an empty value clears it, so
+  `T` (outline view) or `e` on the map's center node — an empty value clears it, so
   the header falls back to the session id. Any frontmatter keys the tool doesn't
   model are still preserved round-trip.
 - **Status**: `[ ]` open, `[>]` in progress, `[x]` done, `[?]` blocked. Plain `- `
@@ -212,9 +212,10 @@ destroyed):
   trimmed; lines wider than the viewport clip at the right edge rather than wrap.
   `d` deletes the bullet together with its continuation block and reply thread;
   `e` edits only the bullet line itself. Authoring multi-line content is done via
-  `E` (`$EDITOR`); there is no multi-line inline editor. Long single lines
-  (bullets, replies, log entries) soft-wrap to the viewport width, with wrapped
-  rows hanging-indented under where the text starts.
+  `E` (`$EDITOR`); there is no multi-line inline editor. Long items render as a
+  single line truncated with `…`; `w` toggles the item at the cursor to a wrapped
+  multi-line block (and back), with wrapped rows hanging-indented under where the
+  text starts.
 - **Log**: append-only, one line per entry, `- HH:MM author: text`.
 - **Archive**: a `## Archive` section holds items you've retired with `d` instead
   of deleting them. It's created on first use, placed just above `## Log` (or at

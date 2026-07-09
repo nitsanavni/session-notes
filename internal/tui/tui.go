@@ -81,6 +81,12 @@ type model struct {
 	// hidden-item count, and its items are skipped by cursor navigation.
 	collapsed map[string]bool
 
+	// listExpanded holds, keyed by item raw source line, which items the user has
+	// wrapped in place (the `w` toggle in the outline view): rendered as a wrapped
+	// multi-line block instead of a single truncated line. Session-only, like
+	// mapExpanded; an absent key means the default single-line (truncated) render.
+	listExpanded map[string]bool
+
 	input textinput.Model
 	// target is the item acted on by modeInputEdit / modeInputReply, captured
 	// when the input opens (the cursor may not move, but this is robust to it).
@@ -729,6 +735,20 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "reloaded"
 	case "m":
 		m.enterMap()
+	case "w":
+		// Toggle the cursor item between a single truncated line and a wrapped
+		// multi-line block. Session-only, keyed by the item's raw source line.
+		if it := m.currentItem(); it != nil {
+			if m.listExpanded == nil {
+				m.listExpanded = map[string]bool{}
+			}
+			key := it.Raw()
+			if m.listExpanded[key] {
+				delete(m.listExpanded, key)
+			} else {
+				m.listExpanded[key] = true
+			}
+		}
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp

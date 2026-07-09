@@ -75,6 +75,8 @@ func bodyRows(out string) []string {
 func TestLongLineWraps(t *testing.T) {
 	long := "this is a deliberately very long single line item that should soft wrap across several rows when the viewport is narrow"
 	m := newTestModel("## Threads\n- [ ] "+long+"\n", 40, 24)
+	focus(t, m, long)
+	m.handleBoardKey(keyPress("w")) // opt into wrap; items default to one truncated line
 	out := stripANSI(m.viewBoard())
 	// No visible body row may exceed the viewport width.
 	for _, line := range bodyRows(out) {
@@ -532,7 +534,8 @@ func TestWrappedItemNoHeaderSnap(t *testing.T) {
 			break
 		}
 	}
-	m.scroll = 3 // scrolled down, arrowing up
+	m.handleBoardKey(keyPress("w")) // wrap this item so it spans many rows
+	m.scroll = 3                    // scrolled down, arrowing up
 	out := stripANSI(m.viewBoard())
 
 	if m.scroll != 1 {

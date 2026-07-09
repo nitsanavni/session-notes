@@ -50,9 +50,9 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   text in a status/detail line (mm just grows very wide).
 - **Log section excluded by default** (append-only noise; toggleable).
 - **Locked saves + concurrent-edit rebase reused**: the map view saves through
-  `board.WithLock` and the same 3-way rebase the list view uses — Claude's
+  `board.WithLock` and the same 3-way rebase the outline view uses — Claude's
   concurrent edits merge instead of clobbering.
-- **View toggle**: one key switches list view ↔ map view on the same loaded
+- **View toggle**: one key switches outline view ↔ map view on the same loaded
   board (same undo history), rather than a separate binary.
 - **Pane-resolution fallback**: when a pane has no mapping (the "no board
   mapped to pane" you just hit), fall back to the newest board for the
@@ -62,9 +62,9 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
 
 1. **Editing from day one** — no read-only interim.
 2. **Bridge removed** — `scripts/boardmm` deleted; this port replaces it.
-3. **Keys**: list-view bindings win where the two overlap (a add, e edit,
+3. **Keys**: outline-view bindings win where the two overlap (a add, e edit,
    space status-cycle, d/D archive/delete, u/ctrl+r undo/redo, o open link);
-   mm's keys fill the gaps the list view doesn't have (hjkl spatial nav
+   mm's keys fill the gaps the outline view doesn't have (hjkl spatial nav
    across the map, enter collapse/expand subtree).
 
 ## Plan

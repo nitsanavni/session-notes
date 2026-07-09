@@ -645,13 +645,85 @@ func (m *model) mapLateral(dir int) {
 	side := ms.sideOf(ms.focus)
 	if side == dir {
 		// Outward, deeper into this node's own branch: its first visible child.
-		if !ms.focus.Folded && len(ms.focus.Children) > 0 {
+		if len(ms.focus.Children) > 0 {
 			m.setMapFocus(ms.focus.Children[0])
+			return
 		}
+		// No visible children: the node may still have hidden ones (a collapsed
+		// node, or a default node whose only children are its reply thread).
+		// Advance its fold one step toward visible and step onto the first newly
+		// revealed child, rather than dead-ending.
+		m.expandInto()
 		return
 	}
 	// Inward, toward the center: the parent.
 	m.setMapFocus(ms.parentOf(ms.focus))
+}
+
+// expandInto handles a lateral away-from-center move onto a node with no visible
+// children: it advances the node's fold state one step toward visible
+// (collapsed -> default; default -> replies-expanded only when the node has no
+// visible non-reply children, so mixed nodes are never over-expanded) and lands
+// focus on the first now-visible child. A fully-expanded or truly childless node
+// is a dead end (status message). The board mutation-free fold change re-layouts
+// the map like enter does.
+func (m *model) expandInto() {
+	ms := m.mp
+	ref := ms.refs[ms.focus]
+	var items []*board.Item
+	switch ref.kind {
+	case refItem:
+		items = ref.item.Children
+	case refSection:
+		if sec := m.board.Section(ref.section); sec != nil {
+			items = sec.Items
+		}
+	default:
+		return // the center has no branch to enter
+	}
+	if countDescendantsIn(items) == 0 {
+		m.status = "nothing to expand"
+		return
+	}
+	key := m.mapFocusKey
+	cur := m.mapFold[key]
+	var next foldState
+	switch cur {
+	case foldCollapsed:
+		next = foldDefault
+	case foldDefault:
+		// Only reveal the reply thread when there are no visible non-reply
+		// children — a mixed node already shows its non-reply children, so
+		// stepping into it would have landed on one above; don't over-expand it.
+		if hasNonReplyChild(items) || countRepliesIn(items) == 0 {
+			m.status = "already expanded"
+			return
+		}
+		next = foldRepliesExpanded
+	default: // foldRepliesExpanded: nothing left to reveal
+		m.status = "already expanded"
+		return
+	}
+	if m.mapFold == nil {
+		m.mapFold = map[string]foldState{}
+	}
+	if next == foldDefault {
+		delete(m.mapFold, key)
+	} else {
+		m.mapFold[key] = next
+	}
+	m.mp = nil
+	m.ensureMap()
+	// Land on the first child the new fold state revealed, if any.
+	if n, ok := m.mp.nodeByKey[key]; ok && len(n.Children) > 0 {
+		m.setMapFocus(n.Children[0])
+	} else {
+		// The step revealed a suffix but no child node (e.g. collapsed -> default
+		// on a replies-only node): keep focus on this node for the next press.
+		if n, ok := m.mp.nodeByKey[key]; ok {
+			m.setMapFocus(n)
+		}
+	}
 }
 
 // sideOf reports which side of the center a node sits on (1 right, -1 left, 0
@@ -1405,7 +1477,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · d archive (item/section) · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · d archive (item/section) · D delete · y copy path · M log · m outline · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

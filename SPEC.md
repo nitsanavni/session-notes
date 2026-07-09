@@ -127,13 +127,17 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
 
 ## TUI (bubbletea + lipgloss + bubbles)
 
-- Layout: board rendered as sections; cursor moves across items; active section highlighted. The sticky header shows the title (frontmatter `title`, else session id, else path); when a `title` is set, a shortened session id (first 8 chars) is shown dimmed next to it (list header and map header) so the id stays visible.
+- Layout: board rendered as sections; cursor moves across items; active section highlighted. The sticky header shows the title (frontmatter `title`, else session id, else path); when a `title` is set, a shortened session id (first 8 chars) is shown dimmed next to it (outline header and map header) so the id stays visible.
 - Keys: `j/k` move · `tab`/`shift-tab` next/prev section · `a` add item to current section ·
   `space` cycle status `[ ]→[>]→[x]` · `!` toggle urgent · `d` delete item ·
   `e` edit item inline (textinput) · `T` edit the frontmatter title (empty clears it) ·
   `E` open board in `$EDITOR` (suspend TUI) ·
   `o` open item's first `[[link]]` · `y` copy board file path to clipboard ·
+  `w` wrap the item at the cursor (single truncated line ↔ full multi-line block, session-only) ·
   `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
+- Long items render as a single line truncated with `…`; `w` toggles the item at the cursor
+  to a wrapped multi-line block (continuation rows hang-indented to the text column, reply
+  indent preserved) and back. The toggle is per item and lasts the session only, like the map's `w`.
 - Map view (`m`): the board as a center-outward mindmap (ported from mm — see
   docs/mm-port.md). Title at center, all `##` sections as the protected first ring,
   items as subtrees. Navigation is tree-structural (mm-style, not pixel-scored):
@@ -152,7 +156,7 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   board; folds, edits and navigation all work as normal within the focused
   subtree, and fold/expand state persists across re-rooting since it is keyed by
   stable node key. `o` opens a `[[wiki-link]]` on the focused item's text,
-  reusing the list view's link machinery (a chooser overlay when the item has
+  reusing the outline view's link machinery (a chooser overlay when the item has
   several links, then back to the map); sections and the center have no links.
   Node text is truncated to 40 display columns (unicode-width aware) with a `…`
   so maps don't sprawl (the fold summary suffix — `[+N]` — is
@@ -174,15 +178,15 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   archives, `D` deletes. Sections: `e` renames the heading (contents intact; a
   rename that would collide with an existing section is refused), `d` archives
   the whole section into `## Archive` (with the same Archive/Log guards as the
-  list view); sections still can't be marked (`space`) or hard-deleted (`D`) from
+  outline view); sections still can't be marked (`space`) or hard-deleted (`D`) from
   the map. On the center node `e` edits the board title (same as `T` in the list
   view) and `a` opens the add-sections overlay; the center is never markable,
   archivable, or deletable. A section rename replays by matching the OLD title in
   the fresh disk tree (no-op if it vanished); the map's fold/expand state is keyed
-  by section index so it follows a rename automatically, while the list view's
+  by section index so it follows a rename automatically, while the outline view's
   per-title collapse override is migrated to the new title (so state never leaks
   onto a later section that reuses the old name). Every mutation saves through the
-  same locked write + rebase path as the list view and shares its undo history.
+  same locked write + rebase path as the outline view and shares its undo history.
   The title edit is a single-field, last-writer-wins op under the lock (no
   per-item merge — the whole value is set absolutely on rebase).
   Conversational reply children (`user:`/`claude:` sub-bullets) render dim and, in
