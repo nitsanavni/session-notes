@@ -58,10 +58,20 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   mapped to pane" you just hit), fall back to the newest board for the
   project cwd / the picker, instead of exiting.
 
-## Open questions (also on the board)
+## Decisions (from the board)
 
-1. Map view read-only first (fast to land, edits stay in list view), or
-   editing from day one?
-2. Keep `scripts/boardmm` as a bridge until the port lands, or delete now?
-3. mm's interaction model (which keys, edit mode behavior) — mirror mm
-   exactly for muscle memory, or adopt the list view's keys for consistency?
+1. **Editing from day one** — no read-only interim.
+2. **Bridge removed** — `scripts/boardmm` deleted; this port replaces it.
+3. **Keys**: list-view bindings win where the two overlap (a add, e edit,
+   space status-cycle, d/D archive/delete, u/ctrl+r undo/redo, o open link);
+   mm's keys fill the gaps the list view doesn't have (hjkl spatial nav
+   across the map, enter collapse/expand subtree).
+
+## Plan
+
+- Phase 1: `internal/mindmap` — tree model + center-outward layout +
+  renderer, golden-tested against mm's own `tree` output.
+- Phase 2: interactive map view in the TUI behind a view toggle (nav,
+  structural edits, marker cycle).
+- Phase 3: board specials — protected sections, reply styling, !! highlight,
+  locked saves + concurrent-edit rebase wiring.
