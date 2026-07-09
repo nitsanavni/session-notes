@@ -7,6 +7,7 @@
 package web
 
 import (
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,7 @@ const (
 type Server struct {
 	extra map[string]string // board id -> explicit path
 	home  string            // board id "/" redirects to ("" = dashboard)
+	token string            // "" = no auth (loopback-only use)
 }
 
 // New returns an empty server; boards in board.BoardsDir() are always visible.
@@ -67,8 +69,62 @@ func (s *Server) Register(path string) (string, error) {
 // SetHome makes "/" redirect to the given board instead of the dashboard.
 func (s *Server) SetHome(id string) { s.home = id }
 
-// Handler returns the routing table.
+// SetToken gates every request behind a shared secret (see authWrap). Enables
+// binding beyond loopback: `serve --addr :port --token <t>`.
+func (s *Server) SetToken(t string) { s.token = t }
+
+// Handler returns the routing table, auth-wrapped when a token is set.
 func (s *Server) Handler() http.Handler {
+	var h http.Handler = s.routes()
+	if s.token != "" {
+		h = authWrap(s.token, h)
+	}
+	return h
+}
+
+// authCookie carries the token between requests once presented, so a single
+// tokened URL (http://host:port/?token=…) signs the whole browser session in
+// — EventSource and fetch can't set custom headers, but they send cookies.
+const authCookie = "session-notes-token"
+
+// authWrap admits a request that presents the token as a Bearer header, a
+// ?token= query parameter, or the cookie a previous tokened request set.
+// Comparisons are constant-time. Everything else gets 401 — including "/",
+// so an unauthenticated scan learns nothing about which boards exist.
+func authWrap(token string, next http.Handler) http.Handler {
+	ok := func(candidate string) bool {
+		return subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) == 1
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(authCookie); err == nil && ok(c.Value) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") && ok(strings.TrimPrefix(h, "Bearer ")) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if p := r.URL.Query().Get("token"); p != "" && ok(p) {
+			http.SetCookie(w, &http.Cookie{
+				Name: authCookie, Value: p, Path: "/",
+				HttpOnly: true, SameSite: http.SameSiteLaxMode,
+			})
+			// Strip the token from the visible URL so it doesn't linger in
+			// the address bar or get copied into shared links.
+			q := r.URL.Query()
+			q.Del("token")
+			clean := r.URL.Path
+			if len(q) > 0 {
+				clean += "?" + q.Encode()
+			}
+			http.Redirect(w, r, clean, http.StatusFound)
+			return
+		}
+		httpErr(w, http.StatusUnauthorized, "token required (Bearer header, ?token=, or the cookie a tokened visit sets)")
+	})
+}
+
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	mux.HandleFunc("GET /b/{id}", s.handleBoardPage)
@@ -394,7 +450,6 @@ type editReq struct {
 }
 
 var (
-	errNotFound = errors.New("item not found (board changed?)")
 	errBadReq   = errors.New("bad request")
 	errConflict = errors.New("conflict")
 )
@@ -446,145 +501,35 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, errNotFound), errors.Is(err, errConflict), errors.Is(err, board.ErrUndoConflict):
+	case errors.Is(err, board.ErrOpNotFound), errors.Is(err, errConflict), errors.Is(err, board.ErrUndoConflict):
 		httpErr(w, http.StatusConflict, err.Error())
-	case errors.Is(err, errBadReq), errors.Is(err, board.ErrUndoEmpty):
+	case errors.Is(err, errBadReq), errors.Is(err, board.ErrOpInvalid), errors.Is(err, board.ErrUndoEmpty):
 		httpErr(w, http.StatusBadRequest, err.Error())
 	default:
 		httpErr(w, http.StatusInternalServerError, err.Error())
 	}
 }
 
+// applyEdit translates the wire request into a board.Op and dispatches to
+// the shared op layer — the same dispatcher the edit CLI uses, so every verb
+// means one thing everywhere.
 func applyEdit(b *board.Board, req editReq) error {
-	locate := func() (*board.Item, error) {
-		if it := b.FindByRawInSection(req.Section, req.Raw); it != nil {
-			return it, nil
-		}
-		if it, n := b.FindByTextInSection(req.Section, board.NormalizeItemText(req.Raw)); n == 1 {
-			return it, nil
-		}
-		return nil, errNotFound
-	}
+	op := board.Op{Name: req.Op, Section: req.Section, Raw: req.Raw, Text: req.Text, Author: req.Author}
 	switch req.Op {
-	case "add":
-		if b.Section(req.Section) == nil {
-			return fmt.Errorf("%w: no section %q", errBadReq, req.Section)
-		}
-		if strings.TrimSpace(req.Text) == "" {
-			return fmt.Errorf("%w: empty text", errBadReq)
-		}
-		b.AddItem(req.Section, req.Text)
-	case "reply":
-		// In-thread semantics (the TUI's R): flat conversations. Fork nests.
-		it, err := locate()
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(req.Text) == "" {
-			return fmt.Errorf("%w: empty text", errBadReq)
-		}
-		b.ReplyFlat(it, req.Text)
-	case "fork":
-		it, err := locate()
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(req.Text) == "" {
-			return fmt.Errorf("%w: empty text", errBadReq)
-		}
-		b.AddReply(it, req.Text)
-	case "edit":
-		it, err := locate()
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(req.Text) == "" {
-			return fmt.Errorf("%w: empty text", errBadReq)
-		}
-		it.Text = req.Text
 	case "status":
-		it, err := locate()
-		if err != nil {
-			return err
-		}
 		st, ok := parseStatus(req.Status)
 		if !ok {
 			return fmt.Errorf("%w: unknown status %q", errBadReq, req.Status)
 		}
-		it.SetStatus(st)
+		op.Status = st
 	case "urgent":
-		it, err := locate()
-		if err != nil {
-			return err
-		}
 		if req.Urgent == nil {
 			return fmt.Errorf("%w: urgent flag required", errBadReq)
 		}
-		if it.Urgent != *req.Urgent {
-			it.ToggleUrgent()
-		}
-	case "archive":
-		it, err := locate()
-		if err != nil {
-			return err
-		}
-		if !b.ArchiveItem(it) {
-			return errNotFound
-		}
-	case "delete":
-		it, err := locate()
-		if err != nil {
-			return err
-		}
-		if !b.Remove(it) {
-			return errNotFound
-		}
-	case "log":
-		if strings.TrimSpace(req.Text) == "" {
-			return fmt.Errorf("%w: empty text", errBadReq)
-		}
-		author := req.Author
-		if author == "" {
-			author = "user"
-		}
-		b.AppendLog(author, req.Text)
-	case "title":
-		b.SetTitle(req.Text)
-	case "add-section":
-		title := strings.TrimSpace(req.Text)
-		if title == "" {
-			return fmt.Errorf("%w: empty section title", errBadReq)
-		}
-		if b.Section(title) != nil {
-			return fmt.Errorf("%w: section %q already exists", errBadReq, title)
-		}
-		b.AddSection(title)
-	case "rename-section":
-		sec := b.Section(req.Section)
-		if sec == nil {
-			return errNotFound
-		}
-		if !b.RenameSection(sec, strings.TrimSpace(req.Text)) {
-			return fmt.Errorf("%w: cannot rename to %q (empty or duplicate title)", errBadReq, req.Text)
-		}
-	case "archive-section":
-		sec := b.Section(req.Section)
-		if sec == nil {
-			return errNotFound
-		}
-		if !b.ArchiveSection(sec) {
-			return fmt.Errorf("%w: the %s section cannot be archived", errBadReq, req.Section)
-		}
-	case "delete-section":
-		sec := b.Section(req.Section)
-		if sec == nil {
-			return errNotFound
-		}
-		b.RemoveSection(sec)
-	default:
-		return fmt.Errorf("%w: unknown op %q", errBadReq, req.Op)
+		op.Urgent = *req.Urgent
 	}
-	return nil
+	_, err := board.Apply(b, op)
+	return err
 }
 
 // handleRaw returns the board's verbatim markdown, the source for the web

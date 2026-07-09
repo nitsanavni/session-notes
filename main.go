@@ -284,7 +284,10 @@ Usage:
                                       updates the shared state (for monitors)
   session-notes serve                 web UI (dashboard + boards) on
                                       127.0.0.1:7080; --addr <host:port> to
-                                      change, --board <path> to serve one board
+                                      change, --board <path> to serve one board.
+                                      Non-loopback binds need --token <t> (or
+                                      $SESSION_NOTES_TOKEN; Bearer/?token=/
+                                      cookie) or an explicit --insecure
   session-notes docs <topic>          print a protocol/recipe topic
                                       (protocol|monitor|conflicts|cli); no topic
                                       lists them

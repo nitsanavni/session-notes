@@ -59,7 +59,7 @@ func runEdit(args []string) int {
 	}
 
 	if len(pos) == 0 {
-		return editErr("usage: session-notes edit <add|reply|status|log|title|replace|undo|redo> [flags] args…")
+		return editErr("usage: session-notes edit <add|reply|fork|status|log|title|replace|undo|redo> [flags] args…")
 	}
 	sub := pos[0]
 	rest := pos[1:]
@@ -74,35 +74,19 @@ func runEdit(args []string) int {
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit add <section> <text>")
 		}
-		return editStructural(path, snapshot, func(b *board.Board) error {
-			if b.Section(rest[0]) == nil {
-				return fmt.Errorf("no section %q; sections: %s", rest[0], strings.Join(sectionTitles(b), ", "))
-			}
-			// A leading status marker in <text> ("[>] foo") sets the item's
-			// status instead of ending up as literal text after the default one.
-			text := rest[1]
-			it := b.AddItem(rest[0], text)
-			if st, remainder, ok := leadingStatus(text); ok {
-				it.Status = st
-				it.Text = remainder
-			}
-			return nil
-		})
+		return editApplyOp(path, snapshot, board.Op{Name: "add", Section: rest[0], Text: rest[1]})
 	case "reply":
+		// In-thread semantics via the shared op layer: replying to a reply
+		// continues the conversation flat; use fork to nest deliberately.
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit reply <query> <text>")
 		}
-		return editStructural(path, snapshot, func(b *board.Board) error {
-			it, n := b.FindByQuery(rest[0])
-			if n == 0 {
-				return fmt.Errorf("no item matching %q", rest[0])
-			}
-			if n > 1 {
-				fmt.Fprintf(os.Stderr, "session-notes: %d items match %q; replying under the first\n", n, rest[0])
-			}
-			b.AddReply(it, rest[1])
-			return nil
-		})
+		return editApplyOp(path, snapshot, board.Op{Name: "reply", Query: rest[0], Text: rest[1]})
+	case "fork":
+		if len(rest) != 2 {
+			return editErr("usage: session-notes edit fork <query> <text>")
+		}
+		return editApplyOp(path, snapshot, board.Op{Name: "fork", Query: rest[0], Text: rest[1]})
 	case "status":
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit status <query> <open|wip|done|blocked|none>")
@@ -111,17 +95,7 @@ func runEdit(args []string) int {
 		if !ok {
 			return editErr(fmt.Sprintf("unknown status %q; use open|wip|done|blocked|none", rest[1]))
 		}
-		return editStructural(path, snapshot, func(b *board.Board) error {
-			it, n := b.FindByQuery(rest[0])
-			if n == 0 {
-				return fmt.Errorf("no item matching %q", rest[0])
-			}
-			if n > 1 {
-				fmt.Fprintf(os.Stderr, "session-notes: %d items match %q; updating the first\n", n, rest[0])
-			}
-			it.SetStatus(st)
-			return nil
-		})
+		return editApplyOp(path, snapshot, board.Op{Name: "status", Query: rest[0], Status: st})
 	case "log":
 		if len(rest) != 1 {
 			return editErr("usage: session-notes edit log <text>")
@@ -129,18 +103,12 @@ func runEdit(args []string) int {
 		if author == "" {
 			author = "claude"
 		}
-		return editStructural(path, snapshot, func(b *board.Board) error {
-			b.AppendLog(author, rest[0])
-			return nil
-		})
+		return editApplyOp(path, snapshot, board.Op{Name: "log", Text: rest[0], Author: author})
 	case "title":
 		if len(rest) != 1 {
 			return editErr("usage: session-notes edit title <text>")
 		}
-		return editStructural(path, snapshot, func(b *board.Board) error {
-			b.SetTitle(rest[0])
-			return nil
-		})
+		return editApplyOp(path, snapshot, board.Op{Name: "title", Text: rest[0]})
 	case "replace":
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit replace <old> <new>")
@@ -175,16 +143,19 @@ func runEdit(args []string) int {
 	}
 }
 
-// editStructural runs a parse → mutate → render write of the board at path under
-// the lock, refreshing snapshot when set. mutate operates on the freshly-parsed
-// board; returning an error aborts the write. Every write is journaled into the
-// board's shared undo timeline (author "claude"), so `edit undo` can revert it.
-func editStructural(path, snapshot string, mutate func(*board.Board) error) int {
+// editApplyOp runs one op through the shared board.Apply dispatcher inside a
+// journaled, locked write (author "claude"), printing any advisory note
+// ("N items match; using the first") to stderr.
+func editApplyOp(path, snapshot string, op board.Op) int {
 	err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
 		b := board.Parse(content)
 		b.Path = path
-		if err := mutate(b); err != nil {
-			return "", err
+		note, aerr := board.Apply(b, op)
+		if note != "" {
+			fmt.Fprintln(os.Stderr, "session-notes:", note)
+		}
+		if aerr != nil {
+			return "", aerr
 		}
 		return b.Render(), nil
 	})
@@ -233,37 +204,7 @@ func parseState(s string) (board.Status, bool) {
 	return board.StatusNone, false
 }
 
-func sectionTitles(b *board.Board) []string {
-	out := make([]string, 0, len(b.Sections))
-	for _, s := range b.Sections {
-		out = append(out, s.Title)
-	}
-	return out
-}
-
 func editErr(msg string) int {
 	fmt.Fprintln(os.Stderr, "session-notes:", msg)
 	return 2
-}
-
-// leadingStatus parses an explicit "[ ]/[>]/[x]/[?]" marker at the start of an
-// add's text, returning the status and the text without it.
-func leadingStatus(text string) (board.Status, string, bool) {
-	if len(text) < 4 || text[0] != '[' || text[2] != ']' || text[3] != ' ' {
-		return 0, "", false
-	}
-	var st board.Status
-	switch text[1] {
-	case ' ':
-		st = board.StatusOpen
-	case '>':
-		st = board.StatusInProgress
-	case 'x', 'X':
-		st = board.StatusDone
-	case '?':
-		st = board.StatusBlocked
-	default:
-		return 0, "", false
-	}
-	return st, text[4:], true
 }

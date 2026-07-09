@@ -412,10 +412,23 @@ suffix is truncation-exempt and counts only what that node hides.
 Not (yet) in the web UI: opening path-form `[[links]]`.
 The web UI has a browser e2e suite — `./test/e2e/run.sh` (see CLAUDE.md).
 
-The server binds `127.0.0.1` and has **no auth** — anyone who can reach it can
-read and edit your boards (it warns when you bind a non-loopback address). To
-use it from another machine or a phone, tunnel instead of exposing it:
-`ssh -L 7080:localhost:7080 yourbox`, or a tailnet address.
+**Access control.** The server binds `127.0.0.1` by default and needs nothing
+there. To use it from another machine or a phone, bind wider **with a token**:
+
+```
+session-notes serve --addr :7080 --token $(openssl rand -hex 16)
+# or: SESSION_NOTES_TOKEN=… session-notes serve --addr :7080
+```
+
+Every request must then present the token — open the printed
+`http://host:7080/?token=…` URL once and a cookie signs that browser in (the
+token is stripped from the address bar); API callers send
+`Authorization: Bearer <token>`. Without a token, everything — pages and API
+alike — is a 401, so a scan learns nothing. Binding non-loopback with no token
+is refused unless you insist with `--insecure`. There is no TLS: for anything
+beyond a trusted LAN, front it with `ssh -L 7080:localhost:7080 yourbox`, a
+tailnet, or a TLS-terminating proxy — the token still protects against other
+tenants of the same network.
 
 ## Keybindings (TUI)
 
@@ -513,7 +526,8 @@ or `--session <id>` (resolved to `~/.claude/boards/<id>.md`). Every write is
 | Subcommand | Effect |
 | --- | --- |
 | `edit add <section> <text>` | Append a top-level item to an existing section (errors, listing the sections, if it is missing — sections are not auto-created). |
-| `edit reply <query> <text>` | Append an indented reply under the first item whose raw line or text contains `<query>` (errors if none; if several match, replies under the first and notes the count on stderr). |
+| `edit reply <query> <text>` | Reply in-thread under the first item whose raw line or text contains `<query>` (errors if none; several matches use the first, noted on stderr). Replying to a reply continues the conversation flat — the same semantics as the TUI's `R` and the web UI. |
+| `edit fork <query> <text>` | Nest a sub-thread under the exact matched item (the TUI's `F`) — for deliberately forking a side topic. |
 | `edit status <query> <state>` | Set an item's checkbox: `open`/`wip`/`done`/`blocked`/`none` → `[ ]`/`[>]`/`[x]`/`[?]`/plain. |
 | `edit log <text>` | Append `- HH:MM claude: <text>` to Log (`--as <author>` overrides the author). |
 | `edit title <text>` | Set the frontmatter `title` (`""` clears it). |
