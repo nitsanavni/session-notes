@@ -483,13 +483,14 @@ func continuationRow(raw string, width int) string {
 
 func (m *model) viewFooter() string {
 	switch m.mode {
-	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection, modeInputTitle:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection, modeInputRename, modeInputTitle:
 		label := map[mode]string{
 			modeInputAdd:           "add",
 			modeInputEdit:          "edit",
 			modeInputLog:           "log",
 			modeInputReply:         "reply",
 			modeInputCustomSection: "section",
+			modeInputRename:        "rename section",
 			modeInputTitle:         "title",
 		}[m.mode]
 		// Reply mode's human message is always authored "user:", so tint its
@@ -500,7 +501,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · w wrap · e edit · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -524,7 +525,7 @@ func (m *model) viewHelp() string {
 		{"D", "hard-delete item (or whole section) from the file"},
 		{"enter / l", "collapse / expand the section under the cursor (on its header)"},
 		{"w", "wrap the item at the cursor (toggle single-line <-> full multi-line)"},
-		{"e", "edit item inline (the bullet line only)"},
+		{"e", "edit item inline (the bullet line only); on a section header, rename it"},
 		{"T", "edit the board title (frontmatter title:; empty clears it)"},
 		{"E", "open board in $EDITOR"},
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},

@@ -1079,13 +1079,13 @@ func (m *model) migrateSectionState(oldTitle, newTitle string) {
 	}
 }
 
-// applyMapRename renames the section captured in m.mapInputSection to newTitle.
+// applySectionRename renames the section captured in m.mapInputSection to newTitle.
 // A no-op when the name is unchanged; refused (with a status error) when another
 // section already carries newTitle — merging sections is out of scope. On
 // success it migrates the list view's per-title collapse state and persists via
 // the rebase path (rebase matches by the OLD title, see applyOp's
 // opRenameSection). The caller already snapshotted for undo.
-func (m *model) applyMapRename(newTitle string) {
+func (m *model) applySectionRename(newTitle string) {
 	oldTitle := m.mapInputSection
 	if newTitle == oldTitle {
 		return // nothing changed
@@ -1162,7 +1162,7 @@ func (m *model) handleMapInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.saveWithRebase(op)
 			}
 		case modeMapRename:
-			m.applyMapRename(text)
+			m.applySectionRename(text)
 		}
 		m.mp = nil
 		return m, nil

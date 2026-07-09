@@ -29,6 +29,7 @@ const (
 	modeInputLog
 	modeInputReply
 	modeInputCustomSection
+	modeInputRename
 	modeInputTitle
 	modeAddSections
 	modeLinkPick
@@ -551,7 +552,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) isInputMode() bool {
 	switch m.mode {
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection,
-		modeInputTitle, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback:
+		modeInputRename, modeInputTitle, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback:
 		return true
 	}
 	return false
@@ -563,7 +564,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDashKey(msg)
 	case modePicker:
 		return m.handlePickerKey(msg)
-	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection:
+	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection, modeInputRename:
 		return m.handleInputKey(msg)
 	case modeInputTitle:
 		return m.handleTitleInputKey(msg)
@@ -691,7 +692,12 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.rebuildPositions()
 		}
 	case "e":
-		if it := m.currentItem(); it != nil {
+		// On a section header, e renames the heading (reusing the map view's
+		// rename machinery); on an item it edits the bullet inline.
+		if sec, ok := m.onHeader(); ok {
+			m.mapInputSection = sec.Title
+			m.startInput(modeInputRename, sec.Title, "rename section")
+		} else if it := m.currentItem(); it != nil {
 			m.target = it
 			m.startInput(modeInputEdit, it.DisplayText(), "edit item")
 		}
@@ -872,6 +878,11 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.jumpToSectionByTitle(text)
 			m.saveWithRebase(pendingOp{typ: opAddSection, sections: []string{text}})
 			m.mp = nil // section set changed -> map (if shown) re-layouts
+		case modeInputRename:
+			// e on a section header in the outline view: reuse the map's rename
+			// (renames via board.RenameSection, migrates collapse state, rebases
+			// through opRenameSection). rebuildPositions + m.mp reset happen inside.
+			m.applySectionRename(text)
 		}
 		return m, nil
 	}
