@@ -28,6 +28,10 @@ maintains it during the session via hooks + file watching.
 1. `--board` explicit path wins.
 2. `--pane <id>`: read `panes/<id>.json`. The tmux keybind passes `#{pane_id}` of the
    active pane, so concurrent sessions in different panes resolve independently.
+   If the mapping is missing (or its board file is gone), fall back to the newest
+   board whose frontmatter `cwd` matches the pane's current directory (queried
+   from tmux via `pane_current_path`) before dropping to the picker — a pane
+   without a mapping opens the project's latest board instead of erroring out.
 3. `$TMUX_PANE` env var, same lookup.
 4. Fallback: if exactly one board's `cwd` matches the current cwd, use it.
 5. Otherwise: picker listing all boards, newest mtime first.
@@ -132,7 +136,11 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   items as subtrees. `hjkl`/arrows move focus spatially, `enter` folds a subtree,
   `a`/`e`/`space`/`D` edit (sections aren't editable/markable/deletable); every
   mutation saves through the same locked write + rebase path as the list view and
-  shares its undo history.
+  shares its undo history. Conversational reply children (`user:`/`claude:`
+  sub-bullets) render dim and collapse by default into a `[N replies]` suffix on
+  their parent; `enter` on the parent expands/collapses the thread. The
+  append-only `Log` section is excluded from the map by default (a "Log hidden ·
+  M" footer hint shows when it is); `M` toggles it back on.
 - Live reload: watch the board file (fsnotify) and re-render on external change (Claude's
   edits appear live). Writes are atomic (temp file + rename) to avoid torn reads. While an
   inline input is open the reload is deferred (it must not touch the input buffer or the

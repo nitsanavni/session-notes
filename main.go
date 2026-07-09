@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/nitsanavni/session-notes/internal/board"
 	"github.com/nitsanavni/session-notes/internal/hooks"
@@ -105,6 +107,15 @@ func resolveBoard(explicit, paneID string) (string, bool) {
 				return m.Board, true
 			}
 		}
+		// Mapping missing or its board file is gone: fall back to the newest
+		// board whose frontmatter cwd matches the pane's current directory (if
+		// we can discover it via tmux), rather than exiting. If that finds
+		// nothing we fall through to the picker below.
+		if dir := paneCurrentPath(paneID); dir != "" {
+			if path, ok := tui.NewestBoardByCwd(dir); ok {
+				return path, true
+			}
+		}
 	}
 	// 4. Exactly one board matching the current cwd.
 	// 5. Exactly one live session across all pane mappings.
@@ -126,6 +137,17 @@ func resolveBoard(explicit, paneID string) (string, bool) {
 	}
 	// 6. Picker.
 	return "", false
+}
+
+// paneCurrentPath asks tmux for a pane's current working directory, used to
+// resolve a board by cwd when the pane has no mapping. Returns "" if tmux is
+// unavailable or the pane is unknown (the caller then falls back to the picker).
+var paneCurrentPath = func(paneID string) string {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_current_path}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // soleLiveBoard returns the board path if every pane mapping (with a board

@@ -82,5 +82,10 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   byte-identical to mm on 7 golden fixtures.
 - Phase 2 landed (338c523): `m` toggles the interactive map view in the TUI;
   spatial nav, folding, edits through the shared locked-save/rebase path.
-- Phase 3 in progress: reply-aware styling/collapse, Log exclusion toggle,
-  pane-resolution fallback.
+- Phase 3 landed: reply-aware styling (dim `user:`/`claude:` sub-bullets) with
+  automatic collapse into a `[N replies]` suffix (enter on the parent
+  expands/collapses); the `Log` section excluded from the map by default with a
+  "Log hidden · M" footer hint (`M` toggles it on); and the pane-resolution
+  fallback — a pane with no mapping resolves to the newest board matching the
+  pane's current directory (via tmux `pane_current_path`) before the picker,
+  instead of exiting with "no board mapped to pane".

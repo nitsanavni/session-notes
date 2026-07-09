@@ -58,7 +58,7 @@ func focusMapSection(t *testing.T, m *model, title string) {
 func TestBridgeSkeletonAlwaysPresent(t *testing.T) {
 	src := "---\ntitle: My Board\n---\n## Plan\n\n## Threads\n- [ ] a task\n\n## Questions\n\n## Ideas\n\n## Log\n"
 	b := board.Parse(src)
-	root, refs, _ := buildMapTree(b, nil)
+	root, refs, _ := buildMapTree(b, nil, nil, true)
 
 	if refs[root].kind != refCenter || root.Text != "My Board" {
 		t.Fatalf("root is not the titled center: %+v text=%q", refs[root], root.Text)
@@ -347,6 +347,121 @@ func TestMapViewRendersFocusAndSections(t *testing.T) {
 		if w := len([]rune(line)); w > 100 {
 			t.Errorf("map row exceeds width: %q (%d)", line, w)
 		}
+	}
+}
+
+// mapHasReplyNode reports whether any laid-out node is a conversational reply.
+func mapHasReplyNode(m *model) bool {
+	for _, ref := range m.mp.refs {
+		if ref.kind == refItem && isReplyItem(ref.item) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCountReplies checks the recursive reply count over a nested turn chain and
+// the singular/plural suffix.
+func TestCountReplies(t *testing.T) {
+	// question -> user -> claude -> user  (3 replies), plus a non-reply child.
+	src := "## Threads\n- [ ] question\n  - user: a\n    - claude: b\n      - user: c\n  - [ ] sub task\n"
+	b := board.Parse(src)
+	q := b.Sections[0].Items[0]
+	if got := countReplies(q); got != 3 {
+		t.Errorf("countReplies = %d, want 3", got)
+	}
+	if got := replyCountSuffix(1); got != " [1 reply]" {
+		t.Errorf("singular suffix = %q", got)
+	}
+	if got := replyCountSuffix(3); got != " [3 replies]" {
+		t.Errorf("plural suffix = %q", got)
+	}
+}
+
+// TestMapReplyCollapse asserts reply children collapse into a "[N replies]"
+// suffix by default, enter on the parent expands them, and enter again
+// re-collapses.
+func TestMapReplyCollapse(t *testing.T) {
+	src := "## Threads\n- [ ] question\n  - user: hi\n    - claude: hello\n"
+	m := newMapModel(t, src, 100, 30)
+
+	if mapHasReplyNode(m) {
+		t.Fatalf("reply nodes laid out while collapsed by default")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+		t.Errorf("missing collapsed reply-count suffix:\n%s", out)
+	}
+
+	focusMapItem(t, m, "question")
+	m.handleMapKey(keyPress("enter")) // expand replies
+	m.ensureMap()
+	if !mapHasReplyNode(m) {
+		t.Fatalf("reply nodes not shown after expand")
+	}
+	if out := stripANSI(m.viewMap()); strings.Contains(out, "[2 replies]") {
+		t.Errorf("count suffix should be gone once expanded:\n%s", out)
+	}
+
+	m.handleMapKey(keyPress("enter")) // collapse again
+	m.ensureMap()
+	if mapHasReplyNode(m) {
+		t.Errorf("reply nodes still laid out after re-collapse")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+		t.Errorf("re-collapse did not restore the count suffix:\n%s", out)
+	}
+}
+
+// TestMapNonReplyChildrenStayExpanded asserts ordinary (non-reply) children are
+// laid out without any collapse, and don't trigger a reply-count suffix.
+func TestMapNonReplyChildrenStayExpanded(t *testing.T) {
+	src := "## Threads\n- [ ] parent\n  - [ ] child one\n  - [ ] child two\n"
+	m := newMapModel(t, src, 100, 30)
+	out := stripANSI(m.viewMap())
+	for _, want := range []string{"child one", "child two"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("non-reply child %q not shown:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "replies]") {
+		t.Errorf("non-reply children should not produce a reply-count suffix:\n%s", out)
+	}
+}
+
+// TestMapLogExcludedByDefault asserts the Log section is filtered out of the map
+// by default (with a footer hint), and M toggles it back on.
+func TestMapLogExcludedByDefault(t *testing.T) {
+	src := "## Threads\n- [ ] task\n\n## Log\n- 10:00 start: hi\n"
+	m := newMapModel(t, src, 100, 30)
+
+	hasLog := func() bool {
+		for _, ref := range m.mp.refs {
+			if ref.kind == refSection && ref.section == "Log" {
+				return true
+			}
+		}
+		return false
+	}
+	if hasLog() {
+		t.Fatalf("Log section present in the map by default")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "Log hidden") {
+		t.Errorf("expected the 'Log hidden' footer indicator:\n%s", out)
+	}
+
+	m.handleMapKey(keyPress("M")) // reveal Log
+	m.ensureMap()
+	if !hasLog() {
+		t.Fatalf("M did not reveal the Log section")
+	}
+	if out := stripANSI(m.viewMap()); strings.Contains(out, "Log hidden") {
+		t.Errorf("'Log hidden' indicator should be gone once shown:\n%s", out)
+	}
+
+	m.handleMapKey(keyPress("M")) // hide again
+	m.ensureMap()
+	if hasLog() {
+		t.Errorf("second M did not hide the Log section")
 	}
 }
 

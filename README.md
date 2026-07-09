@@ -223,6 +223,10 @@ needs to figure out which board you mean:
    which maps that pane to the board of the session currently running there. The
    tmux keybind passes `#{pane_id}` of the active pane, so each pane resolves to
    its own session independently.
+   If a pane has no mapping (or its board file is gone), `session-notes` falls
+   back to the newest board whose `cwd` matches the pane's current directory
+   (asked from tmux) before showing the picker — so an unmapped pane opens the
+   project's latest board instead of erroring out.
 3. `$TMUX_PANE` — same pane-mapping lookup, using the environment variable
    instead of a flag (used when running `session-notes` with no `--pane`, inside
    tmux).

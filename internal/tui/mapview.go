@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -113,6 +115,39 @@ func mapNodeText(it *board.Item) string {
 	return b.String()
 }
 
+// replyRe matches a reply sub-bullet: an item whose text opens with a "user:"
+// or "claude:" author token (the marker/urgent prefix is already stripped from
+// Item.Text, so no tolerance for those is needed here).
+var replyRe = regexp.MustCompile(`^(claude|user):`)
+
+// isReplyItem reports whether an item is a conversational reply (user:/claude:).
+func isReplyItem(it *board.Item) bool {
+	return it != nil && it.IsItem() && replyRe.MatchString(it.Text)
+}
+
+// countReplies counts the reply items hidden when it's reply children collapse:
+// its direct reply children plus every reply nested beneath them (a
+// user->claude->user turn chain counts as 3). Non-reply branches are excluded.
+func countReplies(it *board.Item) int {
+	n := 0
+	for _, c := range it.Children {
+		if isReplyItem(c) {
+			n++
+			n += countReplies(c)
+		}
+	}
+	return n
+}
+
+// replyCountSuffix is the collapsed-reply indicator appended to a parent node,
+// e.g. " [3 replies]" / " [1 reply]".
+func replyCountSuffix(n int) string {
+	if n == 1 {
+		return " [1 reply]"
+	}
+	return fmt.Sprintf(" [%d replies]", n)
+}
+
 // mapNextStatus is the map's `space` cycle: none -> [ ] -> [>] -> [x] -> [?] ->
 // none. Unlike the list view's cycle it visits every state (including blocked)
 // and can return to no-marker, per the map key scheme.
@@ -136,7 +171,7 @@ func mapNextStatus(s board.Status) board.Status {
 // item subtree. Nodes are keyed by a stable position path ("" center, "sN"
 // section, "sN/i/j" nested item) so focus and fold survive rebuilds; refs point
 // each node back to its board thing. Continuation (non-item) lines are skipped.
-func buildMapTree(b *board.Board, folded map[string]bool) (*mindmap.Node, map[*mindmap.Node]mapRef, map[*mindmap.Node]string) {
+func buildMapTree(b *board.Board, folded, repliesShown map[string]bool, showLog bool) (*mindmap.Node, map[*mindmap.Node]mapRef, map[*mindmap.Node]string) {
 	refs := map[*mindmap.Node]mapRef{}
 	keys := map[*mindmap.Node]string{}
 
@@ -145,6 +180,12 @@ func buildMapTree(b *board.Board, folded map[string]bool) (*mindmap.Node, map[*m
 	keys[root] = ""
 
 	for i, s := range b.Sections {
+		// The append-only Log section is excluded by default (noise); M toggles
+		// it on. Section keys stay index-based so skipping Log doesn't shift the
+		// stable keys of the other sections.
+		if s.Title == board.LogTitle && !showLog {
+			continue
+		}
 		skey := "s" + strconv.Itoa(i)
 		sn := &mindmap.Node{Text: s.Title, Folded: folded[skey]}
 		refs[sn] = mapRef{kind: refSection, section: s.Title}
@@ -153,6 +194,9 @@ func buildMapTree(b *board.Board, folded map[string]bool) (*mindmap.Node, map[*m
 
 		var walk func(items []*board.Item, parent *mindmap.Node, parentKey, sec string)
 		walk = func(items []*board.Item, parent *mindmap.Node, parentKey, sec string) {
+			// Reply children of this parent are collapsed into a suffix unless
+			// explicitly expanded.
+			showReplies := repliesShown[parentKey]
 			idx := 0
 			for _, it := range items {
 				if !it.IsItem() {
@@ -160,7 +204,14 @@ func buildMapTree(b *board.Board, folded map[string]bool) (*mindmap.Node, map[*m
 				}
 				ck := parentKey + "/" + strconv.Itoa(idx)
 				idx++
-				cn := &mindmap.Node{Text: mapNodeText(it), Folded: folded[ck]}
+				if isReplyItem(it) && !showReplies {
+					continue // folded into the parent's "[N replies]" suffix
+				}
+				text := mapNodeText(it)
+				if n := countReplies(it); n > 0 && !repliesShown[ck] {
+					text += replyCountSuffix(n)
+				}
+				cn := &mindmap.Node{Text: text, Folded: folded[ck]}
 				refs[cn] = mapRef{kind: refItem, section: sec, item: it}
 				keys[cn] = ck
 				parent.Children = append(parent.Children, cn)
@@ -178,7 +229,7 @@ func (m *model) ensureMap() {
 	if m.mp != nil {
 		return
 	}
-	root, refs, keys := buildMapTree(m.board, m.mapFolded)
+	root, refs, keys := buildMapTree(m.board, m.mapFolded, m.mapRepliesShown, m.mapShowLog)
 	ms := &mapState{
 		root:   root,
 		layout: mindmap.LayoutTree("", root, root.Children, mindmap.Rounded),
@@ -292,6 +343,9 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "m":
 		m.mapView = false
+	case "M":
+		m.mapShowLog = !m.mapShowLog
+		m.mp = nil // section set changed -> re-layout
 	case "h", "left":
 		m.mapMove('h')
 	case "j", "down":
@@ -331,6 +385,21 @@ func (m *model) mapToggleFold() {
 	ref := ms.refs[ms.focus]
 	if ref.kind == refCenter {
 		m.status = "can't fold the center"
+		return
+	}
+	// Reply children collapse into a "[N replies]" suffix by default; on an item
+	// that has them, enter toggles the whole reply thread's visibility instead of
+	// the ordinary subtree fold.
+	if ref.kind == refItem && countReplies(ref.item) > 0 {
+		if m.mapRepliesShown == nil {
+			m.mapRepliesShown = map[string]bool{}
+		}
+		if m.mapRepliesShown[m.mapFocusKey] {
+			delete(m.mapRepliesShown, m.mapFocusKey)
+		} else {
+			m.mapRepliesShown[m.mapFocusKey] = true
+		}
+		m.mp = nil // re-layout with the new reply visibility
 		return
 	}
 	if len(ms.focus.Children) == 0 {
@@ -486,6 +555,8 @@ func mapNodeStyle(ref mapRef, focus bool) lipgloss.Style {
 			base = styleDone
 		case it.Urgent:
 			base = styleUrgent
+		case isReplyItem(it): // conversational sub-bullets read dim
+			base = styleDim
 		case it.Status == board.StatusBlocked:
 			base = styleBlocked
 		case it.Status == board.StatusInProgress:
@@ -680,7 +751,17 @@ func (m *model) viewMapFooter() string {
 	if m.mp != nil && m.mp.focus != nil {
 		detail = styleDim.Render(ansi.Truncate(mapFocusDetail(m.mp), m.width, "…"))
 	}
-	hints := "hjkl move · enter fold · a add · e edit · space status · D delete · m list · u undo · ? help · q quit"
+	// Subtle reminder that the Log section is filtered out and how to bring it
+	// back, shown only when the board actually has a (hidden) Log section.
+	if !m.mapShowLog && m.board != nil && m.board.Section(board.LogTitle) != nil {
+		note := styleDim.Render("Log hidden · M")
+		if detail == "" {
+			detail = note
+		} else {
+			detail += "  " + note
+		}
+	}
+	hints := "hjkl move · enter fold · a add · e edit · space status · D delete · M log · m list · u undo · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

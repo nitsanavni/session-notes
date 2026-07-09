@@ -89,6 +89,23 @@ func FindBoardByCwd(cwd string) (string, bool) {
 	return "", false
 }
 
+// NewestBoardByCwd returns the most-recently-modified board whose frontmatter
+// cwd matches dir, if any. Unlike FindBoardByCwd it does not require a unique
+// match — listBoards is newest-first, so the first cwd hit is the newest board
+// for that directory. Used as the pane-resolution fallback when a pane has no
+// mapping.
+func NewestBoardByCwd(dir string) (string, bool) {
+	if dir == "" {
+		return "", false
+	}
+	for _, e := range listBoards() {
+		if e.cwd == dir {
+			return e.path, true
+		}
+	}
+	return "", false
+}
+
 // enterPicker switches the model from a board view back to the board picker —
 // the inverse of the picker's openBoard transition. It closes the board's file
 // watcher and clears all per-board state (board tree, cursor, pending-edit
