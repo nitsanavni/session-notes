@@ -216,9 +216,21 @@ func (b *Board) Save() error {
 // SaveTo atomically writes the board to the given path under the board lock
 // (WithLock). This last-writer-wins path is used by the hooks and by TUI
 // mutations that do not rebase; the TUI's text-entry mutations use SaveRebasing
-// to merge concurrent external writes instead of clobbering them.
+// to merge concurrent external writes instead of clobbering them. The write is
+// journaled (author SaveAuthor) so it appears in the board's shared history;
+// a first write (no file yet) is not — there is no state to undo back to.
 func (b *Board) SaveTo(path string) error {
-	return WithLock(path, func() error { return b.writeAtomic(path) })
+	return WithLock(path, func() error {
+		before, rerr := os.ReadFile(path)
+		out := b.Render()
+		if err := writeAtomicRaw(path, out); err != nil {
+			return err
+		}
+		if rerr == nil {
+			journalRecord(path, string(before), out, SaveAuthor)
+		}
+		return nil
+	})
 }
 
 // writeAtomic writes the board to path via a temp file + rename, WITHOUT taking
@@ -299,7 +311,13 @@ func (b *Board) SaveRebasing(path, lastDisk string, reapply func(fresh *Board)) 
 		if os.IsNotExist(rerr) || disk == lastDisk {
 			res.Board = b
 			res.Content = b.Render()
-			return b.writeAtomic(path)
+			if err := b.writeAtomic(path); err != nil {
+				return err
+			}
+			if !os.IsNotExist(rerr) {
+				journalRecord(path, disk, res.Content, SaveAuthor)
+			}
+			return nil
 		}
 		fresh := Parse(disk)
 		fresh.Path = path
@@ -310,7 +328,11 @@ func (b *Board) SaveRebasing(path, lastDisk string, reapply func(fresh *Board)) 
 		res.Content = fresh.Render()
 		res.Rebased = true
 		res.DiskPrev = disk
-		return fresh.writeAtomic(path)
+		if err := fresh.writeAtomic(path); err != nil {
+			return err
+		}
+		journalRecord(path, disk, res.Content, SaveAuthor)
+		return nil
 	})
 	return res, err
 }

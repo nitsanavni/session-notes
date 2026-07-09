@@ -531,6 +531,46 @@ func TestRawAndSetContent(t *testing.T) {
 	}
 }
 
+func TestHistoryEndpoint(t *testing.T) {
+	h, _ := newTestServer(t)
+
+	// Empty journal: empty list, not an error.
+	w := do(t, h, "GET", "/api/board/abc-123/history", "")
+	if w.Code != 200 {
+		t.Fatalf("history: %d %s", w.Code, w.Body)
+	}
+
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"add","section":"Plan","text":"first"}`); w.Code != 204 {
+		t.Fatal("seed 1")
+	}
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"add","section":"Plan","text":"second"}`); w.Code != 204 {
+		t.Fatal("seed 2")
+	}
+
+	w = do(t, h, "GET", "/api/board/abc-123/history", "")
+	var resp struct {
+		Entries []struct {
+			Author  string   `json:"author"`
+			Added   []string `json:"added"`
+			Removed []string `json:"removed"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Entries) != 2 {
+		t.Fatalf("entries: %d", len(resp.Entries))
+	}
+	// Newest first, authored "web", diffed to the added line.
+	if resp.Entries[0].Author != "web" || len(resp.Entries[0].Added) != 1 ||
+		resp.Entries[0].Added[0] != "- [ ] second" || len(resp.Entries[0].Removed) != 0 {
+		t.Fatalf("newest entry: %+v", resp.Entries[0])
+	}
+	if resp.Entries[1].Added[0] != "- [ ] first" {
+		t.Fatalf("oldest entry: %+v", resp.Entries[1])
+	}
+}
+
 func TestFileStamp(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.md")

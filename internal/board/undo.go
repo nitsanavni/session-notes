@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -73,30 +74,77 @@ func saveJournal(path string, j *undoJournal) error {
 	return writeAtomicRaw(UndoPath(path), string(data))
 }
 
+// SaveAuthor attributes journal entries recorded by the Save/SaveTo/
+// SaveRebasing paths. The TUI runs with the default; the hooks set "hook" at
+// entry. Clients that call EditUnderLockJournaled pass their author
+// explicitly and ignore this.
+var SaveAuthor = "user"
+
+// journalRecord appends one edit to the board's journal and clears the redo
+// line. Must be called while holding the board's lock. Failures are
+// swallowed — a board write must never fail because its history couldn't be
+// recorded — and no-ops are not journaled.
+func journalRecord(path, before, after, author string) {
+	if before == after {
+		return
+	}
+	j := loadJournal(path)
+	j.Undo = append(j.Undo, UndoEntry{
+		Time: time.Now().Format(time.RFC3339), Author: author,
+		Before: before, After: after,
+	})
+	if len(j.Undo) > undoLimit {
+		j.Undo = j.Undo[len(j.Undo)-undoLimit:]
+	}
+	j.Redo = nil
+	_ = saveJournal(path, j)
+}
+
 // EditUnderLockJournaled is EditUnderLock plus journaling: a successful,
-// content-changing transform appends an undo entry (authored for future
-// display) and clears the redo line. Journal failures are swallowed — a
-// board write must never fail because its history couldn't be recorded.
+// content-changing transform appends an undo entry authored for display.
 func EditUnderLockJournaled(path, snapshot, author string, transform func(content string) (string, error)) error {
 	return EditUnderLock(path, snapshot, func(content string) (string, error) {
 		out, err := transform(content)
 		if err != nil {
 			return "", err
 		}
-		if out != content {
-			j := loadJournal(path)
-			j.Undo = append(j.Undo, UndoEntry{
-				Time: time.Now().Format(time.RFC3339), Author: author,
-				Before: content, After: out,
-			})
-			if len(j.Undo) > undoLimit {
-				j.Undo = j.Undo[len(j.Undo)-undoLimit:]
-			}
-			j.Redo = nil
-			_ = saveJournal(path, j)
-		}
+		journalRecord(path, content, out, author)
 		return out, nil
 	})
+}
+
+// History returns the board's journaled edits, oldest first. Entries that
+// were undone (moved to the redo stack) are not part of current history.
+// Reads without the lock — the journal is written atomically.
+func History(path string) []UndoEntry {
+	return loadJournal(path).Undo
+}
+
+// DiffLines summarizes an edit as the lines it added and removed, in order —
+// a multiset difference, not a positional diff, which reads well for board
+// edits (an item moved between sections shows as unchanged). Blank lines are
+// ignored.
+func DiffLines(before, after string) (added, removed []string) {
+	count := func(s string) map[string]int {
+		m := map[string]int{}
+		for _, l := range strings.Split(s, "\n") {
+			m[l]++
+		}
+		return m
+	}
+	pick := func(from, other string) []string {
+		var out []string
+		avail := count(other)
+		for _, l := range strings.Split(from, "\n") {
+			if avail[l] > 0 {
+				avail[l]--
+			} else if strings.TrimSpace(l) != "" {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	return pick(after, before), pick(before, after)
 }
 
 // Undo reverts the most recent journaled edit, moving it to the redo stack.

@@ -109,6 +109,12 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 }
 .modal button:hover { border-color: var(--accent); }
 #helpmodal .panel { width: min(560px, 92vw); }
+#histmodal .panel { width: min(640px, 92vw); }
+#histlist { overflow-y: auto; font-size: .88em; }
+#histlist .hentry { margin-bottom: .55rem; }
+#histlist .hwho { color: var(--dim); }
+#histlist .hadd { color: var(--accent); white-space: pre-wrap; overflow-wrap: anywhere; }
+#histlist .hdel { color: var(--urgent); white-space: pre-wrap; overflow-wrap: anywhere; text-decoration: line-through; }
 #helpmodal table { border-collapse: collapse; font-size: .9em; }
 #helpmodal td { padding: .1rem .7rem .1rem 0; vertical-align: top; }
 #helpmodal td:first-child { color: var(--accent); white-space: nowrap; }
@@ -165,6 +171,7 @@ body.mapmode #mapwrap { display: block; }
     <button id="undo" title="undo last web edit (u)">↶</button>
     <button id="redo" title="redo (ctrl+r)">↷</button>
     <button id="rawedit" title="edit board markdown (E)">✎</button>
+    <button id="histbtn" title="history — what changed, by whom (H)">⌚</button>
     <button id="copypath" title="copy board file path (y)">⧉</button>
     <button id="helpbtn" title="keyboard help (?)">?</button>
   </span>
@@ -190,6 +197,11 @@ body.mapmode #mapwrap { display: block; }
   <textarea id="rawtext" spellcheck="false"></textarea>
 </div></div>
 
+<div class="modal" id="histmodal"><div class="panel">
+  <div class="bar"><b>history</b><span class="dim">newest first · journaled edits only</span><button id="histclose">close</button></div>
+  <div id="histlist"></div>
+</div></div>
+
 <div class="modal" id="helpmodal"><div class="panel">
   <div class="bar"><b>keys</b><button id="helpclose">close</button></div>
   <table>
@@ -208,7 +220,8 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>o</td><td>open the item's first [[link]]</td></tr>
     <tr><td>L</td><td>log entry</td></tr>
     <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
-    <tr><td>u / ctrl+r</td><td>undo / redo (this browser's edits)</td></tr>
+    <tr><td>u / ctrl+r</td><td>undo / redo (shared journal — CLI edits too)</td></tr>
+    <tr><td>H</td><td>history: what changed, by whom</td></tr>
     <tr><td>y</td><td>copy board file path</td></tr>
     <tr><td>m</td><td>mindmap view (in the map: hjkl move, enter fold,
       f focus subtree, b step out, M toggle Log, m/q back)</td></tr>
@@ -629,6 +642,30 @@ document.getElementById('notetext').addEventListener('keydown', e => {
   if (e.key === 'Escape') toggleModal('notemodal', false);
 });
 document.getElementById('helpclose').addEventListener('click', () => toggleModal('helpmodal', false));
+
+// History modal: the shared journal as a timeline of who changed what.
+async function openHistory() {
+  const r = await fetch(`${API}/history`);
+  if (!r.ok) { toast('cannot load history'); return; }
+  const { entries } = await r.json();
+  const list = document.getElementById('histlist');
+  list.textContent = '';
+  if (!entries || !entries.length) {
+    list.append(el('div', { class: 'hwho' }, 'no journaled edits yet — history records writes made through the web UI, the edit CLI, the TUI, and the hooks'));
+  }
+  for (const en of entries || []) {
+    let stamp = en.ts;
+    const d = new Date(en.ts);
+    if (!isNaN(d)) stamp = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const box = el('div', { class: 'hentry' }, el('div', { class: 'hwho' }, `${stamp} · ${en.author}`));
+    for (const l of en.removed || []) box.append(el('div', { class: 'hdel' }, '− ' + l.trim()));
+    for (const l of en.added || []) box.append(el('div', { class: 'hadd' }, '+ ' + l.trim()));
+    list.append(box);
+  }
+  toggleModal('histmodal', true);
+}
+document.getElementById('histbtn').addEventListener('click', openHistory);
+document.getElementById('histclose').addEventListener('click', () => toggleModal('histmodal', false));
 
 // ---- map view (port of the TUI's mm-style mindmap) ----
 // The board as a center-outward map: title at center, sections as the first
@@ -1052,7 +1089,7 @@ document.addEventListener('keydown', e => {
   // preventDefault for every handled key: keys that open an input (a, e, R…)
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'Tab', 'g', 'G', 'a', 'A',
-    ' ', 'b', '!', 'e', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'm', 'u', 'y', '?']);
+    ' ', 'b', '!', 'e', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'm', 'u', 'y', '?']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
@@ -1079,6 +1116,7 @@ document.addEventListener('keydown', e => {
       break;
     case 'L': focusAdd('Log'); break;
     case 'E': openRaw(); break;
+    case 'H': openHistory(); break;
     case 'm': enterMap(); break;
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
