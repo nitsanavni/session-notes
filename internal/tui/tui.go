@@ -39,6 +39,7 @@ const (
 	modeMapEdit
 	modeMapRename
 	modeMapFeedback
+	modeSearch
 )
 
 // customSectionLabel is the final, always-present entry in the add-sections
@@ -160,6 +161,17 @@ type model struct {
 	watch  *watcher
 	width  int
 	height int
+
+	// Incremental search (`/`) state, shared by the outline and map views. See
+	// search.go. searchQuery is the confirmed query driving n/N; searchActive
+	// gates them. searchSaveCursor / searchSaveMapKey hold the pre-search location
+	// so Esc can restore it. searchIdx is the 0-based position within the current
+	// match set.
+	searchQuery      string
+	searchActive     bool
+	searchIdx        int
+	searchSaveCursor int
+	searchSaveMapKey string
 
 	// updateHint is a dim, text-only "newer release available" notice shown in
 	// the picker and dashboard footers. Populated asynchronously by
@@ -552,7 +564,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) isInputMode() bool {
 	switch m.mode {
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection,
-		modeInputRename, modeInputTitle, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback:
+		modeInputRename, modeInputTitle, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback,
+		modeSearch:
 		return true
 	}
 	return false
@@ -572,6 +585,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleMapInputKey(msg)
 	case modeMapFeedback:
 		return m.handleMapFeedbackKey(msg)
+	case modeSearch:
+		return m.handleSearchKey(msg)
 	case modeAddSections:
 		return m.handleAddSectionsKey(msg)
 	case modeLinkPick:
@@ -767,6 +782,16 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.listExpanded[key] = true
 			}
+		}
+	case "/":
+		m.startSearch()
+	case "n":
+		if !m.searchNext(1) {
+			m.status = ""
+		}
+	case "N":
+		if !m.searchNext(-1) {
+			m.status = ""
 		}
 	case "?":
 		m.prevMode = m.mode

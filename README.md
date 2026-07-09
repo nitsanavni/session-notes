@@ -405,7 +405,8 @@ center), `enter` runs the unified fold cycle (default → replies-shown →
 collapsed `[+N]` → default, states that render identically skipped), `f`
 focuses into the selected subtree with a breadcrumb trail and `b` steps back
 out, `e`/`a`/`space`/`!`/`d`/`D`/`o` edit the focused node through the same
-ops as everything else, and `M` toggles the Log ring (hidden by default). Node
+ops as everything else, `/` searches item text (`n`/`N` step matches, revealing
+folded subtrees), and `M` toggles the Log ring (hidden by default). Node
 text truncates at 40 columns with the full text in the footer; the `[+N]`
 suffix is truncation-exempt and counts only what that node hides.
 
@@ -437,6 +438,7 @@ tenants of the same network.
 | `j` / `k`     | move cursor down / up                    |
 | `tab` / `shift-tab` | next / previous section             |
 | `1` … `9`     | jump to the Nth section                   |
+| `/`           | incremental search item text; `n` / `N` next / previous match |
 | `a`           | add item to current section              |
 | `A`           | add sections (multi-select overlay)      |
 | `R`           | reply in thread (flat sibling on a reply) |

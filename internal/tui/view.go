@@ -60,7 +60,7 @@ func statusMarker(s board.Status) string {
 func (m *model) View() string {
 	if m.mapView {
 		switch m.mode {
-		case modeBoard, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback, modeInputTitle:
+		case modeBoard, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback, modeInputTitle, modeSearch:
 			return m.viewMap()
 		}
 	}
@@ -504,7 +504,10 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	if m.mode == modeSearch {
+		return styleStatus.Render("search: ") + m.input.View()
+	}
+	hints := "j/k move · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -518,6 +521,7 @@ func (m *model) viewHelp() string {
 		{"j / k, up / down", "move cursor"},
 		{"tab / shift-tab", "next / previous section"},
 		{"1 - 9", "jump to the Nth section"},
+		{"/", "incremental search item text (both views); n / N next / previous match"},
 		{"a", "add item to current section"},
 		{"A", "add sections (multi-select overlay)"},
 		{"R", "reply in thread (sibling on a reply; starts the thread on an item)"},

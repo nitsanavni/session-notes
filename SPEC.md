@@ -221,7 +221,14 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   `E` open board in `$EDITOR` (suspend TUI) ·
   `o` open item's first `[[link]]` · `y` copy board file path to clipboard ·
   `w` wrap the item at the cursor (single truncated line ↔ full multi-line block, session-only) ·
-  `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
+  `/` incremental search (see below) · `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
+- Search (`/`, both views): opens an incremental prompt. As the query changes the cursor (outline) /
+  focus (map) jumps to the first case-insensitive substring match over item text — all sections and
+  replies included, in document order. `enter` confirms and closes the prompt (the status bar shows
+  `k/N matches`), leaving `n`/`N` to step to the next/previous match, wrapping. `esc` cancels and
+  restores the pre-search cursor/focus. A match hidden behind a collapsed section (outline) or a
+  folded subtree (map) is revealed on the way in, reusing the same auto-expand machinery as ordinary
+  navigation. There is no separate highlighter — the match is shown by moving the selection onto it.
 - Long items render as a single line truncated with `…`; `w` toggles the item at the cursor
   to a wrapped multi-line block (continuation rows hang-indented to the text column, reply
   indent preserved) and back. The toggle is per item and lasts the session only, like the map's `w`.

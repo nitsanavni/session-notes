@@ -1004,6 +1004,12 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "!":
 		// A nav move surprised you: note where you expected focus to land.
 		m.startInput(modeMapFeedback, "", "where did you expect it?")
+	case "/":
+		m.startSearch()
+	case "n":
+		m.searchNext(1)
+	case "N":
+		m.searchNext(-1)
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp
@@ -1625,6 +1631,9 @@ func (m *model) viewMapFooter() string {
 		}
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
+	if m.mode == modeSearch {
+		return styleStatus.Render("search: ") + m.input.View()
+	}
 	if m.mode == modeMapFeedback {
 		return styleDim.Render(ansi.Truncate(m.lastMoveSummary(), m.width, "…")) + "\n" +
 			styleStatus.Render("feedback: ") + m.input.View()
@@ -1643,7 +1652,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · p pin · d archive (item/section) · D delete · y copy path · M log · m outline · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · / search · n/N next/prev · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · p pin · d archive (item/section) · D delete · y copy path · M log · m outline · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
