@@ -91,8 +91,10 @@ hooks). Two mechanisms keep a write from silently clobbering another:
   exclude a racing writer. The lock is held across the whole read → modify →
   rename. In this repo, `board.WithLock(path, fn)` is that primitive; `Save`,
   `SaveTo`, and `SaveRebasing` all acquire it. **Any external writer must follow
-  the same convention:** `flock` `<board>.lock` around its own read-modify-rename.
-  Readers need no lock — the atomic rename keeps reads torn-free.
+  the same convention:** `flock` `<board>.lock` around its own read-modify-rename
+  — which is exactly what the `session-notes edit` CLI (below) does, so Claude
+  writes through it instead of hand-rolling a lock. Readers need no lock — the
+  atomic rename keeps reads torn-free.
 
 - **Rebase-before-save (TUI).** The TUI tracks the exact bytes it last loaded or
   saved. Inside the lock, a save re-reads disk; if disk differs from that
@@ -107,6 +109,41 @@ hooks). Two mechanisms keep a write from silently clobbering another:
     `e` edit, `R` reply, `L` log. The one-keystroke, trivially-redoable ops —
     `space` status, `!` urgent, `d`/`D` archive/delete, `A`/custom add-section —
     fall back to last-writer-wins (still under the lock, so never a torn write).
+
+## Claude write CLI (`session-notes edit`)
+
+Claude's first-class, safe write path — the shipped replacement for the ad-hoc
+`python3 fcntl.flock` scripts sessions used to reinvent. `session-notes edit
+<sub> [flags] args…` performs one locked read → modify → atomic-rename per
+invocation via `board.EditUnderLock` (which wraps `board.WithLock` + the shared
+atomic-write step — the CLI does not hand-roll a second lock protocol).
+
+- **Board selection:** `--board <path>` (explicit, the primary form for an agent)
+  or `--session <id>` (→ `~/.claude/boards/<id>.md`). Exactly one; the file must
+  exist.
+- **Subcommands** (mirroring the replace / append-under semantics of a per-session
+  `board_edit.py`):
+  - `add <section> <text>` — append a top-level open item to an **existing**
+    section; missing section is an error that lists the board's sections (no
+    auto-create).
+  - `reply <query> <text>` — append an indented reply under the first item (any
+    section, any depth, document order) whose raw line or text contains `<query>`;
+    no match is an error, multiple matches use the first and note the count on
+    stderr.
+  - `status <query> <state>` — set the matched item's checkbox;
+    `open|wip|done|blocked|none` map to `[ ]|[>]|[x]|[?]|`plain.
+  - `log <text>` — append `- HH:MM claude: <text>` to Log (`--as <author>`
+    overrides `claude`).
+  - `title <text>` — set the frontmatter `title` (`""` clears).
+  - `replace <old> <new>` — exact first-occurrence string replace over the raw
+    file bytes; the escape hatch (and the way to reconcile conflict markers).
+    `<old>` absent is an error.
+- **`--refresh-snapshot <path>`** — after the rename, still inside the lock, copy
+  the new content over `<path>`. This is the monitor self-edit-suppression hook: a
+  `Monitor` watch that snapshots/diffs under the same lock then emits only the
+  user's edits, never Claude's.
+- **Output contract:** silent on success (unix-quiet); any failure prints a single
+  `session-notes: <reason>` line to stderr and exits non-zero.
 
 ## Hooks behavior
 

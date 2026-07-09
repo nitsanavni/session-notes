@@ -72,17 +72,25 @@ This session has a shared board (markdown) that you and the user both maintain:
 - To answer or react to a specific item, append an indented sub-bullet reply under it, forum-style ("  - claude: text"), instead of rewriting the item's text inline. Replies nest 2 spaces per level.
 - Discussions run FLAT: continue a back-and-forth as sibling bullets at the same level; nest deeper only to fork a sub-topic off one specific message.
 - Append milestones to "Log" as "- HH:MM claude: text" (append-only).
+- WRITE THE BOARD WITH THE CLI, not by editing the file yourself. "session-notes edit <sub> --board %s [--refresh-snapshot <snap>] args…" does the whole locked read → modify → atomic-replace for you (same lock the TUI uses), so your write never clobbers the user's concurrent edit. Subcommands:
+    session-notes edit add <section> <text>       append a top-level item to a section
+    session-notes edit reply <query> <text>       append an indented reply under the first item matching <query>
+    session-notes edit status <query> <state>     set an item's checkbox (open|wip|done|blocked|none)
+    session-notes edit log <text>                 append "- HH:MM claude: <text>" to Log
+    session-notes edit title <text>               set the frontmatter title
+    session-notes edit replace <old> <new>        exact first-occurrence string replace (raw escape hatch)
+  Each write is silent on success and exits non-zero with a one-line reason on failure (missing section lists the sections; an unmatched query/old string says so).
 - The user edits the board live in a TUI; consider watching the file with the Monitor tool. Have the watch emit the diff itself so events carry the change and you don't need to re-read the file, e.g.:
-    cp board snap; while true; do sleep 1; cmp -s board snap && continue; diff -U0 snap board | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp board snap; done
-  To keep the watch from firing on YOUR OWN board edits, refresh that snapshot as part of every write you make: inside the same locked write (see below), after renaming the temp file over the board, also copy the new content over the snapshot before releasing the lock. If the watcher also takes the lock around its compare-and-snapshot cycle, only the user's edits emit events. (Note: macOS has no flock(1) binary; use python3 fcntl.flock for both writer and watcher.)
+    cp %s snap; while true; do sleep 1; cmp -s %s snap && continue; diff -U0 snap %s | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '; cp %s snap; done
+  To keep the watch from firing on YOUR OWN board edits, pass "--refresh-snapshot snap" to every "session-notes edit" call: it copies the new content over the snapshot inside the same lock, right after the atomic replace, so a watcher that also takes the lock around its compare-and-snapshot cycle only ever emits the user's edits.
 - [[link]] wiki-links on the board come in two forms, both opened with the o key in the TUI:
   - [[name]] (a plain name, no slash) is a SIDE NOTE, resolved to "<boards-dir>/<session-id>.notes/name.md". For longer content (designs, scoping docs, research) write the file there and link it as [[name]]; opening a missing side note creates it.
   - [[path/with/slash.md]] (contains a slash, or starts with ~/ or /) is a FILE PATH, resolved relative to the session cwd (~ expanded, absolute paths as-is). Use this to link real repo files like [[docs/foo.md]]; opening a path that doesn't exist shows an error rather than creating a stub.
 - Items marked "!!" are urgent and will be injected into your context automatically on the next user prompt.
 - Preserve any content you don't understand; edit surgically.
-- If you see <<<<<<< / ======= / >>>>>>> conflict markers on the board, a merge needs reconciling: integrate BOTH sides, NEVER delete the user's text, remove the markers, and save under the lock (flock <board>.lock, then atomic replace).
-- The user edits this file concurrently, so serialize your writes: take an exclusive flock on the sidecar lock file "%s.lock" (NOT the board), then read → modify → write to a temp file → rename over the board, then release. This is the same lock the TUI uses; it keeps your edits and the user's from clobbering each other. Example: flock "%s.lock" -c 'edit-and-atomically-replace board'.
-`, path, path, path)
+- If you see <<<<<<< / ======= / >>>>>>> conflict markers on the board, a merge needs reconciling: integrate BOTH sides, NEVER delete the user's text, remove the markers, and write the result with "session-notes edit replace <old> <new>" (or several) so it happens under the lock.
+- Why the CLI: the user edits this file concurrently, so writes must be serialized. "session-notes edit" takes an exclusive flock on the sidecar lock file "%s.lock" (NOT the board — the board is replaced by atomic rename each save), reads, modifies, writes a temp file, renames it over the board, and releases — the same lock the TUI uses, so your edits and the user's never clobber each other. Do NOT hand-roll this with your own flock script; use the CLI.
+`, path, path, path, path, path, path, path)
 
 	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
 		fmt.Fprintf(stdout, "\nBoards from previous sessions in this project (read them for history/context if useful):\n")

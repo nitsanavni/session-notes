@@ -37,6 +37,12 @@ func main() {
 		os.Exit(runFeedback(args[1:]))
 	}
 
+	// Edit subcommand: first-class locked write path (add/reply/status/log/
+	// title/replace) for agents editing a board. See edit.go.
+	if len(args) >= 1 && args[0] == "edit" {
+		os.Exit(runEdit(args[1:]))
+	}
+
 	// The TUI surfaces the upgrade hint asynchronously off the UI thread; give
 	// it the installed version to compare against.
 	tui.Version = versionString()
@@ -242,6 +248,10 @@ Usage:
   session-notes upgrade               update to the latest release
   session-notes feedback <board.md>   list map-nav surprise records (--json raw,
                                       --gen-test print replayable Go test source)
+  session-notes edit <sub> …          locked board write (--board <path> or
+                                      --session <id>); subs: add reply status
+                                      log title replace. --refresh-snapshot <p>
+                                      refreshes a monitor snapshot in-lock
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook

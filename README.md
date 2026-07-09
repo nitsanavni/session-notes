@@ -397,17 +397,49 @@ echoing Claude's own edits back at it, the recommended setup has Claude refresh
 the watch's snapshot inside the same locked write it uses to edit the board, with
 the watcher diffing under the same lock — then only your edits emit events.
 
+### Claude write CLI
+
+Claude edits the board through `session-notes edit`, not by writing the file
+itself. Each subcommand does the whole locked read → modify → atomic-replace for
+you (the same advisory lock the TUI uses), so a write never clobbers your
+concurrent edit and Claude never has to reinvent an `flock` script per session.
+
+The board is picked by `--board <path>` (explicit, the primary form for an agent)
+or `--session <id>` (resolved to `~/.claude/boards/<id>.md`). Every write is
+**silent on success** and exits non-zero with a one-line reason on failure.
+
+| Subcommand | Effect |
+| --- | --- |
+| `edit add <section> <text>` | Append a top-level item to an existing section (errors, listing the sections, if it is missing — sections are not auto-created). |
+| `edit reply <query> <text>` | Append an indented reply under the first item whose raw line or text contains `<query>` (errors if none; if several match, replies under the first and notes the count on stderr). |
+| `edit status <query> <state>` | Set an item's checkbox: `open`/`wip`/`done`/`blocked`/`none` → `[ ]`/`[>]`/`[x]`/`[?]`/plain. |
+| `edit log <text>` | Append `- HH:MM claude: <text>` to Log (`--as <author>` overrides the author). |
+| `edit title <text>` | Set the frontmatter `title` (`""` clears it). |
+| `edit replace <old> <new>` | Exact first-occurrence string replace over the raw file — the escape hatch for anything the structural subcommands don't cover, and for reconciling conflict markers. Errors if `<old>` is not found. Quote multi-word arguments. |
+
+Pass `--refresh-snapshot <path>` to any of them to copy the freshly written
+content over `<path>` **inside the same lock**, right after the atomic replace.
+That is the monitor self-edit-suppression hook: a `Monitor` watch that diffs a
+snapshot under the same lock then only ever emits *your* edits, never Claude's.
+
+```sh
+# reply under a thread and refresh the watcher's snapshot in one locked write
+session-notes edit reply "frobnicator" "claude: rewired it" \
+  --board ~/.claude/boards/<id>.md --refresh-snapshot /tmp/snap
+```
+
 **Write protocol (avoiding lost updates).** You and Claude edit the same file
 concurrently, so every writer serializes on an advisory lock. Before any
 read-modify-write of the board, take an exclusive `flock` on the sidecar lock
 file `<board-path>.lock` (e.g. `~/.claude/boards/<id>.md.lock`) — *not* on the
 board itself, since the board is replaced by an atomic rename each save and a lock
 on its inode would not exclude a racing writer. Hold the lock across the whole
-read → modify → temp-file → rename, then release it. The TUI's saves and the
-hooks already do this via `board.WithLock`; any external writer (including
-Claude's own file edits) must follow the same convention. Readers need no lock —
-the atomic rename keeps reads torn-free. The TUI additionally rebases an in-flight
-inline edit onto concurrent external writes rather than clobbering them.
+read → modify → temp-file → rename, then release it. The `session-notes edit`
+CLI, the TUI's saves, and the hooks already do this via `board.WithLock`; any
+external writer must go through the CLI (or follow the same convention). Readers
+need no lock — the atomic rename keeps reads torn-free. The TUI additionally
+rebases an in-flight inline edit onto concurrent external writes rather than
+clobbering them.
 
 ## Footprint — what lives outside this repo
 

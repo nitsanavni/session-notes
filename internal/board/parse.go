@@ -210,6 +210,14 @@ func (b *Board) SaveTo(path string) error {
 // do). Splitting the raw write out lets SaveRebasing read, merge, and write all
 // within a single lock acquisition without self-deadlocking on a nested lock.
 func (b *Board) writeAtomic(path string) error {
+	return writeAtomicRaw(path, b.Render())
+}
+
+// writeAtomicRaw writes content to path via a temp file + rename, WITHOUT taking
+// the lock. Callers must already hold WithLock(path). It is the shared
+// last-step of every board write (board renders, and the raw content the edit
+// CLI's replace escape hatch produces).
+func writeAtomicRaw(path, content string) error {
 	dir := "."
 	if idx := strings.LastIndexByte(path, '/'); idx >= 0 {
 		dir = path[:idx]
@@ -220,7 +228,7 @@ func (b *Board) writeAtomic(path string) error {
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after successful rename
-	if _, err := tmp.WriteString(b.Render()); err != nil {
+	if _, err := tmp.WriteString(content); err != nil {
 		tmp.Close()
 		return err
 	}
