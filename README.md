@@ -38,7 +38,9 @@ The `▸` marks the active section; the highlighted row is the cursor. Urgent
 (`!!`) items are highlighted, done (`[x]`) items are dimmed.
 
 `m` toggles the mindmap view: the board as a center-outward map, sections as
-the first ring. `hjkl` move focus tree-structurally — `j`/`k` walk siblings on
+the first ring. The selection carries over both ways — entering the map focuses
+the node for the outline cursor's item, and leaving it moves the cursor back
+onto the map's focused item. `hjkl` move focus tree-structurally — `j`/`k` walk siblings on
 your side of the center (the node visually above/below), `h`/`l` cross the
 parent/child axis toward and away from the center. `f` focuses into the selected
 subtree — re-rooting the map on that node with a breadcrumb trail back — and `b`

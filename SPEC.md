@@ -187,7 +187,14 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   indent preserved) and back. The toggle is per item and lasts the session only, like the map's `w`.
 - Map view (`m`): the board as a center-outward mindmap (ported from mm — see
   docs/mm-port.md). Title at center, all `##` sections as the protected first ring,
-  items as subtrees. Navigation is tree-structural (mm-style, not pixel-scored):
+  items as subtrees. `m` toggles between the outline and the map and the selection
+  carries over both ways: entering the map focuses the node for the outline
+  cursor's item (revealing it if a collapsed ancestor or un-expanded reply thread
+  hid it), and leaving the map moves the outline cursor onto the map's focused
+  item (or its section). Map fold, expand, and focus-root state persist across
+  toggles; a persisted focus root is dropped when it no longer contains the
+  carried-over item so the selection stays visible. Navigation is tree-structural
+  (mm-style, not pixel-scored):
   `j`/`k` (down/up) walk the focused node's siblings on its side of the center,
   top-to-bottom, so up/down always reach the node visually above/below and never
   dive into a subtree or jump across the map; `h`/`l` (left/right) move along the

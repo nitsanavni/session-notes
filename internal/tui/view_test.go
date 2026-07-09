@@ -410,8 +410,8 @@ func TestAuthorTokenTinted(t *testing.T) {
 }
 
 // TestSelectedDoneReverseVideo asserts a selected done item uses reverse-video
-// (SGR 7) for its selection affordance while keeping the done strikethrough
-// (SGR 9), so it still reads as done.
+// (SGR 7) for its selection affordance, and that done items no longer carry
+// strikethrough (SGR 9) — greyed-out only, per the user preference.
 func TestSelectedDoneReverseVideo(t *testing.T) {
 	orig := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)
@@ -427,8 +427,30 @@ func TestSelectedDoneReverseVideo(t *testing.T) {
 	if !strings.Contains(out, ";7;") && !strings.Contains(out, ";7m") {
 		t.Errorf("expected reverse-video (SGR 7) on selected row:\n%q", out)
 	}
-	if !strings.Contains(out, ";9m") {
-		t.Errorf("expected strikethrough (SGR 9) preserved on selected done item:\n%q", out)
+	if strings.Contains(out, ";9m") {
+		t.Errorf("expected NO strikethrough (SGR 9) on done item:\n%q", out)
+	}
+}
+
+// TestDoneNoStrikethrough asserts an unselected done item renders greyed out
+// (dim 240) with no strikethrough (SGR 9) in either view.
+func TestDoneNoStrikethrough(t *testing.T) {
+	orig := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(orig)
+
+	m := newTestModel("## Threads\n- [x] finished task\n", 80, 24)
+	out := m.viewBoard()
+	if strings.Contains(out, ";9m") || strings.Contains(out, "\x1b[9m") {
+		t.Errorf("outline: expected NO strikethrough on done item:\n%q", out)
+	}
+	if !strings.Contains(out, "240") {
+		t.Errorf("outline: expected done item greyed out (240):\n%q", out)
+	}
+	m.enterMap()
+	mout := m.viewMap()
+	if strings.Contains(mout, ";9m") || strings.Contains(mout, "\x1b[9m") {
+		t.Errorf("map: expected NO strikethrough on done node:\n%q", mout)
 	}
 }
 

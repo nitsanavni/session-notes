@@ -61,16 +61,6 @@ func (ms *mapState) placement(n *mindmap.Node) *mindmap.Placement {
 	return nil
 }
 
-// itemKey returns the stable key of the node standing for a given board item.
-func (ms *mapState) itemKey(it *board.Item) (string, bool) {
-	for n, ref := range ms.refs {
-		if ref.kind == refItem && ref.item == it {
-			return ms.keys[n], true
-		}
-	}
-	return "", false
-}
-
 // boardTitle is the map's center text: the frontmatter title, else the session
 // id, else the board file's basename, else a generic label.
 func boardTitle(b *board.Board) string {
@@ -392,27 +382,174 @@ func (m *model) ensureMap() {
 }
 
 // enterMap switches to the map view, seeding focus from the list cursor's item
-// (or section header) so the two views agree on where you are.
+// (or section header) so the two views agree on where you are. Map fold, expand,
+// and focus-root state persist across toggles (they live on the model, not the
+// transient mapState); a persisted focus root is kept only while it still
+// contains the seeded node, otherwise the map opens on the whole board so the
+// selected item is always visible. If the seeded node is hidden behind a
+// collapsed ancestor (or an un-expanded reply thread), the path is revealed so
+// focus can land on it.
 func (m *model) enterMap() {
 	m.mapView = true
-	m.mapFocusKey = ""
-	m.mapFocusRoot = ""
-	m.mp = nil
-	m.ensureMap()
+	seedKey := ""
 	if it := m.currentItem(); it != nil {
-		if k, ok := m.mp.itemKey(it); ok {
-			m.mapFocusKey = k
+		if k, ok := m.itemMapKey(it); ok {
+			seedKey = k
 		}
 	} else if sec, ok := m.onHeader(); ok {
 		for i, s := range m.board.Sections {
 			if s == sec {
-				m.mapFocusKey = "s" + strconv.Itoa(i)
+				seedKey = "s" + strconv.Itoa(i)
 				break
 			}
 		}
 	}
+	if seedKey != "" {
+		m.revealKey(seedKey)
+		m.mapFocusKey = seedKey
+		// Drop a persisted focus root that would hide the seeded node.
+		if m.mapFocusRoot != "" && !keyWithin(seedKey, m.mapFocusRoot) {
+			m.mapFocusRoot = ""
+		}
+	}
 	m.mp = nil // rebuild so mp.focus reflects the seeded key
 	m.ensureMap()
+}
+
+// exitMap leaves the map for the outline, syncing the outline cursor to the map's
+// focused node so the selection carries over: an item node moves the cursor onto
+// that item, a section node jumps to that section. The map's fold/expand/focus
+// state stays on the model for the next toggle back.
+func (m *model) exitMap() {
+	m.mapView = false
+	if m.mp == nil {
+		return
+	}
+	ref := m.mp.refs[m.mp.focus]
+	switch ref.kind {
+	case refItem:
+		m.setCursorToItem(ref.item)
+	case refSection:
+		for i, s := range m.board.Sections {
+			if s.Title == ref.section {
+				m.jumpToSection(i)
+				break
+			}
+		}
+	}
+}
+
+// setCursorToItem points the outline cursor at the navigation stop for it,
+// reporting whether one was found. The outline lists every item, so a map item
+// always has a stop.
+func (m *model) setCursorToItem(it *board.Item) bool {
+	for i, p := range m.positions {
+		if p.item == it {
+			m.cursor = i
+			m.selSec = p.sec
+			return true
+		}
+	}
+	return false
+}
+
+// keyWithin reports whether key names root or a node nested beneath it.
+func keyWithin(key, root string) bool {
+	return key == root || strings.HasPrefix(key, root+"/")
+}
+
+// itemMapKey returns the stable map node key for a board item, computed straight
+// from its position in the board tree (index path, replies counted) so it is
+// valid even for items currently hidden by a fold. Mirrors buildMapTree's keying.
+func (m *model) itemMapKey(target *board.Item) (string, bool) {
+	for si, s := range m.board.Sections {
+		if k, ok := keyForItemIn(s.Items, "s"+strconv.Itoa(si), target); ok {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+func keyForItemIn(items []*board.Item, parentKey string, target *board.Item) (string, bool) {
+	idx := 0
+	for _, it := range items {
+		if !it.IsItem() {
+			continue
+		}
+		ck := parentKey + "/" + strconv.Itoa(idx)
+		idx++
+		if it == target {
+			return ck, true
+		}
+		if k, ok := keyForItemIn(it.Children, ck, target); ok {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// itemForKey resolves a stable node key back to its board item (nil for a
+// section or the center), walking the same index path itemMapKey encodes.
+func (m *model) itemForKey(key string) *board.Item {
+	if !strings.HasPrefix(key, "s") {
+		return nil
+	}
+	parts := strings.Split(key, "/")
+	si, err := strconv.Atoi(parts[0][1:])
+	if err != nil || si < 0 || si >= len(m.board.Sections) {
+		return nil
+	}
+	items := m.board.Sections[si].Items
+	var it *board.Item
+	for _, p := range parts[1:] {
+		idx, err := strconv.Atoi(p)
+		if err != nil {
+			return nil
+		}
+		found := (*board.Item)(nil)
+		count := 0
+		for _, c := range items {
+			if !c.IsItem() {
+				continue
+			}
+			if count == idx {
+				found = c
+				break
+			}
+			count++
+		}
+		if found == nil {
+			return nil
+		}
+		it = found
+		items = found.Children
+	}
+	return it
+}
+
+// revealKey clears fold state that would hide the node named by key, so a seeded
+// focus can render: no ancestor may stay fully collapsed, and any ancestor whose
+// path child is a reply must have its reply thread expanded.
+func (m *model) revealKey(key string) {
+	if key == "" {
+		return
+	}
+	var chain []string
+	for k := key; k != ""; k = parentKeyOf(k) {
+		chain = append([]string{k}, chain...)
+	}
+	for _, k := range chain {
+		parent := parentKeyOf(k)
+		if m.mapFold[parent] == foldCollapsed {
+			delete(m.mapFold, parent) // -> foldDefault, children shown again
+		}
+		if it := m.itemForKey(k); it != nil && isReplyItem(it) {
+			if m.mapFold == nil {
+				m.mapFold = map[string]foldState{}
+			}
+			m.mapFold[parent] = foldRepliesExpanded
+		}
+	}
 }
 
 // --- focus (re-rooting, mm's `f`/`b`) ---
@@ -825,7 +962,7 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		return m, m.mapOpenLink()
 	case "m":
-		m.mapView = false
+		m.exitMap()
 	case "M":
 		m.mapShowLog = !m.mapShowLog
 		m.mp = nil // section set changed -> re-layout

@@ -15,7 +15,7 @@ var (
 	styleSection    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("110"))
 	styleSectionSel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81")).Underline(true)
 	styleCursor     = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
-	styleDone       = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Strikethrough(true)
+	styleDone       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	styleUrgent     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	stylePin        = lipgloss.NewStyle().Foreground(lipgloss.Color("108")) // muted teal — calmer than urgent
 	styleBlocked    = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
@@ -364,7 +364,7 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	// selection.
 	var style lipgloss.Style
 	switch {
-	case it.Status == board.StatusDone: // dim + strikethrough wins over urgent once done
+	case it.Status == board.StatusDone: // greyed out wins over urgent once done
 		style = styleDone
 	case it.Urgent:
 		style = styleUrgent
@@ -379,9 +379,7 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	// a loud, theme-adaptive reverse-video bar (a fixed background washes out on
 	// light terminals). Normalize the foreground to a bright constant first so
 	// the reversed bar is high-contrast on every status — a done item's dim 240
-	// would otherwise reverse into a low-contrast bar. Strikethrough from
-	// styleDone is an independent SGR attribute and survives alongside Reverse,
-	// so a selected done item still reads as done.
+	// would otherwise reverse into a low-contrast bar.
 	if selected {
 		style = style.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
 	}
@@ -423,7 +421,7 @@ func wrapRows(head, text string, hang, width int, style lipgloss.Style, wrap boo
 // the author color as its own sibling segment; any prefix before it and the
 // remainder render in the base style (with [[links]] highlighted). The tint
 // style is derived from the base style so it inherits the selection background
-// and any strikethrough. Continuation rows never carry an author token, so they
+// and any dim. Continuation rows never carry an author token, so they
 // call renderRowWithLinks directly.
 func renderRow0(row string, style lipgloss.Style) string {
 	loc := authorRe.FindStringSubmatchIndex(row)
