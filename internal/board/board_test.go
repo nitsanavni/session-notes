@@ -1009,6 +1009,24 @@ func TestPinnedItems(t *testing.T) {
 	}
 }
 
+// TestPinCadenceFrontmatterRoundTrip checks the "pin-cadence:" key parses into
+// the modeled field and renders back, while an unknown frontmatter key on the
+// same board still round-trips verbatim via extra.
+func TestPinCadenceFrontmatterRoundTrip(t *testing.T) {
+	src := "---\nsession: s1\npin-cadence: 10m\nweird: keepme\n---\n## Plan\n- [ ] x\n"
+	b := Parse(src)
+	if b.Frontmatter.PinCadence != "10m" {
+		t.Errorf("PinCadence = %q, want 10m", b.Frontmatter.PinCadence)
+	}
+	got := b.Render()
+	if !strings.Contains(got, "pin-cadence: 10m\n") {
+		t.Errorf("render missing pin-cadence: %q", got)
+	}
+	if !strings.Contains(got, "weird: keepme\n") {
+		t.Errorf("unknown key not preserved: %q", got)
+	}
+}
+
 func TestTogglePinned(t *testing.T) {
 	b := Parse(`## Working Agreements
 - [ ] agreement one

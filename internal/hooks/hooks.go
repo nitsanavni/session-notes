@@ -21,9 +21,54 @@ import (
 	"github.com/nitsanavni/session-notes/internal/board"
 )
 
-// pinCadence is the maximum age of a pinned-item injection before the
+// DefaultPinCadence is the maximum age of a pinned-item injection before the
 // prompt-submit hook re-injects the pins even when their content is unchanged.
-const pinCadence = 35 * time.Minute
+// A board can override it with a "pin-cadence:" frontmatter key.
+const DefaultPinCadence = 15 * time.Minute
+
+// PinCadence returns the effective re-injection cadence for a board: its
+// "pin-cadence:" frontmatter value parsed as a Go duration, or DefaultPinCadence
+// when the key is absent, unparseable, or non-positive. Parsing is lenient so a
+// typo on one board never crashes the hook or starves its pins.
+func PinCadence(b *board.Board) time.Duration {
+	if b == nil {
+		return DefaultPinCadence
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(b.Frontmatter.PinCadence)); err == nil && d > 0 {
+		return d
+	}
+	return DefaultPinCadence
+}
+
+// PinsBlock returns the pinned-items block the prompt-submit hook and the `pins`
+// command print (header + one bullet per pinned item), along with the flat list
+// of pinned display texts used for the cadence hash. Both are empty when the
+// board has no live pinned items.
+func PinsBlock(b *board.Board) (string, []string) {
+	pinned := b.PinnedItems()
+	if len(pinned) == 0 {
+		return "", nil
+	}
+	texts := make([]string, len(pinned))
+	var sb strings.Builder
+	sb.WriteString("Pinned board items (reinjected on cadence):\n")
+	for i, it := range pinned {
+		texts[i] = it.DisplayText()
+		fmt.Fprintf(&sb, "- %s\n", texts[i])
+	}
+	return sb.String(), texts
+}
+
+// PinsStatePath returns the pins cadence state file path for a session id. The
+// prompt-submit hook and `pins --due` share it so they observe one cadence.
+func PinsStatePath(sessionID string) string { return pinsPath(sessionID) }
+
+// PinsDue is the exported cadence gate shared by the hook and `pins --due`: it
+// reports whether texts are due for re-injection under cadence, updating
+// statePath when they are. See pinsDue.
+func PinsDue(statePath string, texts []string, cadence time.Duration, now time.Time) bool {
+	return pinsDue(statePath, texts, cadence, now)
+}
 
 // wipStaleAfter is how long a "[>]" item must have been continuously in-progress
 // before the coherence digest flags it as untouched.
@@ -170,16 +215,9 @@ func PromptSubmit(stdin io.Reader, stdout io.Writer) {
 	// Pinned items re-inject on a cadence: whenever their content changed since
 	// the last injection, or more than pinCadence has passed.
 	now := time.Now()
-	if pinned := b.PinnedItems(); len(pinned) > 0 {
-		texts := make([]string, len(pinned))
-		for i, it := range pinned {
-			texts[i] = it.DisplayText()
-		}
-		if pinsDue(pinsPath(in.SessionID), texts, now) {
-			fmt.Fprintf(stdout, "Pinned board items (reinjected on cadence):\n")
-			for _, t := range texts {
-				fmt.Fprintf(stdout, "- %s\n", t)
-			}
+	if block, texts := PinsBlock(b); len(texts) > 0 {
+		if pinsDue(pinsPath(in.SessionID), texts, PinCadence(b), now) {
+			fmt.Fprint(stdout, block)
 		}
 	}
 
@@ -203,14 +241,14 @@ func PromptSubmit(stdin io.Reader, stdout io.Writer) {
 // content hash changed, or now is more than pinCadence past the stored ts. On a
 // due result the file is rewritten with now + the current hash; otherwise it is
 // left untouched so staleness keeps accruing from the last real injection.
-func pinsDue(statePath string, texts []string, now time.Time) bool {
+func pinsDue(statePath string, texts []string, cadence time.Duration, now time.Time) bool {
 	hash := hashTexts(texts)
 	due := true
 	if data, err := os.ReadFile(statePath); err == nil {
 		if ts, h, ok := strings.Cut(strings.TrimSpace(string(data)), "\t"); ok {
 			if h == hash {
 				if sec, perr := strconv.ParseInt(ts, 10, 64); perr == nil {
-					due = now.Sub(time.Unix(sec, 0)) > pinCadence
+					due = now.Sub(time.Unix(sec, 0)) > cadence
 				}
 			}
 		}

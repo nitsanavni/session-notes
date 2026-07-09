@@ -43,6 +43,12 @@ func main() {
 		os.Exit(runEdit(args[1:]))
 	}
 
+	// Pins subcommand: surface a board's pinned items outside the prompt path
+	// (monitors can call `pins --due` on the shared cadence). See pins.go.
+	if len(args) >= 1 && args[0] == "pins" {
+		os.Exit(runPins(args[1:]))
+	}
+
 	// Docs subcommand: print an on-demand protocol/recipe topic. See docs.go.
 	if len(args) >= 1 && args[0] == "docs" {
 		os.Exit(runDocs(args[1:]))
@@ -257,6 +263,10 @@ Usage:
                                       --session <id>); subs: add reply status
                                       log title replace. --refresh-snapshot <p>
                                       refreshes a monitor snapshot in-lock
+  session-notes pins [--due] …        print a board's pinned-item block (--board
+                                      <path> or --session <id>); --due prints only
+                                      when due on the re-injection cadence and
+                                      updates the shared state (for monitors)
   session-notes docs <topic>          print a protocol/recipe topic
                                       (protocol|monitor|conflicts|cli); no topic
                                       lists them

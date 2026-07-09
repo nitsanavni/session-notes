@@ -26,32 +26,80 @@ func TestBlurb(t *testing.T) {
 }
 
 // TestPinsDueCadence exercises the three branches: first injection, unchanged +
-// fresh (suppressed), unchanged + stale (>35m), and content change.
+// fresh (suppressed), unchanged + stale (past cadence), and content change.
 func TestPinsDueCadence(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SESSION_NOTES_DIR", dir)
 	sp := pinsPath("sess")
 	now := time.Now()
 
+	cad := DefaultPinCadence
 	// 1. No state yet -> due.
-	if !pinsDue(sp, []string{"a", "b"}, now) {
+	if !pinsDue(sp, []string{"a", "b"}, cad, now) {
 		t.Fatal("first injection should be due")
 	}
 	// 2. Same content, only a minute later -> not due.
-	if pinsDue(sp, []string{"a", "b"}, now.Add(time.Minute)) {
+	if pinsDue(sp, []string{"a", "b"}, cad, now.Add(time.Minute)) {
 		t.Error("unchanged + fresh should be suppressed")
 	}
-	// 3. Same content, 40 minutes later -> due by staleness.
-	if !pinsDue(sp, []string{"a", "b"}, now.Add(40*time.Minute)) {
+	// 3. Same content, well past the cadence -> due by staleness.
+	if !pinsDue(sp, []string{"a", "b"}, cad, now.Add(cad+time.Minute)) {
 		t.Error("unchanged + stale should re-inject")
 	}
 	// After the stale injection the timestamp resets: a minute later is fresh.
-	if pinsDue(sp, []string{"a", "b"}, now.Add(41*time.Minute)) {
+	if pinsDue(sp, []string{"a", "b"}, cad, now.Add(cad+2*time.Minute)) {
 		t.Error("timestamp should reset after a stale injection")
 	}
 	// 4. Content change -> due, even when fresh.
-	if !pinsDue(sp, []string{"a", "c"}, now.Add(42*time.Minute)) {
+	if !pinsDue(sp, []string{"a", "c"}, cad, now.Add(cad+3*time.Minute)) {
 		t.Error("changed content should re-inject")
+	}
+}
+
+// TestPinCadenceParse checks the lenient frontmatter cadence knob: valid Go
+// durations win, a missing key uses the default, and garbage / non-positive
+// values fall back to the default without crashing.
+func TestPinCadenceParse(t *testing.T) {
+	cases := []struct {
+		fm   string
+		want time.Duration
+	}{
+		{"", DefaultPinCadence},           // absent -> default
+		{"10m", 10 * time.Minute},         // minutes
+		{"90s", 90 * time.Second},         // seconds
+		{"1h", time.Hour},                 // hours
+		{"  5m  ", 5 * time.Minute},       // surrounding whitespace tolerated
+		{"garbage", DefaultPinCadence},    // unparseable -> default
+		{"0s", DefaultPinCadence},         // zero -> default
+		{"-5m", DefaultPinCadence},        // negative -> default
+		{"10 minutes", DefaultPinCadence}, // wrong syntax -> default
+	}
+	for _, c := range cases {
+		b := &board.Board{}
+		b.Frontmatter.PinCadence = c.fm
+		if got := PinCadence(b); got != c.want {
+			t.Errorf("PinCadence(%q) = %v, want %v", c.fm, got, c.want)
+		}
+	}
+	if got := PinCadence(nil); got != DefaultPinCadence {
+		t.Errorf("PinCadence(nil) = %v, want default", got)
+	}
+}
+
+// TestPinsBlock checks the shared block format (header + one bullet per live pin)
+// and that a board with no pins yields empty output.
+func TestPinsBlock(t *testing.T) {
+	b := board.Parse("## Working Agreements\n- !pin keep tests green\n- [x] !pin done\n- plain\n")
+	block, texts := PinsBlock(b)
+	if len(texts) != 1 || texts[0] != "keep tests green" {
+		t.Fatalf("texts = %v, want [keep tests green]", texts)
+	}
+	want := "Pinned board items (reinjected on cadence):\n- keep tests green\n"
+	if block != want {
+		t.Errorf("block = %q, want %q", block, want)
+	}
+	if bl, tx := PinsBlock(board.Parse("## Plan\n- [ ] nothing pinned\n")); bl != "" || tx != nil {
+		t.Errorf("no-pin board = (%q,%v), want empty", bl, tx)
 	}
 }
 

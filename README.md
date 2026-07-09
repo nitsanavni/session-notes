@@ -179,11 +179,16 @@ destroyed):
   the next prompt (`hook prompt-submit`).
 - **Pin**: a leading `!pin` in the item text (mutually exclusive with `!!`, and
   *not* urgent). Pinned items are **re-injected on a cadence** — whenever the
-  pinned set changes, or more than 35 minutes pass since the last injection — so
-  standing instructions (typically the Working Agreements section) survive long
-  sessions and context compaction. You type `!pin` into the item text; the TUI
-  renders it with a subtle, calmer indicator than `!!`. There is no per-pin
-  frequency knob — a single global cadence.
+  pinned set changes, or the cadence passes since the last injection (default 15
+  minutes) — so standing instructions (typically the Working Agreements section)
+  survive long sessions and context compaction. You type `!pin` into the item
+  text; the TUI renders it with a subtle, calmer indicator than `!!`. The cadence
+  is a single per-board knob: set `pin-cadence:` in the board's frontmatter (Go
+  duration syntax, e.g. `pin-cadence: 10m` / `90s` / `1h`) to override the default.
+  Since most Claude turns come from a file-watch monitor rather than a user
+  prompt, a monitor can run `session-notes pins --due --board <path>` each cycle
+  to resurface pins on the same cadence and shared state; `session-notes pins`
+  (without `--due`) prints the current pinned block unconditionally.
 - **Addressing**: `@claude` / `@user` anywhere in the text.
 - **Replies (threads)**: an item indented two spaces under another item is a
   forum-style reply to it. Rather than editing an item's text to answer it, add a
@@ -393,8 +398,11 @@ global, see Install):
   has unacknowledged `!!` (urgent) items, it prints them so they're injected into
   Claude's context on the spot, rather than waiting for Claude to notice them on
   its own. It then **re-injects pinned (`!pin`) items on a cadence** — when the
-  pinned set changed since the last injection, or >35 min elapsed (tracked via
-  `~/.claude/boards/.state/<session-id>.pins`, timestamp + content hash). It then
+  pinned set changed since the last injection, or the cadence elapsed (default 15
+  min, overridable per board via a `pin-cadence:` frontmatter key; tracked via
+  `~/.claude/boards/.state/<session-id>.pins`, timestamp + content hash). The
+  `session-notes pins --due` command shares that same state, so a file-watch
+  monitor can resurface pins on the cadence without waiting for a prompt. It then
   prints a one-line **coherence digest** when anything is off — `Board health: N
   threads [>] untouched >2h · M questions @claude unanswered · K items in Waiting
   on User` — showing only the nonzero clauses, and nothing when the board is

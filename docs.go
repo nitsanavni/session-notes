@@ -42,8 +42,12 @@ Replies / threading (forum-style):
 Markers (in the item text, after any status marker):
 - "!!" — urgent. Injected into Claude's context once, on the next user prompt.
 - "!pin" — pinned. Re-injected on a cadence (whenever the pinned set changes, or
-  >35 min since the last injection). Use it for working agreements / standing
-  instructions that should survive long sessions and compaction.
+  >15 min since the last injection; override per board with a "pin-cadence:"
+  frontmatter key in Go duration syntax, e.g. "pin-cadence: 10m" / "90s" / "1h").
+  Use it for working agreements / standing instructions that should survive long
+  sessions and compaction. Prompt-submit rarely fires when Claude's turns come
+  from a file-watcher monitor, so a monitor can run "session-notes pins --due
+  --board <path>" on each cycle to resurface pins on the same cadence.
 
 [[links]] come in two forms, both opened with "o" in the TUI:
 - [[name]] (no slash) is a SIDE NOTE at <boards-dir>/<session-id>.notes/name.md.
@@ -124,7 +128,16 @@ Flags (any subcommand):
 
 Why the lock: the user edits the file concurrently, so writes serialize on an
 exclusive flock of the sidecar "<board>.lock" (not the board — it is replaced by
-atomic rename each save). Do NOT hand-roll this; use the CLI.`,
+atomic rename each save). Do NOT hand-roll this; use the CLI.
+
+Read-side helper (not a write):
+  pins [--due] --board <p>      print the board's pinned-item block. Plain: always
+                                print (silent when no pins). --due: print only when
+                                due on the re-injection cadence (default 15m, or the
+                                board's "pin-cadence:" frontmatter) and update the
+                                same state the prompt-submit hook uses. A file-watch
+                                monitor can call "pins --due" each cycle to resurface
+                                pins even when no user prompt fires.`,
 }
 
 // runDocs implements `session-notes docs [topic]`: print a topic's recipe, or

@@ -49,6 +49,8 @@ func Parse(src string) *Board {
 					b.Frontmatter.Started = val
 				case "title":
 					b.Frontmatter.Title = val
+				case "pin-cadence":
+					b.Frontmatter.PinCadence = val
 				default:
 					b.Frontmatter.extra = append(b.Frontmatter.extra, l)
 				}
@@ -167,6 +169,9 @@ func (b *Board) Render() string {
 		}
 		if b.Frontmatter.Title != "" {
 			sb.WriteString("title: " + b.Frontmatter.Title + "\n")
+		}
+		if b.Frontmatter.PinCadence != "" {
+			sb.WriteString("pin-cadence: " + b.Frontmatter.PinCadence + "\n")
 		}
 		for _, l := range b.Frontmatter.extra {
 			sb.WriteString(l + "\n")

@@ -9,6 +9,7 @@ maintains it during the session via hooks + file watching.
 - `session-notes` (no args) — open the TUI for the current session's board.
 - `session-notes --pane <tmux-pane-id>` — resolve board via pane mapping (used by tmux keybind).
 - `session-notes --board <path>` — open a specific board file.
+- `session-notes pins [--due] --board <path> | --session <id>` — print the board's pinned-item block (same format `prompt-submit` injects). Plain: always print, silent when there are no pins. `--due`: print only when due on the re-injection cadence, updating the same `.pins` state the hook uses (so a monitor and the hook share one cadence). Always exits 0.
 - `session-notes docs <topic>` — print an on-demand protocol/recipe topic (`protocol`, `monitor`, `conflicts`, `cli`, `blurb`); no/unknown topic lists them. `blurb` prints the session-start blurb itself (placeholder board path) — the single source shared with the `session-start` hook injection. Versioned with the binary; keeps the session-start blurb small.
 - `session-notes hook session-start` — Claude Code SessionStart hook (JSON on stdin).
 - `session-notes hook session-end` — SessionEnd hook.
@@ -76,7 +77,7 @@ Item conventions (parse leniently; unknown lines are kept verbatim):
 
 - Status: `- [ ]` open · `- [>]` in progress · `- [x]` done · `- [?]` blocked. Plain `- ` items allowed (Ideas/Log).
 - Urgency: leading `!!` in the text. Removing `!!` or checking the box acknowledges it.
-- Pin: leading `!pin` in the text (mutually exclusive with `!!`, and NOT urgent). Pinned items are re-injected into Claude's context by `prompt-submit` on a cadence (see below). Rendered with a subtle, calmer indicator than `!!`.
+- Pin: leading `!pin` in the text (mutually exclusive with `!!`, and NOT urgent). Pinned items are re-injected into Claude's context by `prompt-submit` on a cadence (see below), or on demand via `session-notes pins`. Rendered with a subtle, calmer indicator than `!!`.
 - Addressing: `@claude` / `@user` anywhere in the text.
 - Log is append-only, `- HH:MM author: text`.
 - Links: `[[name]]` (no slash) is a side note at `<boards-dir>/<session-id>.notes/name.md` (opening a missing one creates it). `[[path/with/slash.md]]` (contains `/`, or starts with `~/` or `/`) is a file path relative to the session cwd (`~` expanded, absolute as-is); opening a missing path errors rather than creating a stub. `o` opens the current item's first link.
@@ -158,8 +159,12 @@ atomic-write step — the CLI does not hand-roll a second lock protocol).
   recipes. Kept under ~12 lines so it doesn't bloat every session's context.
 - **prompt-submit**: read stdin JSON (has `session_id`). If the board has unchecked `!!`
   items, print them to stdout (they enter Claude's context). Then re-inject pinned (`!pin`)
-  items when due — the pinned set changed since the last injection, or >35 min elapsed —
-  tracked via `~/.claude/boards/.state/<session-id>.pins` (timestamp + content hash). Then
+  items when due — the pinned set changed since the last injection, or the cadence elapsed
+  (default 15 min, overridable per board with a `pin-cadence:` frontmatter key in Go duration
+  syntax, e.g. `10m`/`90s`/`1h`) — tracked via `~/.claude/boards/.state/<session-id>.pins`
+  (timestamp + content hash). Because most turns come from a file-watch monitor rather than a
+  user prompt, a monitor can call `session-notes pins --due --board <path>` each cycle to
+  resurface pins on the same cadence and shared state. Then
   print a one-line coherence digest ("Board health: N threads `[>]` untouched >2h · M
   questions @claude unanswered · K items in Waiting on User"), only the nonzero clauses, and
   only when at least one is nonzero — `[>]` age is tracked in

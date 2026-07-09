@@ -101,7 +101,12 @@ type Frontmatter struct {
 	// Title is an optional short human name for the session, shown by the TUI
 	// board header and the dashboard/picker in place of the raw session id.
 	Title string
-	extra []string // raw "key: value" lines for keys we don't model
+	// PinCadence is an optional per-board override (Go duration syntax, e.g.
+	// "10m", "90s", "1h") for how often pinned items re-inject even when
+	// unchanged. Empty means use the built-in default. Parsed leniently by the
+	// prompt-submit hook / `pins` command; garbage falls back to the default.
+	PinCadence string
+	extra      []string // raw "key: value" lines for keys we don't model
 }
 
 // DisplayText returns the display text of an item (without marker/urgency), or
