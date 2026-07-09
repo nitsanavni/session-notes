@@ -45,6 +45,7 @@ func searchMatches(b *board.Board, query string) []*board.Item {
 func (m *model) startSearch() {
 	m.searchSaveCursor = m.cursor
 	m.searchSaveMapKey = m.mapFocusKey
+	m.searchSaveMapRoot = m.mapFocusRoot
 	m.searchActive = false
 	m.searchIdx = 0
 	m.prevMode = m.mode
@@ -67,6 +68,9 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchActive = false
 		m.searchQuery = ""
 		if m.mapView {
+			// Restore the pre-search zoom root too: jumpToMatch may have cleared
+			// mapFocusRoot for a match outside the focused subtree.
+			m.mapFocusRoot = m.searchSaveMapRoot
 			m.mapFocusKey = m.searchSaveMapKey
 			m.mp = nil
 			m.ensureMap()

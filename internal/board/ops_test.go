@@ -80,6 +80,28 @@ func TestApplySemantics(t *testing.T) {
 		t.Error("urgent false on non-urgent item changed the board")
 	}
 
+	// pin is set-not-toggle, like urgent: set it, idempotent re-set is a no-op,
+	// then clear it.
+	if _, err := Apply(b, Op{Name: "pin", Query: "ship it?", Pinned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.Render(), "!pin ship it?") {
+		t.Errorf("pin not set:\n%s", b.Render())
+	}
+	pinned := b.Render()
+	if _, err := Apply(b, Op{Name: "pin", Query: "ship it?", Pinned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b.Render() != pinned {
+		t.Error("re-setting pin to the same state changed the board")
+	}
+	if _, err := Apply(b, Op{Name: "pin", Query: "ship it?", Pinned: false}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.Render(), "!pin") {
+		t.Errorf("pin not cleared:\n%s", b.Render())
+	}
+
 	// Guarded and malformed ops are ErrOpInvalid.
 	if _, err := Apply(b, Op{Name: "archive-section", Section: "Log"}); !errors.Is(err, ErrOpInvalid) {
 		t.Errorf("archiving Log: want ErrOpInvalid, got %v", err)

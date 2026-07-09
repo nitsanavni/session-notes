@@ -1056,7 +1056,12 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.reloadExternal()
 		m.status = "reloaded"
 	case "!":
-		// A nav move surprised you: note where you expected focus to land.
+		// Toggle urgent on the focused item — same meaning as the list view and the
+		// web map, so `!` is consistent everywhere.
+		m.mapUrgent()
+	case "S":
+		// Surprise recorder (TUI-dev-only): a nav move surprised you, note where you
+		// expected focus to land. Moved off `!` to restore cross-frontend key parity.
 		m.startInput(modeMapFeedback, "", "where did you expect it?")
 	case "/":
 		m.startSearch()
@@ -1166,6 +1171,29 @@ func (m *model) mapPin() {
 	m.mp = nil // pin marker alters node text/width -> re-layout
 }
 
+// mapUrgent toggles the "!!" urgent marker on the focused item and saves.
+// Sections and the center are not urgent-able (beep via a status message).
+// Mirrors the list view's `!` and the web map's urgent toggle.
+func (m *model) mapUrgent() {
+	ref := m.mp.refs[m.mp.focus]
+	if ref.kind != refItem {
+		m.status = "sections can't be urgent"
+		return
+	}
+	it := ref.item
+	m.snapshot()
+	op := pendingOp{typ: opUrgent, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+	it.ToggleUrgent()
+	op.newUrgent = it.Urgent
+	m.saveWithRebase(op)
+	if it.Urgent {
+		m.status = "urgent"
+	} else {
+		m.status = "not urgent"
+	}
+	m.mp = nil // urgent marker alters node text/width -> re-layout
+}
+
 // mapDelete hard-deletes the focused item's subtree (matching the list view's
 // D, which has no confirm), moving focus to the parent. Sections are protected;
 // the center is not deletable.
@@ -1176,7 +1204,20 @@ func (m *model) mapDelete() {
 		m.status = "can't delete the title"
 		return
 	case refSection:
-		m.status = "sections can't be deleted from the map"
+		// Hard-delete a whole section, matching the list view's D and the web map.
+		sec := m.board.Section(ref.section)
+		if sec == nil {
+			m.status = "section already gone"
+			return
+		}
+		title := sec.Title
+		m.snapshot()
+		m.board.RemoveSection(sec)
+		m.mapFocusKey = "" // focus falls back to the center
+		m.mapFocusRoot = ""
+		m.saveWithRebase(pendingOp{typ: opDeleteSection, section: title})
+		m.status = "deleted section " + title
+		m.mp = nil
 		return
 	}
 	it := ref.item
@@ -1716,7 +1757,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · / search · n/N next/prev · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · p pin · d archive (item/section) · D delete · y copy path · M log · m outline · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · / search · n/N next/prev · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · ! urgent · p pin · d archive (item/section) · D delete (item/section) · y copy path · M log · m outline · u undo · S surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

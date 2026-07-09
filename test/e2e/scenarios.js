@@ -45,15 +45,16 @@ run({
     await t.key('j'); // the !! question
     await t.key('j'); // its reply "user: leaning yes"
     await t.key('R');
+    // The reply input now starts empty (no implicit author) — text as typed.
     await t.type('shipping it');
     await t.key('Enter');
     // Flat: sibling of "leaning yes", i.e. 2-space indent under the question.
-    await t.waitBoardContains('\n  - user: shipping it\n');
+    await t.waitBoardContains('\n  - shipping it\n');
     await t.key('F');
     await t.type('forked aside');
     await t.key('Enter');
     // Fork target is the cursor item (the "leaning yes" reply): nests to 4.
-    await t.waitBoardContains('\n    - user: forked aside\n');
+    await t.waitBoardContains('\n    - forked aside\n');
   },
 
   'typed text survives an external write (deferred render)': async t => {
@@ -65,9 +66,9 @@ run({
     await t.editExternally({ op: 'log', text: 'external poke', author: 'claude' });
     await t.page.waitForTimeout(1200); // SSE fires; render must defer
     const val = await t.page.$eval('input.inline', i => i.value);
-    t.assert(val === 'user: mid-typing', `input intact (got ${JSON.stringify(val)})`);
+    t.assert(val === 'mid-typing', `input intact (got ${JSON.stringify(val)})`);
     await t.key('Enter');
-    await t.waitBoardContains('  - user: mid-typing');
+    await t.waitBoardContains('  - mid-typing');
     await t.settled();
     const body = await t.page.textContent('#board');
     t.assert(body.includes('external poke'), 'deferred external edit rendered after close');
@@ -85,7 +86,7 @@ run({
     await t.key('Enter');
     await t.settled();
     const box = await t.page.$eval('input.add[data-section="Threads"]', i => i.value);
-    t.assert(box === 'user: doomed reply', `text parked in add box (got ${JSON.stringify(box)})`);
+    t.assert(box === 'doomed reply', `text parked in add box (got ${JSON.stringify(box)})`);
   },
 
   'E raw editor saves with optimistic lock': async t => {
@@ -100,19 +101,21 @@ run({
     t.log('modal closed after save');
   },
 
-  'E raw editor conflict keeps modal and text': async t => {
+  'E raw editor 3-way merges a concurrent write instead of clobbering': async t => {
     await t.open();
     await t.key('E');
     await t.page.waitForSelector('#rawmodal.open');
+    // Claude appends a Log line while the editor is open.
     await t.editExternally({ op: 'log', text: 'race', author: 'claude' });
     await t.page.waitForTimeout(200);
     const ta = t.page.locator('#rawtext');
-    await ta.fill((await ta.inputValue()) + '- my precious edit\n');
+    // The user's edit lands in a disjoint region (a fresh section) so the two
+    // writes 3-way merge cleanly — both must survive (no clobber, no 409).
+    await ta.fill((await ta.inputValue()) + '\n## Scratch\n- my precious edit\n');
     await t.page.click('#rawsave');
-    await t.page.waitForTimeout(500);
-    t.assert(!!(await t.page.$('#rawmodal.open')), 'modal stayed open on conflict');
-    t.assert((await ta.inputValue()).includes('my precious edit'), 'text kept on conflict');
-    t.assert(!t.file().includes('my precious edit'), 'stale save did not clobber');
+    await t.page.waitForFunction(() => !document.querySelector('#rawmodal.open'), null, { timeout: 3000 });
+    await t.waitBoardContains('my precious edit');
+    t.assert(t.file().includes('race'), 'concurrent claude write survived the merge');
   },
 
   'o opens the side-note modal; save creates the file': async t => {
@@ -286,11 +289,93 @@ run({
     const map = (await t.sn2()).map;
     t.assert(map.focus === 'it:Threads:- [x] auth refactor — extracting middleware',
       `focus followed the status change (got ${map.focus})`);
-    await t.key('a'); // add child (fork)
-    await t.page.waitForSelector('#mapprompt.open');
+    await t.key('a'); // add child (fork), inline
+    await t.page.waitForSelector('.mapnode.editing input.mapinput');
     await t.type('from the map');
     await t.key('Enter');
-    await t.waitBoardContains('  - user: from the map');
+    await t.waitBoardContains('  - from the map');
+  },
+
+  'map: a opens an inline provisional node under the selection': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('m');
+    await t.settled();
+    const parent = (await t.sn2()).map.focus;
+    t.assert(parent === 'sec:Threads', `focused the section (got ${parent})`);
+    await t.key('a');
+    // The input is hosted inside a provisional node in the map, not a detached
+    // overlay: the focused node is the provisional one and it carries the input.
+    await t.page.waitForSelector('.mapnode.provisional.editing input.mapinput');
+    let map = (await t.sn2()).map;
+    t.assert(map.pending && map.pending.kind === 'add', 'pending add active');
+    t.assert(map.pending.parentKey === 'sec:Threads', `provisional lives under the selection (got ${map.pending.parentKey})`);
+    t.assert(map.focus === '__pending__', `focus on the provisional node (got ${map.focus})`);
+    // The provisional node sits inside the map canvas (in-place), not fixed.
+    const inMap = await t.page.evaluate(() =>
+      !!document.querySelector('#mapcanvas .mapnode.provisional input.mapinput'));
+    t.assert(inMap, 'provisional input is inside the map canvas');
+    await t.type('inline child');
+    await t.key('Enter');
+    await t.waitBoardContains('inline child');
+    await t.settled();
+    map = (await t.sn2()).map;
+    t.assert(!map.pending, 'pending cleared after commit');
+    // Focus follows the freshly-added node (not snapped back to the root).
+    t.assert(map.focus === 'it:Threads:- [ ] inline child',
+      `focus lands on the new node (got ${map.focus})`);
+  },
+
+  'map: Esc cancels the inline add and removes the provisional node': async t => {
+    await t.open();
+    await t.key('3');
+    await t.key('m');
+    await t.key('a');
+    await t.page.waitForSelector('.mapnode.provisional input.mapinput');
+    await t.type('discard me');
+    await t.key('Escape');
+    await t.page.waitForSelector('.mapnode.provisional', { state: 'detached' });
+    const map = (await t.sn2()).map;
+    t.assert(!map.pending, 'pending cleared on Esc');
+    t.assert(map.focus === 'sec:Threads', `focus restored to the anchor (got ${map.focus})`);
+    t.assert(!map.nodes.includes('__pending__'), 'provisional node gone');
+    t.assert(!t.file().includes('discard me'), 'nothing was committed');
+  },
+
+  'map: arrow cancels a fresh inline add': async t => {
+    await t.open();
+    await t.key('3');
+    await t.key('m');
+    await t.key('a');
+    await t.page.waitForSelector('.mapnode.provisional input.mapinput');
+    await t.key('ArrowUp');
+    await t.page.waitForSelector('.mapnode.provisional', { state: 'detached' });
+    const map = (await t.sn2()).map;
+    t.assert(!map.pending, 'pending cancelled by arrow');
+  },
+
+  'map: e edits the focused item inline (in-place input)': async t => {
+    await t.open();
+    await t.key('3');
+    await t.key('j'); // first item under Threads
+    await t.key('m');
+    await t.settled();
+    const key = (await t.sn2()).map.focus;
+    t.assert(key.startsWith('it:Threads:'), `focused an item (got ${key})`);
+    await t.key('e');
+    await t.page.waitForSelector('.mapnode.editing input.mapinput');
+    const map = (await t.sn2()).map;
+    t.assert(map.pending && map.pending.kind === 'edit', 'pending edit active');
+    t.assert(map.pending.targetKey === key, 'editing the focused node');
+    // The input is pre-filled with the item's current text (not blank).
+    const val = await t.page.inputValue('.mapnode.editing input.mapinput');
+    t.assert(val.length > 0, `input pre-filled with current text (got ${JSON.stringify(val)})`);
+    const aria = await t.page.getAttribute('.mapnode.editing input.mapinput', 'aria-label');
+    t.assert(aria === 'edit node', `input is labelled for a11y (got ${JSON.stringify(aria)})`);
+    await t.selectAll();
+    await t.type('renamed inline');
+    await t.key('Enter');
+    await t.waitBoardContains('renamed inline');
   },
 
   'map: M toggles the Log ring': async t => {
@@ -627,6 +712,221 @@ run({
     await t.page.waitForFunction(() => document.querySelectorAll('.searchhit').length === 0);
     t.assert((await t.page.locator('.searchmark').count()) === 0, 'substring tints cleared too');
     t.assert((await t.searchState()).hl === '', 'highlight query cleared');
+  },
+
+  'map default fold keeps status-less bullets visible, hides replies': async t => {
+    await t.open();
+    await t.key('m');
+    await t.settled();
+    const nodes = (await t.sn2()).map.nodes;
+    t.assert(nodes.some(k => k.startsWith('it:Ideas:- cache invalidation')),
+      'a plain status-less bullet stays visible in the default map');
+    t.assert(!nodes.some(k => k.includes('user: leaning yes')),
+      'a conversational user:/claude: reply is folded behind [+N]');
+  },
+
+  'map space cycles a plain bullet through all five states': async t => {
+    await t.open();
+    await t.key('5'); // Ideas
+    await t.key('j');
+    await t.assertCursor('it:Ideas:- cache invalidation could be event-driven');
+    await t.key('m');
+    await t.key(' '); await t.waitBoardContains('- [ ] cache invalidation could be event-driven');
+    await t.key(' '); await t.waitBoardContains('- [>] cache invalidation could be event-driven');
+    await t.key(' '); await t.waitBoardContains('- [x] cache invalidation could be event-driven');
+    await t.key(' '); await t.waitBoardContains('- [?] cache invalidation could be event-driven');
+    await t.key(' '); await t.waitBoardContains('- cache invalidation could be event-driven');
+  },
+
+  'map A adds a sibling reply under the same parent': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('j'); // auth refactor item
+    await t.key('j'); // its claude: reply
+    await t.assertCursor('it:Threads:  - claude: extracted, tests green');
+    await t.key('m');
+    await t.key('A');
+    await t.page.waitForSelector('.mapnode.provisional input.mapinput');
+    await t.type('sibling-reply-x');
+    await t.key('Enter');
+    await t.waitBoardContains('sibling-reply-x');
+    // The new item is a peer reply (indented under auth refactor), not a child
+    // of the claude reply.
+    t.assert(t.file().includes('  - sibling-reply-x'), 'sibling added at reply depth');
+  },
+
+  'T edits the board title from the outline': async t => {
+    await t.open();
+    await t.key('T');
+    await t.page.waitForSelector('#title input.inline');
+    await t.selectAll();
+    await t.type('renamed via T');
+    await t.key('Enter');
+    await t.waitBoardContains('title: renamed via T');
+  },
+
+  'A opens the add-section overlay (custom entry adds a section)': async t => {
+    await t.open();
+    await t.key('A');
+    await t.page.waitForSelector('#addsecmodal.open');
+    await t.page.fill('#addsecmodal input.custom', 'Retro');
+    await t.page.press('#addsecmodal input.custom', 'Enter');
+    await t.waitBoardContains('## Retro');
+  },
+
+  'p toggles pin on an item from the outline': async t => {
+    await t.open();
+    await t.key('2'); // Plan
+    await t.key('j', 3);
+    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint');
+    await t.key('p');
+    await t.waitBoardContains('!pin drop legacy endpoint');
+    await t.key('p');
+    await t.waitBoardContains('!pin drop legacy endpoint', false);
+  },
+
+  'add on a collapsed section auto-expands and adds a visible item': async t => {
+    await t.open();
+    await t.key('2'); // sec:Plan
+    await t.key('h'); // collapse
+    const col = await t.page.evaluate(() => window.__sn.collapsedSecs);
+    t.assert(col.Plan === true, 'Plan is collapsed');
+    await t.key('a'); // auto-expands the section and focuses its add box
+    await t.page.waitForSelector('input.add[data-section="Plan"]', { timeout: 3000 });
+    await t.page.fill('input.add[data-section="Plan"]', 'added-after-expand');
+    await t.page.press('input.add[data-section="Plan"]', 'Enter');
+    await t.waitBoardContains('added-after-expand');
+  },
+
+  'D deletes an item without a confirm dialog': async t => {
+    await t.open();
+    t.page.removeAllListeners('dialog');
+    let sawDialog = false;
+    t.page.on('dialog', d => { sawDialog = true; d.dismiss(); });
+    await t.key('2'); // Plan
+    await t.key('j', 3);
+    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint');
+    await t.key('D');
+    await t.waitBoardContains('drop legacy endpoint', false);
+    t.assert(!sawDialog, 'D hard-deleted without prompting a confirm dialog');
+  },
+
+  'section headers show a discoverable 1-9 index hint': async t => {
+    await t.open();
+    const first = await t.page.locator('.sechead .secidx').first().innerText();
+    t.assert(first === '1', 'first section shows index 1');
+    const count = await t.page.locator('.sechead .secidx').count();
+    t.assert(count === 6, `all six sections show an index (got ${count})`);
+  },
+
+  'B navigates back to the boards dashboard': async t => {
+    await t.open();
+    await t.key('B');
+    await t.page.waitForSelector('a.card');
+    t.assert(t.page.url().replace(/\/$/, '') === t.base, `B went to / (got ${t.page.url()})`);
+  },
+
+  'o on an item with several links opens a chooser': async t => {
+    await t.open();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'links [[alpha]] and [[beta]]' });
+    await t.settled();
+    await t.page.locator('.row', { hasText: 'alpha' }).click();
+    await t.key('o');
+    await t.page.waitForSelector('#linkchooser.open');
+    const rows = await t.page.locator('#linkchooser .lrow').count();
+    t.assert(rows === 2, `chooser shows both links (got ${rows})`);
+    await t.key('Escape');
+  },
+
+  'map j from the center steps to the nearest first-ring node': async t => {
+    await t.open();
+    await t.key('m');
+    await t.settled();
+    let m = (await t.sn2()).map;
+    t.assert(m.focus === 'center', 'map opens focused on the center');
+    await t.key('j');
+    m = (await t.sn2()).map;
+    t.assert(m.focus.startsWith('sec:'), `j from center lands on a first-ring section (got ${m.focus})`);
+  },
+
+  'map f focuses a collapsed section node': async t => {
+    await t.open();
+    await t.key('4'); // Questions
+    await t.key('m');
+    await t.settled();
+    await t.key('Enter'); // fold the section closed
+    await t.key('f');      // focus into it even though it shows no children
+    const m = (await t.sn2()).map;
+    t.assert(m.root === 'sec:Questions', `f re-rooted onto the collapsed node (got ${m.root})`);
+  },
+
+  'map footer shows a Log-hidden reminder until M reveals it': async t => {
+    await t.open();
+    await t.key('m');
+    await t.settled();
+    let foot = await t.page.locator('#mapfoot').innerText();
+    t.assert(foot.includes('Log hidden'), 'reminder shown while the Log ring is hidden');
+    await t.key('M');
+    await t.settled();
+    foot = await t.page.locator('#mapfoot').innerText();
+    t.assert(!foot.includes('Log hidden'), 'reminder gone once Log is shown');
+  },
+
+  'search tally stays visible through n/N (persistent status)': async t => {
+    await t.open();
+    await t.key('/');
+    await t.type('legacy');
+    await t.key('Enter');
+    await t.page.waitForSelector('#searchstatus.show');
+    const s1 = await t.page.locator('#searchstatus').innerText();
+    t.assert(/\d+\/\d+ matches/.test(s1), `tally shown (got ${JSON.stringify(s1)})`);
+    await t.key('n');
+    await t.page.waitForTimeout(80);
+    t.assert(await t.page.locator('#searchstatus.show').count() === 1,
+      'tally still visible after stepping with n');
+  },
+
+  'urgent items are fully tinted; reply rows are dimmed (outline)': async t => {
+    await t.open();
+    const r = await t.page.evaluate(() => {
+      const u = document.querySelector('li.urgent');
+      const rep = document.querySelector('li.reply');
+      const dim = getComputedStyle(document.documentElement).getPropertyValue('--dim').trim();
+      const asRGB = c => { const s = document.createElement('span'); s.style.color = c; document.body.append(s); const v = getComputedStyle(s).color; s.remove(); return v; };
+      return {
+        hasUrgent: !!u, hasReply: !!rep,
+        urgentText: u ? getComputedStyle(u.querySelector('.text')).color : null,
+        urgentFlag: u ? getComputedStyle(u.querySelector('.urgentflag')).color : null,
+        replyText: rep ? getComputedStyle(rep.querySelector('.text')).color : null,
+        dim: dim ? asRGB(dim) : null,
+      };
+    });
+    t.assert(r.hasUrgent && r.urgentText === r.urgentFlag,
+      'urgent whole-line text takes the urgent color (matches the flag)');
+    t.assert(r.hasReply && r.replyText === r.dim, 'reply row text is dimmed');
+  },
+
+  'map colors pinned, wip and blocked nodes': async t => {
+    await t.open();
+    await t.key('m');
+    await t.settled();
+    const cls = await t.page.evaluate(() => {
+      const nodes = [...document.querySelectorAll('.mapnode')];
+      const find = s => { const n = nodes.find(n => n.textContent.includes(s)); return n ? n.className : null; };
+      return { pin: find('always run gofmt'), wip: find('auth refactor') };
+    });
+    t.assert(cls.pin && cls.pin.includes('pin'), `pinned node has the pin class (got ${cls.pin})`);
+    t.assert(cls.wip && cls.wip.includes('wip'), `wip node has the wip class (got ${cls.wip})`);
+  },
+
+  'dashboard shows a project count and l opens a card': async t => {
+    await t.openDash();
+    const count = await t.page.locator('#count').innerText();
+    t.assert(/project/.test(count), `dashboard surfaces project scope (got ${JSON.stringify(count)})`);
+    await t.key('j');
+    await t.key('l');
+    await t.page.waitForSelector('.marker');
+    t.assert(t.page.url().includes('/b/'), 'l opened the selected card');
   },
 
   'dashboard lists the board and enter opens it': async t => {

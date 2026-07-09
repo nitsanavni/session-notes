@@ -58,7 +58,8 @@ node's fold — collapsed → default → replies-shown → collapsed: each pres
 more until the whole subtree is visible, then one more collapses it to a single
 `[+N]` summary of everything hidden — the summary suffix is
 always kept even when the node's text is truncated. When a move surprises you (focus
-didn't land where your fingers expected), press `!`: a prompt shows what just
+didn't land where your fingers expected), press `S` (a dev-only key — `!` now
+toggles urgent, matching the outline and web): a prompt shows what just
 happened ("you hit k · focus moved 'Log' → 'Working Agreements' — where did you
 expect it?") and your note is appended to `<board>.feedback.jsonl` along with
 the last 20 map actions, each with a replayable before-state. Browse the log
@@ -438,6 +439,7 @@ tenants of the same network.
 |---------------|------------------------------------------|
 | `j` / `k`     | move cursor down / up                    |
 | `tab` / `shift-tab` | next / previous section             |
+| `g` / `G`     | jump to first / last visible stop         |
 | `1` … `9`     | jump to the Nth section                   |
 | `/`           | incremental search item text (matches highlighted while live); `n` / `N` next / previous match |
 | `a`           | add item to current section              |
@@ -445,8 +447,10 @@ tenants of the same network.
 | `R`           | reply in thread (flat sibling on a reply) |
 | `F`           | fork a sub-thread under the cursor        |
 | `space`       | cycle status `[ ] → [>] → [x]`           |
+| `b`           | toggle blocked `[?]`                     |
 | `!`           | toggle urgent (`!!`)                     |
 | `e`           | edit item inline (the bullet line only)  |
+| `H`           | history view (shared journal, read-only) |
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
 | `o`           | open item's first `[[link]]` in `$EDITOR` (suspends TUI) |
 | `y`           | copy board file path to clipboard (shown in status) |

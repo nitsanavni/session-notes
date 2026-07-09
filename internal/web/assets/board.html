@@ -44,6 +44,7 @@ header .tools button:disabled { opacity: .3; cursor: default; }
 .sechead h2 { font-size: .95rem; margin: 0; color: var(--accent); font-weight: 600; cursor: pointer; }
 .sechead .fold { flex: none; color: var(--dim); cursor: pointer; user-select: none; font-size: .8em; width: .9em; }
 .sechead .count { color: var(--dim); font-size: .85em; font-weight: 400; }
+.sechead .secidx { color: var(--dim); font-size: .72em; opacity: .7; }
 .sechead .actions { visibility: hidden; }
 .sechead:hover .actions { visibility: visible; }
 ul { margin: 0; padding: 0; list-style: none; }
@@ -65,6 +66,8 @@ li { padding: .1rem 0; }
    TUI's per-item wrap toggle). */
 .text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .text.wrap { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.reply > .row .text { color: var(--dim); }
+.urgent > .row .text { color: var(--urgent); font-weight: 700; }
 .done > .row .text { color: var(--dim); }
 .author { font-weight: 600; }
 .author.claude { color: var(--author-claude); }
@@ -101,6 +104,14 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 }
 #err.show { opacity: 1; }
 #err.info { background: var(--accent); }
+/* Persistent search tally: stays visible through follow mode + n/N stepping
+   (the TUI keeps the count in its status bar), unlike the auto-clearing toast. */
+#searchstatus {
+  position: fixed; top: .6rem; right: .8rem; z-index: 24;
+  background: var(--accent); color: var(--bg); padding: .15rem .5rem;
+  border-radius: 6px; font-size: .78em; display: none;
+}
+#searchstatus.show { display: block; }
 .modal {
   position: fixed; inset: 0; background: rgba(0,0,0,.45);
   display: none; align-items: center; justify-content: center; z-index: 20;
@@ -168,17 +179,18 @@ body.mapmode #mapwrap { display: block; }
 .mapnode.reply { color: var(--dim); }
 .mapnode.done { color: var(--dim); }
 .mapnode.urgent { color: var(--urgent); }
+.mapnode.pin { color: var(--pin); }
+.mapnode.wip { color: var(--accent); }
+.mapnode.blocked { color: var(--urgent); }
 .mapnode .suffix { color: var(--pin); }
-#mapprompt {
-  position: fixed; top: 20%; left: 50%; transform: translateX(-50%);
-  background: var(--bg); border: 1px solid var(--accent); border-radius: 8px;
-  padding: .6rem .8rem; z-index: 25; width: min(480px, 90vw); display: none;
-}
-#mapprompt.open { display: block; }
-#mapprompt .lbl { color: var(--dim); font-size: .8em; margin-bottom: .3rem; }
-#mapprompt input {
-  width: 100%; font: inherit; color: var(--fg); background: var(--input);
-  border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
+/* Inline add/edit: a provisional node sits where the new/edited node lives,
+   with the text input hosted inside its own box (no detached overlay). */
+.mapnode.provisional { border-style: dashed; border-color: var(--accent); }
+.mapnode.editing { border-color: var(--accent); background: var(--cursor); padding: 0; }
+.mapnode input.mapinput {
+  font: inherit; font-size: 1em; color: var(--fg); background: transparent;
+  border: none; border-radius: 5px; padding: 1px 6px; margin: 0;
+  outline: none; min-width: 6ch;
 }
 /* Incremental search prompt (`/`), shared by both views. */
 #searchprompt {
@@ -188,6 +200,29 @@ body.mapmode #mapwrap { display: block; }
   display: none; align-items: baseline; gap: .4rem;
 }
 #searchprompt.open { display: flex; }
+#linkchooser {
+  position: fixed; top: 18%; left: 50%; transform: translateX(-50%);
+  background: var(--bg); border: 1px solid var(--accent); border-radius: 8px;
+  padding: .6rem .8rem; z-index: 26; width: min(480px, 90vw); display: none;
+}
+#linkchooser.open { display: block; }
+#linkchooser .lbl { color: var(--dim); font-size: .8em; margin-bottom: .4rem; }
+#linkchooser .lrow { padding: .2rem .4rem; border-radius: 6px; cursor: pointer; color: var(--link); }
+#linkchooser .lrow.sel { background: var(--cursor); outline: 1px solid var(--border); }
+#addsecmodal {
+  position: fixed; top: 16%; left: 50%; transform: translateX(-50%);
+  background: var(--bg); border: 1px solid var(--accent); border-radius: 8px;
+  padding: .6rem .8rem; z-index: 26; width: min(420px, 90vw); display: none;
+}
+#addsecmodal.open { display: block; }
+#addsecmodal .lbl { color: var(--dim); font-size: .8em; margin-bottom: .4rem; }
+#addsecmodal .srow { padding: .2rem .4rem; border-radius: 6px; cursor: pointer; }
+#addsecmodal .srow.sel { background: var(--cursor); outline: 1px solid var(--border); }
+#addsecmodal .srow .box { color: var(--accent); margin-right: .4rem; }
+#addsecmodal input.custom {
+  width: 100%; margin-top: .5rem; font: inherit; color: var(--fg); background: var(--input);
+  border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
+}
 #searchprompt .lbl { color: var(--accent); font-weight: 700; flex: none; }
 #searchprompt input {
   flex: 1; font: inherit; color: var(--fg); background: var(--input);
@@ -214,12 +249,13 @@ body.mapmode #mapwrap { display: block; }
 <div id="mapwrap">
   <div id="mapcrumb"></div>
   <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
-</div>
-<div id="mapprompt"><div class="lbl"></div><input spellcheck="false"></div>
-<div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"></div>
-<footer id="listfoot">j/k move · tab section · enter fold · a add · R reply · F fork · space status · ! urgent · w wrap · e edit · d archive · E raw · o link · m map · / search · u undo · ? help</footer>
+</div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"></div>
+<div id="linkchooser"><div class="lbl">open link — j/k move · enter open · esc cancel</div><div class="list"></div></div>
+<div id="addsecmodal"><div class="lbl">add sections — j/k move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
+<footer id="listfoot">j/k move · tab section · enter fold · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
+<div id="searchstatus"></div>
 
 <div class="modal" id="notemodal"><div class="panel">
   <div class="bar"><b id="notename"></b><button id="notesave">save</button><button id="noteclose">close</button></div>
@@ -252,9 +288,12 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
     <tr><td>!</td><td>toggle urgent</td></tr>
+    <tr><td>p</td><td>toggle pin</td></tr>
     <tr><td>e</td><td>edit item · rename section (on a heading)</td></tr>
-    <tr><td>E</td><td>edit the whole board markdown</td></tr>
-    <tr><td>o</td><td>open the item's first [[link]]</td></tr>
+    <tr><td>E</td><td>edit the whole board markdown (3-way merged on save)</td></tr>
+    <tr><td>T</td><td>edit the board title (frontmatter title)</td></tr>
+    <tr><td>B</td><td>back to the board picker</td></tr>
+    <tr><td>o</td><td>open the item's [[link]] — chooser when it has several</td></tr>
     <tr><td>/ · n / N</td><td>incremental search · next / previous match (wrapping)</td></tr>
     <tr><td>L</td><td>log entry</td></tr>
     <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
@@ -262,7 +301,9 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>H</td><td>history: what changed, by whom</td></tr>
     <tr><td>y</td><td>copy board file path</td></tr>
     <tr><td>m</td><td>mindmap view (in the map: hjkl move, enter fold, w expand node,
-      f focus subtree, b step out, M toggle Log, m/q back)</td></tr>
+      f focus subtree, b step out, e edit, a add child, A sibling, space cycle status,
+      p pin, ! urgent, d archive, D delete, o open link, y copy path, u undo,
+      / n N search, M toggle Log, m/q back)</td></tr>
     <tr><td>?</td><td>this help</td></tr>
   </table>
 </div></div>
@@ -272,6 +313,14 @@ const ID = decodeURIComponent(location.pathname.split('/').pop());
 const API = `/api/board/${encodeURIComponent(ID)}`;
 const MARKERS = { open: '[ ]', wip: '[>]', done: '[x]', blocked: '[?]', none: '·' };
 const NEXT = { open: 'wip', wip: 'done', done: 'open', blocked: 'open' };
+// Map-view status cycle: the TUI's mapNextStatus (5-state, reaches blocked and
+// clears back to none), distinct from the list-view NEXT 3-state cycle.
+const MAP_NEXT = { none: 'open', open: 'wip', wip: 'done', done: 'blocked', blocked: 'none' };
+// A node is a conversational reply only when its text begins with a claude:/
+// user: author tag (the TUI's replyRe). The default map fold hides only these
+// behind [+N]; every other unmarked bullet stays visible.
+const REPLY_RE = /^(claude|user):/;
+const isReplyText = t => REPLY_RE.test(t || '');
 let cur = null;
 // Per-item wrap toggle (the `w` key), keyed by the item's raw source line: a
 // present key means "show this long item's full text wrapped" instead of the
@@ -452,38 +501,102 @@ function firstLink(text) {
   return { name, isPath: name.includes('/') || name.startsWith('~') };
 }
 
+// extractLinks returns every [[link]] on an item (name + path-form flag), in
+// document order — the source for the multi-link chooser (the TUI's o).
+function extractLinks(text) {
+  const re = /\[\[([^\[\]]+)\]\]/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(text))) {
+    const name = m[1].trim();
+    out.push({ name, isPath: name.includes('/') || name.startsWith('~') });
+  }
+  return out;
+}
+
+// openLink opens a single [[link]] (side note modal, or a hint for path links).
+function openLink(l) {
+  if (l.isPath) { toast(`path link — open ${l.name} in your editor`, true); return; }
+  openNote(l.name);
+}
+
+// linkChooser shows a keyboard-navigable overlay to pick among 2+ links
+// (j/k move, Enter/o open, Esc cancel), mirroring the TUI's modeLinkPick.
+function linkChooser(links) {
+  const box = document.getElementById('linkchooser');
+  const list = box.querySelector('.list');
+  let sel = 0;
+  const paint = () => {
+    [...list.children].forEach((row, i) => row.classList.toggle('sel', i === sel));
+  };
+  list.textContent = '';
+  links.forEach((l, i) => {
+    const row = el('div', { class: 'lrow' }, `[[${l.name}]]` + (l.isPath ? '  (path)' : ''));
+    row.addEventListener('click', () => { close(); openLink(l); });
+    list.append(row);
+  });
+  paint();
+  box.classList.add('open');
+  inputsOpen++;
+  const close = () => {
+    inputsOpen--;
+    box.classList.remove('open');
+    document.removeEventListener('keydown', onKey, true);
+    if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
+  };
+  const onKey = ev => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    if (ev.key === 'j' || ev.key === 'ArrowDown') { sel = Math.min(links.length - 1, sel + 1); paint(); }
+    else if (ev.key === 'k' || ev.key === 'ArrowUp') { sel = Math.max(0, sel - 1); paint(); }
+    else if (ev.key === 'Enter' || ev.key === 'o') { close(); openLink(links[sel]); }
+    else if (ev.key === 'Escape' || ev.key === 'q') { close(); }
+  };
+  document.addEventListener('keydown', onKey, true);
+}
+
 // ---- item actions, shared by hover buttons and keys ----
 const act = {
   cycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: NEXT[it.status] || 'open' }); },
+  // Map-view cycle: 5-state (none→open→wip→done→blocked→none), so a plain
+  // bullet can be marked and a marker cleared from the map (TUI mapNextStatus).
+  mapCycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: MAP_NEXT[it.status] || 'open' }); },
+  pin: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'pin', section: s, raw: it.raw, pinned: !it.pinned }); },
   blocked: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: it.status === 'blocked' ? 'open' : 'blocked' }); },
   urgent: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'urgent', section: s, raw: it.raw, urgent: !it.urgent }); },
   archive: (s, it) => { cursorFollow = { section: s }; return post({ op: 'archive', section: s, raw: it.raw }); },
-  del: (s, it) => { if (confirm('Delete this item and its replies?')) { cursorFollow = { section: s }; post({ op: 'delete', section: s, raw: it.raw }); } },
+  // Hard-delete with no confirm, matching the TUI's D (both share the undo
+  // journal, so the prompt is redundant friction).
+  del: (s, it) => { cursorFollow = { section: s }; return post({ op: 'delete', section: s, raw: it.raw }); },
   edit: (s, it, row) => inlineInput(row, it.text, v => { cursorFollow = { section: s, text: v }; post({ op: 'edit', section: s, raw: it.raw, text: v }, v); }),
   reply: (s, it, row, li, op) => {
     const holder = el('li');
     li.after(holder);
-    inlineInput(holder, 'user: ',
+    inlineInput(holder, '',
       v => post({ op, section: s, raw: it.raw, text: v }, v).then(() => holder.remove()),
       () => holder.remove());
   },
   open: (s, it) => {
-    const l = firstLink(it.text);
-    if (!l) { toast('no [[link]] on this item', true); return; }
-    if (l.isPath) { toast(`path link — open ${l.name} in your editor`, true); return; }
-    openNote(l.name);
+    const links = extractLinks(it.text);
+    if (!links.length) { toast('no [[link]] on this item', true); return; }
+    if (links.length === 1) { openLink(links[0]); return; }
+    linkChooser(links); // 2+ links: pick one (TUI's modeLinkPick)
   },
 };
 
 function itemNode(section, it) {
   if (it.continuation) return el('pre', { class: 'cont' }, it.text);
 
-  const li = el('li', { class: it.status === 'done' ? 'done' : '' });
+  const licls = [];
+  if (it.status === 'done') licls.push('done');
+  else if (it.urgent) licls.push('urgent');
+  if (isReplyText(it.text)) licls.push('reply');
+  const li = el('li', { class: licls.join(' ') });
   const row = el('div', { class: 'row' });
   const key = `it:${section}:${it.raw}`;
   const text = el('span', { class: 'text' + (listExpanded.has(it.raw) ? ' wrap' : '') });
   registerStop({ key, type: 'item', el: row, section, it, row, li, text });
-  row.addEventListener('click', () => setCursor(stops.find(s => s.key === key), false));
+  row.addEventListener('click', () => { if (searchHL !== '') endSearch(); setCursor(stops.find(s => s.key === key), false); });
 
   if (it.status !== 'none') {
     row.append(el('button', {
@@ -507,6 +620,7 @@ function itemNode(section, it) {
     el('button', { title: 'fork a sub-thread here (F)', onclick: () => act.reply(section, it, row, li, 'fork') }, '⑂'),
     el('button', { title: 'toggle urgent (!)', onclick: () => act.urgent(section, it) }, '!!'),
     el('button', { title: 'toggle blocked (b)', onclick: () => act.blocked(section, it) }, '[?]'),
+    el('button', { title: 'toggle pin (p)', onclick: () => act.pin(section, it) }, '⚲'),
     el('button', { title: 'archive (d)', onclick: () => act.archive(section, it) }, '⤓'),
     el('button', { title: 'delete (D)', onclick: () => act.del(section, it) }, '✕'),
   ));
@@ -573,10 +687,10 @@ function addInput(section, isLog) {
 const renameSection = (head, title) =>
   inlineInput(head, title, v => { cursorFollow = { section: v }; post({ op: 'rename-section', section: title, text: v }); });
 
-function sectionHead(title, collapsed, count) {
+function sectionHead(title, collapsed, count, idx) {
   const head = el('div', { class: 'sechead' });
   registerStop({ key: `sec:${title}`, type: 'section', el: head, title, head });
-  head.addEventListener('click', () => setCursor(stops.find(s => s.key === `sec:${title}`), false));
+  head.addEventListener('click', () => { if (searchHL !== '') endSearch(); setCursor(stops.find(s => s.key === `sec:${title}`), false); });
   // Fold caret: click toggles collapse (enter/l/h from the keyboard).
   const caret = el('span', { class: 'fold', title: 'collapse / expand (enter)' }, collapsed ? '▸' : '▾');
   caret.addEventListener('click', ev => { ev.stopPropagation(); toggleSectionCollapse(title); });
@@ -584,6 +698,8 @@ function sectionHead(title, collapsed, count) {
   const h = el('h2', { title: 'double-click to rename (e) · click ▸ to fold' }, title);
   h.addEventListener('dblclick', () => renameSection(head, title));
   head.append(h);
+  // A dim 1..9 index advertises the number-key jumps (TUI view.go:158).
+  if (idx < 9) head.append(el('span', { class: 'secidx', title: `press ${idx + 1} to jump here` }, String(idx + 1)));
   if (collapsed) {
     const label = title === 'Archive' ? `(${count} archived)` : `(${count} items)`;
     head.append(el('span', { class: 'count' }, label));
@@ -621,12 +737,13 @@ function renderOutline(b) {
 
   stops = [];
   main.textContent = '';
+  let secIdx = 0;
   for (const sec of b.sections || []) {
     const isLog = sec.title === 'Log';
     const collapsed = sectionCollapsed(sec.title);
     const count = countItems(sec.items);
     // Head first so the stop order matches the visual order (j/k walk it).
-    const head = sectionHead(sec.title, collapsed, count);
+    const head = sectionHead(sec.title, collapsed, count, secIdx++);
     if (collapsed) {
       // A collapsed section shows only its header + count; its items build no
       // stops (they are hidden and non-navigable, like the TUI).
@@ -674,14 +791,81 @@ function renderOutline(b) {
   }
 }
 
+// CanonicalSections mirrors board.CanonicalSections — the template section
+// types offered by the add-section overlay (the TUI's openAddSections).
+const CANONICAL = ['Plan', 'Threads', 'Questions', 'Ideas', 'Log'];
+
+// addSectionOverlay: multi-select of canonical sections not already present,
+// plus a custom free-text entry (the TUI's A). j/k move, space toggles, Enter
+// adds all selected (one add-section op each) + the custom name if given, Esc
+// cancels. Falls back to focusing the inline add-section box if all canonical
+// sections already exist and the user prefers the custom path.
+function addSectionOverlay() {
+  const present = new Set((cur && cur.sections || []).map(s => s.title));
+  const options = CANONICAL.filter(t => !present.has(t));
+  const box = document.getElementById('addsecmodal');
+  const list = box.querySelector('.list');
+  const custom = box.querySelector('.custom');
+  const picked = new Set();
+  let sel = 0;
+  list.textContent = '';
+  options.forEach((t, i) => {
+    const row = el('div', { class: 'srow' }, el('span', { class: 'box' }, '[ ]'), t);
+    row.addEventListener('click', () => { sel = i; toggle(); paint(); });
+    list.append(row);
+  });
+  const rows = [...list.children];
+  const toggle = () => {
+    const t = options[sel];
+    if (picked.has(t)) picked.delete(t); else picked.add(t);
+    rows[sel].querySelector('.box').textContent = picked.has(t) ? '[x]' : '[ ]';
+  };
+  const paint = () => rows.forEach((r, i) => r.classList.toggle('sel', i === sel));
+  custom.value = '';
+  paint();
+  box.classList.add('open');
+  inputsOpen++;
+  const close = () => {
+    inputsOpen--;
+    box.classList.remove('open');
+    document.removeEventListener('keydown', onKey, true);
+    custom.onkeydown = null;
+    if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
+  };
+  const confirm = () => {
+    const names = [...picked];
+    const c = custom.value.trim();
+    if (c && !names.includes(c)) names.push(c);
+    close();
+    for (const nm of names) post({ op: 'add-section', text: nm });
+  };
+  custom.onkeydown = ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') confirm();
+    else if (ev.key === 'Escape') close();
+  };
+  const onKey = ev => {
+    if (document.activeElement === custom) return; // custom input owns its keys
+    ev.stopPropagation(); ev.preventDefault();
+    if (ev.key === 'j' || ev.key === 'ArrowDown') { if (options.length) { sel = Math.min(options.length - 1, sel + 1); paint(); } }
+    else if (ev.key === 'k' || ev.key === 'ArrowUp') { if (options.length) { sel = Math.max(0, sel - 1); paint(); } }
+    else if (ev.key === ' ') { if (options.length) toggle(); }
+    else if (ev.key === 'i') { custom.focus(); }
+    else if (ev.key === 'Enter') confirm();
+    else if (ev.key === 'Escape' || ev.key === 'q') close();
+  };
+  document.addEventListener('keydown', onKey, true);
+}
+
 const countItems = items => (items || []).reduce((n, it) => n + (it.continuation ? 0 : 1) + countItems(it.children), 0);
 const shortId = s => (s || '').split('-')[0].slice(0, 8);
 
 // ---- header tools ----
-document.getElementById('title').addEventListener('click', () => {
+function startTitleEdit() {
   const holder = document.getElementById('title');
   inlineInput(holder, cur && cur.title || '', v => post({ op: 'title', text: v }));
-});
+}
+document.getElementById('title').addEventListener('click', startTitleEdit);
 document.getElementById('undo').addEventListener('click', () => post({ op: 'undo' }));
 document.getElementById('redo').addEventListener('click', () => post({ op: 'redo' }));
 document.getElementById('rawedit').addEventListener('click', openRaw);
@@ -731,9 +915,26 @@ async function openRaw() {
 }
 async function saveRaw() {
   const text = document.getElementById('rawtext').value;
-  const ok = await post({ op: 'set-content', text, base: rawBase });
-  if (ok) { toggleModal('rawmodal', false); toast('board saved', true); }
-  // on conflict the modal stays open; reload base for a retry after the user reconciles
+  // set-content now does a non-destructive 3-way merge server-side (the TUI's
+  // SaveEditorMerge): a clean merge writes the combined text; an unresolvable
+  // overlap writes conflict markers + an urgent @claude item. Either way the
+  // user's text is never lost, so we always close the modal and report.
+  const r = await fetch(`${API}/edit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ op: 'set-content', text, base: rawBase }),
+  });
+  if (!r.ok) {
+    let msg = `save failed (${r.status})`;
+    try { msg = (await r.json()).error || msg; } catch {}
+    toast(msg);
+    return;
+  }
+  let conflicted = false;
+  try { conflicted = !!(await r.json()).conflicted; } catch {}
+  await refresh();
+  toggleModal('rawmodal', false);
+  toast(conflicted ? 'merge conflict — @claude asked to reconcile' : 'board merged', true);
 }
 document.getElementById('rawsave').addEventListener('click', saveRaw);
 document.getElementById('rawclose').addEventListener('click', () => {
@@ -778,7 +979,7 @@ document.getElementById('histclose').addEventListener('click', () => toggleModal
 // ---- map view (port of the TUI's mm-style mindmap) ----
 // The board as a center-outward map: title at center, sections as the first
 // ring, items as subtrees. Same data, same op layer — a second projection.
-const mapState = { in: false, folds: {}, root: 'center', focus: 'center', showLog: false, expanded: {} };
+const mapState = { in: false, folds: {}, root: 'center', focus: 'center', showLog: false, expanded: {}, pending: null };
 let mapNodes = []; // visible nodes of the last renderMap, in placement order
 // When set, the next renderMap centers the focused node in the viewport (on
 // first entry and after f/b re-roots) instead of the minimal-scroll default.
@@ -799,7 +1000,7 @@ function mapBuild(b) {
         if (it.urgent) label = '!! ' + label;
         if (it.status !== 'none') label = MARKERS[it.status] + ' ' + label;
         const n = { key: `it:${sec.title}:${it.raw}`, kind: 'item', it, section: sec.title,
-          text: label, isReply: it.status === 'none', children: [], parent };
+          text: label, isReply: isReplyText(it.text), children: [], parent };
         parent.children.push(n);
         add(it.children, n);
       }
@@ -815,7 +1016,9 @@ function mapBuild(b) {
 function visKids(n) {
   const f = mapState.folds[n.key] || 'default';
   if (f === 'closed') return [];
-  if (f === 'default' && n.kind === 'item') return n.children.filter(c => !c.isReply);
+  // Default fold hides conversational replies behind [+N] for BOTH item and
+  // section parents (the TUI folds section-level replies too).
+  if (f === 'default' && (n.kind === 'item' || n.kind === 'section')) return n.children.filter(c => !c.isReply);
   return n.children;
 }
 const descCount = n => n.children.reduce((s, c) => s + 1 + descCount(c), 0);
@@ -825,7 +1028,7 @@ function cycleFold(n) {
   if (!n.children.length) return;
   const f = mapState.folds[n.key] || 'default';
   // States that render identically are skipped (no replies → default==all).
-  const defaultEqualsAll = n.kind !== 'item' || n.children.every(c => !c.isReply);
+  const defaultEqualsAll = n.children.every(c => !c.isReply);
   let next;
   if (f === 'default') next = defaultEqualsAll ? 'closed' : 'all';
   else if (f === 'all') next = 'closed';
@@ -840,7 +1043,7 @@ function reveal(node) {
   for (let p = node.parent, c = node; p; c = p, p = p.parent) {
     const f = mapState.folds[p.key] || 'default';
     if (f === 'closed') mapState.folds[p.key] = c.isReply ? 'all' : 'default';
-    if (f === 'default' && c.isReply && p.kind === 'item') mapState.folds[p.key] = 'all';
+    if (f === 'default' && c.isReply && (p.kind === 'item' || p.kind === 'section')) mapState.folds[p.key] = 'all';
   }
 }
 
@@ -872,6 +1075,39 @@ function splitSides(children) {
 const NODE_H = 24, LINE_H = 20, GAP = 8, COL_GAP = 40, TRUNC = 40;
 let CHAR_W = 8; // measured at first map render
 
+// charW / dispWidth mirror internal/mindmap/width.go: wide (CJK/emoji) glyphs
+// count as 2 display columns, combining marks 0, so map truncation/wrap budget
+// by the same column count the TUI uses (not raw code-point count).
+function charW(c) {
+  if (c >= 0x0300 && c <= 0x036f) return 0;
+  if ((c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0x303e) ||
+      (c >= 0x3041 && c <= 0x33ff) || (c >= 0x3400 && c <= 0x4dbf) ||
+      (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xa000 && c <= 0xa4cf) ||
+      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) ||
+      (c >= 0x20000 && c <= 0x3fffd)) return 2;
+  return 1;
+}
+function dispWidth(str) {
+  let w = 0;
+  for (const ch of str) w += charW(ch.codePointAt(0));
+  return w;
+}
+// truncateDisplay clips str to at most `max` display columns, appending '…'
+// (width 1) when it cuts — the display-width-aware analogue of a slice.
+function truncateDisplay(str, max) {
+  if (dispWidth(str) <= max) return str;
+  const budget = max - 1;
+  let out = '', w = 0;
+  for (const ch of str) {
+    const cw = charW(ch.codePointAt(0));
+    if (w + cw > budget) break;
+    out += ch; w += cw;
+  }
+  return out + '…';
+}
+
 // wrapText word-wraps str to at most `width` columns, hard-breaking any single
 // word longer than the width. Mirrors the TUI's expanded-node wrapping (mindmap
 // Options{MaxWidth}), producing the multi-line node box `w` toggles.
@@ -881,14 +1117,21 @@ function wrapText(str, width) {
   const push = () => { if (line !== '') { lines.push(line); line = ''; } };
   for (const word of str.split(' ')) {
     let w = word;
-    // Hard-break an over-long word across lines.
-    while ([...w].length > width) {
+    // Hard-break an over-long word across lines (display-width aware).
+    while (dispWidth(w) > width) {
       push();
-      lines.push([...w].slice(0, width).join(''));
-      w = [...w].slice(width).join('');
+      const chars = [...w];
+      let take = '', tw = 0, i = 0;
+      for (; i < chars.length; i++) {
+        const cw = charW(chars[i].codePointAt(0));
+        if (tw + cw > width) break;
+        take += chars[i]; tw += cw;
+      }
+      lines.push(take);
+      w = chars.slice(i).join('');
     }
     if (line === '') line = w;
-    else if ([...line].length + 1 + [...w].length <= width) line += ' ' + w;
+    else if (dispWidth(line) + 1 + dispWidth(w) <= width) line += ' ' + w;
     else { push(); line = w; }
   }
   push();
@@ -906,9 +1149,9 @@ function mapLabel(n) {
   let lines;
   if (mapState.expanded[n.key]) {
     // `w`: wrap the full text across multiple lines at ~40 cols (TUI parity).
-    lines = [...full].length > TRUNC ? wrapText(full, TRUNC) : [full];
-  } else if ([...full].length > TRUNC) {
-    lines = [[...full].slice(0, TRUNC - 1).join('') + '…']; // single truncated line
+    lines = dispWidth(full) > TRUNC ? wrapText(full, TRUNC) : [full];
+  } else if (dispWidth(full) > TRUNC) {
+    lines = [truncateDisplay(full, TRUNC)]; // single truncated line
   } else {
     lines = [full];
   }
@@ -922,6 +1165,7 @@ function mapLabel(n) {
 function renderMap(b) {
   if (!mapNodes.length) measureCharW();
   const full = mapBuild(b);
+  injectPending(full);
   let root = findNode(full, mapState.root) || full;
   mapState.root = root.key;
 
@@ -950,8 +1194,11 @@ function renderMap(b) {
     const l = mapLabel(n);
     label.set(n, l);
     // Longest line drives the box width; the [+N] suffix rides the last line.
-    const lineLen = (ln, i) => [...ln].length + (i === l.lines.length - 1 ? [...l.suffix].length : 0);
+    const lineLen = (ln, i) => dispWidth(ln) + (i === l.lines.length - 1 ? dispWidth(l.suffix) : 0);
     width.set(n, Math.max(...l.lines.map(lineLen)) * CHAR_W + 16);
+    // A node being added/edited inline reserves a comfortable input width so
+    // sibling layout doesn't jump as the box hosts the text field.
+    if (n.__pending || n.__editing) width.set(n, Math.max(width.get(n), 22 * CHAR_W));
     ownH.set(n, Math.max(NODE_H, l.lines.length * LINE_H + 4));
     const kids = visKids(n);
     kids.forEach(measure);
@@ -1024,19 +1271,28 @@ function renderMap(b) {
     const cls = ['mapnode', n.kind];
     if (n.kind === 'item') {
       if (n.isReply) cls.push('reply');
+      // Whole-node color, precedence done > urgent > pin > wip/blocked (TUI
+      // mapNodeStyle); a done item can't also be wip/blocked so no conflict.
       if (n.it.status === 'done') cls.push('done');
-      if (n.it.urgent) cls.push('urgent');
+      else if (n.it.urgent) cls.push('urgent');
+      else if (n.it.pinned) cls.push('pin');
+      else if (n.it.status === 'wip') cls.push('wip');
+      else if (n.it.status === 'blocked') cls.push('blocked');
       if (searchHit(n.it)) cls.push('searchhit');
     }
     if (l.lines.length > 1) cls.push('wrap'); // multi-line (w) node box
     if (n.key === mapState.focus) cls.push('focus');
     const wStyle = l.lines.length > 1 ? `;width:${width.get(n)}px` : '';
     const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - ownH.get(n) / 2}px${wStyle}` });
-    d.append(tintAuthor(d, l.text)); // tints a leading claude:/user: token
-    if (l.suffix) d.append(el('span', { class: 'suffix' }, l.suffix));
-    if (n.kind === 'item') markSearch(d); // tint matched substring during search
-    d.addEventListener('click', () => { mapState.focus = n.key; renderMap(cur); });
-    d.addEventListener('dblclick', () => mapEdit(n));
+    if (n.__pending || n.__editing) {
+      mountMapInput(d, n); // host the inline text input inside this node box
+    } else {
+      d.append(tintAuthor(d, l.text)); // tints a leading claude:/user: token
+      if (l.suffix) d.append(el('span', { class: 'suffix' }, l.suffix));
+      if (n.kind === 'item') markSearch(d); // tint matched substring during search
+      d.addEventListener('click', () => { if (searchHL !== '') endSearch(); mapState.focus = n.key; renderMap(cur); });
+      d.addEventListener('dblclick', () => mapEdit(n));
+    }
     canvas.append(d);
     n.el = d;
     mapNodes.push(n);
@@ -1057,8 +1313,10 @@ function renderMap(b) {
   const crumb = [];
   for (let n = root; n; n = n.parent) crumb.unshift(n.kind === 'center' ? (b.title || 'board') : n.text);
   document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (b steps out)';
+  const logHidden = !mapState.showLog && (b.sections || []).some(s => s.title === 'Log');
   document.getElementById('mapfoot').textContent =
-    `${focus.text}  ·  hjkl move · enter fold · w expand · f focus · b out · e edit · a add · space status · / search · M log · m/q back`;
+    `${focus.text}  ·  hjkl move · enter fold · w expand · f focus · b out · e edit · a add · A sibling · space status · p pin · / search · M log · m/q back` +
+    (logHidden ? '  ·  Log hidden · M' : '');
   // On first entry / after f/b, center the focused node in the viewport (the
   // map opens centered, not with the node pinned to an edge); otherwise scroll
   // the minimum needed to keep it visible.
@@ -1083,6 +1341,15 @@ function enterMap() {
 }
 
 function exitMap() {
+  // Defensively drop any open inline add/edit so its inputsOpen++ can't leak
+  // and permanently freeze live SSE re-renders.
+  if (mapState.pending) {
+    const back = mapState.pending.kind === 'add' ? mapState.pending.parentKey : mapState.pending.targetKey;
+    mapState.pending = null;
+    pendingInputEl = null;
+    inputsOpen = Math.max(0, inputsOpen - 1);
+    if (mapState.focus === PENDING_KEY) mapState.focus = back;
+  }
   mapState.in = false;
   document.body.classList.remove('mapmode');
   document.getElementById('mapfoot').hidden = true;
@@ -1091,46 +1358,150 @@ function exitMap() {
   renderOutline(cur);
 }
 
-// mapPrompt: the map's single-line input overlay (edit/add/rename/title).
-function mapPrompt(lbl, initial, submit) {
-  const box = document.getElementById('mapprompt');
-  const inp = box.querySelector('input');
-  box.querySelector('.lbl').textContent = lbl;
-  inp.value = initial;
-  box.classList.add('open');
+// ---- inline add/edit (in-place, no detached overlay) ----
+// Instead of a floating prompt, a provisional node is injected into the map
+// exactly where the new/edited node will live (child of the selection, correct
+// side/position), and the text input is hosted inside that node's box. Enter
+// commits through the normal save path; Esc (and, for a fresh add, arrows)
+// cancels and removes the provisional node.
+const PENDING_KEY = '__pending__';
+let pendingInputEl = null;
+
+function mapBeginAdd(parentKey, commit) {
+  if (mapState.pending) return;
+  mapState.pending = { kind: 'add', parentKey, commit, text: '' };
+  mapState.focus = PENDING_KEY;
+  mapRecenter = true;
   inputsOpen++;
-  const close = () => {
-    inputsOpen--;
-    box.classList.remove('open');
-    inp.onkeydown = null;
-    if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
-  };
-  inp.onkeydown = e => {
-    e.stopPropagation();
-    if (e.key === 'Enter' && inp.value.trim()) { const v = inp.value.trim(); close(); submit(v); }
-    if (e.key === 'Escape') close();
-  };
-  inp.focus();
-  inp.setSelectionRange(initial.length, initial.length);
+  renderMap(cur);
+}
+
+function mapBeginEdit(targetKey, initial, commit) {
+  if (mapState.pending) return;
+  mapState.pending = { kind: 'edit', targetKey, commit, text: initial };
+  mapState.focus = targetKey;
+  mapRecenter = true;
+  inputsOpen++;
+  renderMap(cur);
+}
+
+// injectPending grafts the provisional node (add) or marks the target (edit)
+// onto the freshly-built tree so layout accounts for it; called each renderMap.
+function injectPending(full) {
+  const p = mapState.pending;
+  if (!p) return;
+  if (p.kind === 'add') {
+    const parent = findNode(full, p.parentKey);
+    if (!parent) { mapState.pending = null; inputsOpen--; return; }
+    const node = { key: PENDING_KEY, kind: 'provisional', text: p.text || '',
+      children: [], parent, __pending: true };
+    parent.children.push(node);
+  } else {
+    const t = findNode(full, p.targetKey);
+    if (!t) { mapState.pending = null; inputsOpen--; return; }
+    t.__editing = true;
+  }
+}
+
+// mountMapInput hosts the text input inside the provisional/edited node box.
+function mountMapInput(d, node) {
+  const p = mapState.pending;
+  const inp = el('input', { class: 'mapinput', spellcheck: 'false',
+    'aria-label': p.kind === 'edit' ? 'edit node' : 'add node' });
+  inp.value = p.text || '';
+  const sizeTo = () => { inp.size = Math.max(6, [...inp.value].length + 1); };
+  sizeTo();
+  d.classList.add('editing');
+  d.append(inp);
+  inp.addEventListener('input', () => { p.text = inp.value; sizeTo(); });
+  // Clicking away (onto another node / outside) cancels a still-open prompt.
+  inp.addEventListener('blur', () => { if (mapState.pending && pendingInputEl === inp) cancelMapPending(); });
+  inp.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const v = inp.value.trim();
+      if (!v) { cancelMapPending(); return; }
+      const commit = p.commit;
+      finishMapPending();
+      commit(v);
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      cancelMapPending();
+    } else if (p.kind === 'add' && ev.key.startsWith('Arrow')) {
+      // A fresh add is discarded the moment the user navigates away (spec).
+      ev.preventDefault();
+      cancelMapPending();
+    }
+  });
+  pendingInputEl = inp;
+  // Focus after the node is in the DOM so the caret lands in the box.
+  requestAnimationFrame(() => {
+    if (pendingInputEl !== inp) return;
+    inp.focus();
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+  });
+}
+
+// finishMapPending clears the pending state after a successful commit; the
+// commit's own post()/render refreshes the map.
+function finishMapPending() {
+  if (!mapState.pending) return;
+  mapState.pending = null;
+  pendingInputEl = null;
+  inputsOpen--;
+  if (pendingRender && inputsOpen === 0) pendingRender = false;
+}
+
+// cancelMapPending drops the provisional node and restores focus to its anchor.
+function cancelMapPending() {
+  const p = mapState.pending;
+  if (!p) return;
+  const back = p.kind === 'add' ? p.parentKey : p.targetKey;
+  mapState.pending = null;
+  pendingInputEl = null;
+  inputsOpen--;
+  if (pendingRender && inputsOpen === 0) pendingRender = false;
+  mapState.focus = back;
+  renderMap(cur);
 }
 
 function mapEdit(n) {
   if (n.kind === 'item') {
-    mapPrompt('edit item', n.it.text, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'edit', section: n.section, raw: n.it.raw, text: v }, v); });
+    mapBeginEdit(n.key, n.it.text, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'edit', section: n.section, raw: n.it.raw, text: v }, v); });
   } else if (n.kind === 'section') {
-    mapPrompt('rename section', n.title, v => { cursorFollow = { section: v }; mapState.focus = 'sec:' + v; post({ op: 'rename-section', section: n.title, text: v }); });
+    mapBeginEdit(n.key, n.title, v => { cursorFollow = { section: v }; mapState.focus = 'sec:' + v; post({ op: 'rename-section', section: n.title, text: v }); });
   } else {
-    mapPrompt('board title', cur.title || '', v => post({ op: 'title', text: v }));
+    mapBeginEdit(n.key, cur.title || '', v => post({ op: 'title', text: v }));
   }
 }
 
 function mapAdd(n) {
   if (n.kind === 'item') {
-    mapPrompt('add child (fork)', 'user: ', v => post({ op: 'fork', section: n.section, raw: n.it.raw, text: v }, v));
+    mapBeginAdd(n.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: n.it.raw, text: v }, v); });
   } else if (n.kind === 'section') {
-    mapPrompt('add to ' + n.title, '', v => post({ op: 'add', section: n.title, text: v }, v));
+    mapBeginAdd(n.key, v => { cursorFollow = { section: n.title, text: v }; post({ op: 'add', section: n.title, text: v }, v); });
   } else {
-    mapPrompt('add section', '', v => { mapState.focus = 'sec:' + v; post({ op: 'add-section', text: v }); });
+    mapBeginAdd(n.key, v => { mapState.focus = 'sec:' + v; post({ op: 'add-section', text: v }); });
+  }
+}
+
+// mapAddSibling adds a peer next to the focused node (the TUI's A), vs mapAdd's
+// child. For an item whose parent is another item, fork under that parent (a
+// peer reply in the same thread); for a top-level item, add a peer to the
+// section; for a section/center, behave like add-into-section.
+function mapAddSibling(n) {
+  if (n.kind === 'item') {
+    const p = n.parent;
+    if (p && p.kind === 'item') {
+      mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: p.it.raw, text: v }, v); });
+    } else if (p) {
+      mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'add', section: n.section, text: v }, v); });
+    }
+  } else if (n.kind === 'section') {
+    mapAdd(n);
+  } else {
+    toast('focus a node to add a sibling', true);
   }
 }
 
@@ -1189,15 +1560,27 @@ function handleMapKey(e) {
   if (searchHL !== '' && !['n', 'N', '/'].includes(e.key)) endSearch();
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
-    'Enter', 'f', 'b', 'e', 'a', 'w', ' ', '!', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
+    'Enter', 'f', 'b', 'e', 'a', 'A', 'w', ' ', '!', 'p', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
     '/', 'n', 'N']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   const refocus = key => { mapState.focus = key; renderMap(cur); };
   switch (e.key) {
     case 'j': case 'ArrowDown': case 'k': case 'ArrowUp': {
-      // The layout root (center, or a focused subtree) has no siblings of its
-      // own — j/k from it is a no-op, same as the center when unfocused.
-      if (!n || n.kind === 'center' || n.key === mapState.root) break;
+      if (!n) break;
+      const down = e.key === 'j' || e.key === 'ArrowDown';
+      // From the layout root (center or a focused subtree) j/k steps to the
+      // nearest first-ring node in that vertical direction (TUI centerVertical),
+      // scanning children on both sides and picking nearest-by-row.
+      if (n.kind === 'center' || n.key === mapState.root) {
+        if (!n.el) break;
+        const cy = n.el.offsetTop;
+        const kids = visKids(n).filter(c => c.el && (down ? c.el.offsetTop > cy : c.el.offsetTop < cy));
+        if (kids.length) {
+          kids.sort((a, b) => Math.abs(a.el.offsetTop - cy) - Math.abs(b.el.offsetTop - cy));
+          refocus(kids[0].key);
+        }
+        break;
+      }
       const sibs = mapSiblings(n);
       const i = sibs.indexOf(n);
       const next = sibs[Math.max(0, Math.min(sibs.length - 1, i + (e.key === 'j' || e.key === 'ArrowDown' ? 1 : -1)))];
@@ -1222,11 +1605,21 @@ function handleMapKey(e) {
     }
     case 'Enter': if (n) cycleFold(n); break;
     case 'f':
-      if (n && n.kind !== 'center' && visKids(n).length) {
-        mapState.root = n.key;
-        mapState.focus = visKids(n)[0].key;
-        mapRecenter = true;
-        renderMap(cur);
+      if (n && n.kind !== 'center' && n.children.length) {
+        // A collapsed-but-nonempty node is focusable: un-collapse it first so
+        // its children show (mirrors the TUI's focusIn dropping foldCollapsed).
+        if (!visKids(n).length) {
+          const f = mapState.folds[n.key] || 'default';
+          mapState.folds[n.key] = f === 'closed' ? 'default' : 'all';
+          // A replies-only node is still empty under 'default' — open it fully.
+          if (!visKids(n).length) mapState.folds[n.key] = 'all';
+        }
+        if (visKids(n).length) {
+          mapState.root = n.key;
+          mapState.focus = visKids(n)[0].key;
+          mapRecenter = true;
+          renderMap(cur);
+        }
       }
       break;
     case 'b': case 'Escape': {
@@ -1243,8 +1636,10 @@ function handleMapKey(e) {
     case 'w': if (n) { mapState.expanded[n.key] = !mapState.expanded[n.key]; renderMap(cur); } break;
     case 'e': if (n) mapEdit(n); break;
     case 'a': if (n) mapAdd(n); break;
-    case ' ': if (n && n.kind === 'item' && n.it.status !== 'none') act.cycle(n.section, n.it); break;
+    case ' ': if (n && n.kind === 'item') act.mapCycle(n.section, n.it); break;
     case '!': if (n && n.kind === 'item') act.urgent(n.section, n.it); break;
+    case 'p': if (n && n.kind === 'item') act.pin(n.section, n.it); break;
+    case 'A': if (n) mapAddSibling(n); break;
     case 'd':
       if (n && n.kind === 'item') act.archive(n.section, n.it);
       else if (n && n.kind === 'section') { cursorFollow = { section: n.title }; post({ op: 'archive-section', section: n.title }); }
@@ -1312,6 +1707,7 @@ function markSearch(container) {
 function endSearch() {
   if (!searchActive && searchHL === '' && searchQuery === '') return;
   searchActive = false; searchHL = ''; searchQuery = '';
+  clearSearchStatus();
   if (mapState.in) renderMap(cur); else renderOutline(cur);
 }
 
@@ -1354,7 +1750,16 @@ function jumpMatchMap(m) {
   renderMap(cur);
 }
 
-function setSearchStatus(total) { toast(`${searchIdx + 1}/${total} matches`, true); }
+// setSearchStatus writes the tally to the persistent slot (not the auto-clearing
+// toast) so it stays visible through follow mode and n/N stepping.
+function setSearchStatus(total) {
+  const e = document.getElementById('searchstatus');
+  e.textContent = `${searchIdx + 1}/${total} matches`;
+  e.classList.add('show');
+}
+function clearSearchStatus() {
+  document.getElementById('searchstatus').classList.remove('show');
+}
 
 function startSearch() {
   searchSaveCursor = cursorKey;
@@ -1370,7 +1775,7 @@ function startSearch() {
     searchHL = inp.value.trim(); // highlight live as you type
     const matches = searchMatches(inp.value);
     if (matches.length) { searchIdx = 0; jumpToMatch(matches[0]); setSearchStatus(matches.length); }
-    else { if (inp.value.trim()) toast('no matches', true); if (mapState.in) renderMap(cur); else renderOutline(cur); }
+    else { clearSearchStatus(); if (inp.value.trim()) toast('no matches', true); if (mapState.in) renderMap(cur); else renderOutline(cur); }
   };
   inp.onkeydown = e => {
     e.stopPropagation();
@@ -1394,6 +1799,7 @@ function confirmSearch(q) {
   const matches = searchMatches(searchQuery);
   if (!searchQuery || !matches.length) {
     searchActive = false; searchHL = '';
+    clearSearchStatus();
     if (searchQuery) toast('no matches', true);
     if (mapState.in) renderMap(cur); else renderOutline(cur);
     return;
@@ -1406,6 +1812,7 @@ function confirmSearch(q) {
 
 function cancelSearch() {
   searchActive = false; searchQuery = ''; searchHL = '';
+  clearSearchStatus();
   if (mapState.in) {
     mapState.root = searchSaveMapRoot; mapState.focus = searchSaveMapFocus;
     renderMap(cur);
@@ -1419,7 +1826,14 @@ function cancelSearch() {
 function searchNext(dir) {
   if (!searchActive) return;
   const matches = searchMatches(searchQuery);
-  if (!matches.length) { searchActive = false; toast('no matches', true); return; }
+  if (!matches.length) {
+    // Matches vanished (edited away) during n/N: clear highlight + status now,
+    // re-render so stale search styling disappears immediately (TUI parity).
+    searchActive = false; searchHL = ''; clearSearchStatus();
+    if (mapState.in) renderMap(cur); else renderOutline(cur);
+    toast('no matches', true);
+    return;
+  }
   searchIdx = ((searchIdx + dir) % matches.length + matches.length) % matches.length;
   jumpToMatch(matches[searchIdx]);
   setSearchStatus(matches.length);
@@ -1441,7 +1855,14 @@ document.addEventListener('keydown', e => {
   const onSec = s && s.type === 'section';
   const curSection = onItem ? s.section : onSec ? s.title : null;
   const focusAdd = sec => {
-    const box = [...document.querySelectorAll('input.add')].find(i => i.dataset.section === sec);
+    let box = [...document.querySelectorAll('input.add')].find(i => i.dataset.section === sec);
+    // A collapsed section renders no add box — expand it first so the freshly
+    // added item is visible (beats both the web no-op and the TUI's blind add).
+    if (!box && sectionCollapsed(sec)) {
+      setCollapsed(sec, false);
+      renderOutline(cur);
+      box = [...document.querySelectorAll('input.add')].find(i => i.dataset.section === sec);
+    }
     if (box) { box.focus(); return true; }
     return false;
   };
@@ -1455,7 +1876,7 @@ document.addEventListener('keydown', e => {
   // preventDefault for every handled key: keys that open an input (a, e, R…)
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
-    ' ', 'b', '!', 'e', 'w', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
+    ' ', 'b', '!', 'p', 'e', 'w', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'T', 'B', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
     '/', 'n', 'N']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
@@ -1471,10 +1892,11 @@ document.addEventListener('keydown', e => {
     case 'g': { const v = visibleStops(); if (v.length) setCursor(v[0]); break; }
     case 'G': { const v = visibleStops(); if (v.length) setCursor(v[v.length - 1]); break; }
     case 'a': if (curSection) focusAdd(curSection); else { const v = visibleStops().filter(x => x.type === 'section'); if (v.length) focusAdd(v[0].title); } break;
-    case 'A': { const box = document.querySelector('input.addsec'); if (box) box.focus(); break; }
+    case 'A': addSectionOverlay(); break;
     case ' ': if (onItem && s.it.status !== 'none') act.cycle(s.section, s.it); break;
     case 'b': if (onItem && s.it.status !== 'none') act.blocked(s.section, s.it); break;
     case '!': if (onItem) act.urgent(s.section, s.it); break;
+    case 'p': if (onItem) act.pin(s.section, s.it); break;
     case 'e': if (onItem) act.edit(s.section, s.it, s.row); else if (onSec) renameSection(s.head, s.title); break;
     case 'R': if (onItem) act.reply(s.section, s.it, s.row, s.li, 'reply'); break;
     case 'F': if (onItem) act.reply(s.section, s.it, s.row, s.li, 'fork'); break;
@@ -1490,6 +1912,8 @@ document.addEventListener('keydown', e => {
     case 'L': focusAdd('Log'); break;
     case 'E': openRaw(); break;
     case 'H': openHistory(); break;
+    case 'T': startTitleEdit(); break;
+    case 'B': location.href = '/'; break;
     case 'm': enterMap(); break;
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
@@ -1519,7 +1943,8 @@ window.__sn = {
   get cursorKey() { return cursorKey; },
   get inputsOpen() { return inputsOpen; },
   get board() { return cur; },
-  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded } }; },
+  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded },
+    pending: mapState.pending ? { kind: mapState.pending.kind, parentKey: mapState.pending.parentKey || null, targetKey: mapState.pending.targetKey || null, text: mapState.pending.text } : null }; },
   get listExpanded() { return [...listExpanded]; },
   get collapsedSecs() { return { ...collapsedSecs }; },
   // Search state for the e2e harness: active flag, query, 1-based current

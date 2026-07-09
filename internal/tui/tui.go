@@ -40,6 +40,7 @@ const (
 	modeMapRename
 	modeMapFeedback
 	modeSearch
+	modeHistory
 )
 
 // customSectionLabel is the final, always-present entry in the add-sections
@@ -74,6 +75,9 @@ type model struct {
 	selSec    int       // active section (authoritative for `a` and tab)
 	scroll    int
 	status    string // transient one-line message
+
+	// historyScroll is the top line offset of the read-only history overlay (H).
+	historyScroll int
 
 	// collapsed holds per-section collapse-state overrides, keyed by section
 	// TITLE (not index) so the state survives reparses — reload, rebase, undo —
@@ -179,6 +183,9 @@ type model struct {
 	searchIdx        int
 	searchSaveCursor int
 	searchSaveMapKey string
+	// searchSaveMapRoot holds the pre-search map focus root (`f` zoom) so Esc
+	// restores the zoom even when jumpToMatch cleared it for an out-of-subtree hit.
+	searchSaveMapRoot string
 
 	// updateHint is a dim, text-only "newer release available" notice shown in
 	// the picker and dashboard footers. Populated asynchronously by
@@ -413,8 +420,28 @@ func (m *model) restore(content string) {
 	m.save()
 }
 
-// undo reverts to the snapshot taken before the last mutation.
+// undo reverts the last journaled edit on the board's SHARED on-disk timeline —
+// the same journal the web UI and edit CLI undo through — so `u` means the same
+// "last edit by anyone" everywhere. It falls back to the TUI's rebase-aware
+// in-memory history only when the shared journal can't apply (an intervening
+// non-journaling writer: a hook or a human in $EDITOR — ErrUndoConflict), so
+// single-user robustness is not regressed.
 func (m *model) undo() {
+	if m.path != "" {
+		switch err := board.Undo(m.path); err {
+		case nil:
+			m.reload() // adopt the journal's restored content from disk
+			m.status = "undo"
+			return
+		case board.ErrUndoConflict:
+			// Shared timeline can't apply cleanly; fall through to in-memory undo.
+		case board.ErrUndoEmpty:
+			// Nothing on the shared timeline; try the in-memory history below.
+		default:
+			m.status = "undo failed: " + err.Error()
+			return
+		}
+	}
 	if prev, ok := m.hist.undoTo(m.currentContent()); ok {
 		m.restore(prev)
 		m.status = "undo"
@@ -423,8 +450,22 @@ func (m *model) undo() {
 	}
 }
 
-// redo re-applies the most recently undone state.
+// redo re-applies the most recently undone edit, mirroring undo: the shared
+// journal first, the in-memory history as a fallback.
 func (m *model) redo() {
+	if m.path != "" {
+		switch err := board.Redo(m.path); err {
+		case nil:
+			m.reload()
+			m.status = "redo"
+			return
+		case board.ErrUndoConflict:
+		case board.ErrUndoEmpty:
+		default:
+			m.status = "redo failed: " + err.Error()
+			return
+		}
+	}
 	if next, ok := m.hist.redoTo(m.currentContent()); ok {
 		m.restore(next)
 		m.status = "redo"
@@ -601,6 +642,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeHelp:
 		m.mode = m.prevMode
 		return m, nil
+	case modeHistory:
+		return m.handleHistoryKey(msg)
 	}
 	if m.mapView {
 		return m.handleMapKey(msg)
@@ -653,6 +696,31 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			it.CycleStatus()
 			op.newStatus = it.Status
 			m.saveWithRebase(op)
+		}
+	case "b":
+		// Toggle blocked [?] directly (mirrors the web outline's `b`). The space
+		// cycle only reaches [ ]->[>]->[x], so blocked is otherwise unsettable from
+		// the outline. Reuses the absolute opCycle rebase path.
+		if it := m.currentItem(); it != nil && it.Status != board.StatusNone {
+			m.snapshot()
+			op := pendingOp{typ: opCycle, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+			if it.Status == board.StatusBlocked {
+				it.Status = board.StatusOpen
+			} else {
+				it.Status = board.StatusBlocked
+			}
+			op.newStatus = it.Status
+			m.saveWithRebase(op)
+		}
+	case "g":
+		if len(m.positions) > 0 {
+			m.cursor = 0
+			m.selSec = m.positions[0].sec
+		}
+	case "G":
+		if len(m.positions) > 0 {
+			m.cursor = len(m.positions) - 1
+			m.selSec = m.positions[m.cursor].sec
 		}
 	case "!":
 		if it := m.currentItem(); it != nil {
@@ -801,9 +869,39 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !m.searchNext(-1) {
 			m.status = ""
 		}
+	case "H":
+		m.openHistory()
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp
+	}
+	return m, nil
+}
+
+// openHistory opens the read-only shared-journal history overlay (H). The
+// journal is the same on-disk timeline that backs undo/redo and records writes
+// from every client (web, edit CLI, TUI, hooks), so the TUI shows the same
+// "who changed what" the web history modal does.
+func (m *model) openHistory() {
+	m.prevMode = m.mode
+	m.mode = modeHistory
+	m.historyScroll = 0
+}
+
+// handleHistoryKey drives the read-only history overlay: j/k (and arrows) scroll,
+// anything else closes it.
+func (m *model) handleHistoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		m.historyScroll++
+	case "k", "up":
+		if m.historyScroll > 0 {
+			m.historyScroll--
+		}
+	case "g":
+		m.historyScroll = 0
+	default:
+		m.mode = m.prevMode
 	}
 	return m, nil
 }
@@ -880,7 +978,14 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch mo {
 		case modeInputAdd:
 			sec := m.sectionTitle(m.selSec)
-			m.board.AddItem(sec, text)
+			it := m.board.AddItem(sec, text)
+			// A leading status marker ("[>] foo") sets the item's status and is
+			// stripped, matching board.Apply's add path (web + edit CLI). The raw
+			// typed text stays the rebase payload — applyOp reparses via Apply.
+			if st, remainder, ok := board.LeadingStatus(text); ok {
+				it.Status = st
+				it.Text = remainder
+			}
 			m.rebuildPositions()
 			// Move cursor to the new item (last parsed item of the section).
 			for i := len(m.positions) - 1; i >= 0; i-- {
@@ -1081,7 +1186,13 @@ func resolveTarget(fresh *board.Board, op pendingOp, fuzzy, boardWide bool) *boa
 func applyOp(fresh *board.Board, op pendingOp) string {
 	switch op.typ {
 	case opAdd:
-		fresh.AddItem(op.section, op.payload)
+		it := fresh.AddItem(op.section, op.payload)
+		// Honor a leading status marker on replay too, matching the in-memory add
+		// and board.Apply's add path.
+		if st, remainder, ok := board.LeadingStatus(op.payload); ok {
+			it.Status = st
+			it.Text = remainder
+		}
 		return "board changed, item re-added"
 	case opLog:
 		fresh.AppendLog("user", op.payload)

@@ -45,20 +45,61 @@ a.card:hover, a.card.sel { border-color: var(--accent); }
 .card li.urgent::before { content: "!! "; }
 .card .cwd { margin-top: .35rem; color: var(--dim); font-size: .8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #empty { color: var(--dim); }
+#err { background: var(--urgent); color: #fff; padding: .4rem .8rem; border-radius: 6px; margin-bottom: .75rem; font-size: .85em; }
+#projfilter { font: inherit; font-size: .85em; color: var(--dim); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: .1rem .3rem; margin-left: .3rem; }
 </style>
 </head>
 <body>
-<h1>session dashboard <span class="dim" id="count"></span></h1>
+<h1>session dashboard <span class="dim" id="count"></span>
+  <select id="projfilter" hidden></select></h1>
+<div id="err" hidden></div>
 <div id="cards"></div>
 <p id="empty" hidden>No boards yet — start a Claude Code session with the session-notes hooks installed.</p>
 <script>
 const esc = s => { const d = document.createElement('span'); d.textContent = s; return d.innerHTML; };
 
+let allBoards = [];
+let projFilter = ''; // '' = all projects
+let failCount = 0;   // consecutive /api/boards failures (item 43)
+
+// The web dashboard keeps the all-boards overview (a served dashboard has no
+// single "current cwd" like the TUI), but surfaces project scope: a distinct
+// project count plus a client-side per-project filter (item 38).
+function distinctProjects(boards) {
+  return [...new Set(boards.map(b => b.cwd || '').filter(Boolean))].sort();
+}
+function renderFilter(projects) {
+  const sel = document.getElementById('projfilter');
+  sel.hidden = projects.length < 2;
+  const want = ['', ...projects];
+  const opts = want.map(p => `<option value="${esc(p)}"${p === projFilter ? ' selected' : ''}>${p ? esc(p) : 'all projects'}</option>`).join('');
+  if (sel.innerHTML !== opts) sel.innerHTML = opts;
+}
+
 async function refresh() {
   let data;
-  try { data = await (await fetch('/api/boards')).json(); } catch { return; }
-  const boards = data.boards || [];
-  document.getElementById('count').textContent = boards.length ? `· ${boards.length} boards` : '';
+  try {
+    const r = await fetch('/api/boards');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json();
+  } catch {
+    // A single blip stays quiet; a sustained failure surfaces a banner (item 43).
+    if (++failCount >= 3) {
+      const e = document.getElementById('err');
+      e.textContent = 'dashboard unavailable — retrying…';
+      e.hidden = false;
+    }
+    return;
+  }
+  failCount = 0;
+  document.getElementById('err').hidden = true;
+  allBoards = data.boards || [];
+  const projects = distinctProjects(allBoards);
+  if (projFilter && !projects.includes(projFilter)) projFilter = '';
+  renderFilter(projects);
+  const boards = projFilter ? allBoards.filter(b => (b.cwd || '') === projFilter) : allBoards;
+  const projLabel = projects.length ? ` · ${projects.length} project${projects.length === 1 ? '' : 's'}` : '';
+  document.getElementById('count').textContent = allBoards.length ? `· ${allBoards.length} boards${projLabel}` : '';
   document.getElementById('empty').hidden = boards.length > 0;
   document.getElementById('cards').innerHTML = boards.map(b => `
     <a class="card" href="/b/${encodeURIComponent(b.id)}">
@@ -75,6 +116,11 @@ async function refresh() {
       <div class="cwd">${esc(b.cwd || '')}</div>
     </a>`).join('');
 }
+document.getElementById('projfilter').addEventListener('change', e => {
+  projFilter = e.target.value;
+  if (selID) applySel();
+  refresh();
+});
 refresh();
 setInterval(() => refresh(), 2000);
 
@@ -95,7 +141,9 @@ document.addEventListener('keydown', e => {
   } else if (e.key === 'k' || e.key === 'ArrowUp') {
     const n = cards[Math.max(0, idx < 0 ? 0 : idx - 1)];
     selID = decodeURIComponent(n.href.split('/b/').pop()); applySel(); n.scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'Enter' && idx >= 0) {
+  } else if ((e.key === 'Enter' || e.key === 'l' || e.key === 'ArrowRight') && idx >= 0) {
+    // enter / l / right open the selected card (vim-style, mirroring the TUI);
+    // rescan is automatic every 2s, so there is no manual `r` key.
     location.href = cards[idx].href;
   }
 });

@@ -16,8 +16,8 @@ var (
 	styleSectionSel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81")).Underline(true)
 	styleCursor     = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
 	styleDone       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleUrgent     = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	stylePin        = lipgloss.NewStyle().Foreground(lipgloss.Color("108")) // muted teal — calmer than urgent
+	styleUrgent     = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true) // brick red, matching the web --urgent (was orange 214)
+	stylePin        = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))            // muted teal — calmer than urgent
 	styleBlocked    = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 	styleInProg     = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
 	styleDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
@@ -103,6 +103,8 @@ func (m *model) View() string {
 		return m.viewPicker()
 	case modeHelp:
 		return m.viewHelp()
+	case modeHistory:
+		return m.viewHistory()
 	case modeAddSections:
 		return m.viewAddSections()
 	case modeLinkPick:
@@ -581,7 +583,7 @@ func (m *model) viewFooter() string {
 	if m.mode == modeSearch {
 		return styleStatus.Render("search: ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -601,6 +603,8 @@ func (m *model) viewHelp() string {
 		{"R", "reply in thread (sibling on a reply; starts the thread on an item)"},
 		{"F", "fork a sub-thread under the message at the cursor"},
 		{"space", "cycle status [ ] -> [>] -> [x]"},
+		{"b", "toggle blocked [?]"},
+		{"g / G", "jump to first / last visible stop"},
 		{"!", "toggle urgent (!!)"},
 		{"p", "toggle pin (!pin) — re-injected into Claude's context on a cadence"},
 		{"d", "archive item (or whole section) into ## Archive"},
@@ -619,9 +623,12 @@ func (m *model) viewHelp() string {
 		{"f / b (map)", "focus into subtree (breadcrumbs) / focus out one level (also esc)"},
 		{"o (map)", "open the focused item's [[linked note]] (chooser if several)"},
 		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},
-		{"! (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl"},
+		{"! (map)", "toggle urgent (!!) on the focused item"},
+		{"D (map)", "hard-delete the focused item or whole section"},
+		{"S (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl (dev)"},
 		{"L", "quick log entry"},
-		{"u", "undo last change"},
+		{"H", "history: shared edit journal (who changed what), read-only"},
+		{"u", "undo last change (shared journal timeline)"},
 		{"ctrl+r", "redo"},
 		{"r", "reload from disk"},
 		{"B", "back to board picker"},
@@ -662,6 +669,55 @@ func (m *model) viewHelp() string {
 	b.WriteString("\n" + styleHelpBar.Render("press any key to return"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
+
+// viewHistory renders the read-only shared-journal history overlay (H): the
+// board's journaled edits newest-first with when / who / what, mirroring the
+// web history modal. Read-only — it never mutates; undo/redo stay on u/ctrl+r.
+func (m *model) viewHistory() string {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("history — shared edit journal") + "\n")
+	b.WriteString(styleDim.Render("newest first · who changed what · read-only") + "\n\n")
+	entries := board.History(m.path)
+	var lines []string
+	if len(entries) == 0 {
+		lines = append(lines, styleDim.Render("no journaled edits yet"))
+	}
+	// Newest first.
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		author := e.Author
+		if author == "" {
+			author = "user"
+		}
+		lines = append(lines, styleSection.Render(e.Time)+"  "+styleKey.Render(author))
+		added, removed := board.DiffLines(e.Before, e.After)
+		for _, l := range removed {
+			lines = append(lines, styleDim.Render("  - "+strings.TrimSpace(l)))
+		}
+		for _, l := range added {
+			lines = append(lines, "  + "+strings.TrimSpace(l))
+		}
+		if len(added) == 0 && len(removed) == 0 {
+			lines = append(lines, styleDim.Render("  (no textual change)"))
+		}
+		lines = append(lines, "")
+	}
+	// Scroll window: reserve rows for the header (3) and footer (2).
+	bodyH := max(1, m.height-6)
+	if m.historyScroll > len(lines)-1 {
+		m.historyScroll = max(0, len(lines)-1)
+	}
+	start := m.historyScroll
+	end := min(len(lines), start+bodyH)
+	for _, l := range lines[start:end] {
+		b.WriteString(l + "\n")
+	}
+	b.WriteString("\n" + styleHelpBar.Render("j/k scroll · any other key returns"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+}
+
+// styleKey is the accent used for keys/authors in overlays.
+var styleKey = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
 
 func (m *model) viewLinkPick() string {
 	var b strings.Builder

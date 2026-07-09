@@ -81,9 +81,9 @@ func TestFeedbackBangWritesRecord(t *testing.T) {
 	m.handleMapKey(keyPress("l"))
 	m.handleMapKey(keyPress("j"))
 
-	m.handleMapKey(keyPress("!"))
+	m.handleMapKey(keyPress("S"))
 	if m.mode != modeMapFeedback {
-		t.Fatalf("! did not enter feedback mode, got %v", m.mode)
+		t.Fatalf("S did not enter feedback mode, got %v", m.mode)
 	}
 	sum := m.lastMoveSummary()
 	if !strings.Contains(sum, "you hit j") {

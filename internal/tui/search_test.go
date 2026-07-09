@@ -219,6 +219,51 @@ func TestSearchMapJumpFocusesMatch(t *testing.T) {
 	}
 }
 
+// TestSearchEscRestoresMapRoot: Esc after a search restores the pre-search map
+// zoom (focus root), even when the search jumped to a match outside the focused
+// subtree (which clears mapFocusRoot on the way in). Web-parity with cancelSearch.
+func TestSearchEscRestoresMapRoot(t *testing.T) {
+	m := newMapModel(t, searchBoard, 120, 40)
+	focusMapSection(t, m, "Plan")
+	m.focusIn() // zoom into the Plan subtree
+	savedRoot := m.mapFocusRoot
+	savedKey := m.mapFocusKey
+	if savedRoot == "" {
+		t.Fatal("focusIn did not set a map focus root")
+	}
+
+	// gamma lives in Threads, outside the Plan subtree, so jumpToMatch clears root.
+	typeSearch(m, "gamma")
+	if m.mapFocusRoot == savedRoot {
+		t.Fatal("search to an out-of-subtree match did not clear the focus root (test precondition)")
+	}
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mapFocusRoot != savedRoot {
+		t.Errorf("Esc left focus root = %q, want %q", m.mapFocusRoot, savedRoot)
+	}
+	if m.mapFocusKey != savedKey {
+		t.Errorf("Esc left focus key = %q, want %q", m.mapFocusKey, savedKey)
+	}
+}
+
+// TestMapUrgentToggle: `!` on a map item toggles urgent (list/web parity), and
+// `S` opens the surprise recorder instead.
+func TestMapUrgentToggle(t *testing.T) {
+	m := newMapModel(t, "## Threads\n- [ ] task\n", 80, 24)
+	focusMapItem(t, m, "task")
+	m.handleMapKey(keyPress("!"))
+	if it := m.itemForKey(m.mapFocusKey); it == nil || !it.Urgent {
+		t.Fatalf("! did not set urgent on the map item: %+v", it)
+	}
+	if m.mode == modeMapFeedback {
+		t.Fatal("! should toggle urgent, not open the feedback recorder")
+	}
+	m.handleMapKey(keyPress("!"))
+	if it := m.itemForKey(m.mapFocusKey); it == nil || it.Urgent {
+		t.Fatalf("second ! did not clear urgent: %+v", it)
+	}
+}
+
 func TestSearchMapRevealsFoldedReply(t *testing.T) {
 	m := newMapModel(t, searchBoard, 120, 40)
 	typeSearch(m, "alpha reply")

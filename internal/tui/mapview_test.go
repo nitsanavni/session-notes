@@ -202,16 +202,25 @@ func TestMapCycleFullRing(t *testing.T) {
 
 // TestMapSectionCannotBeDeleted asserts D is refused on a section node but
 // deletes an item's subtree.
-func TestMapSectionCannotBeDeleted(t *testing.T) {
-	src := "## Threads\n- [ ] keep\n- [ ] gone\n"
+func TestMapSectionDelete(t *testing.T) {
+	// D on a section node hard-deletes the whole section from the map, matching
+	// the outline view's D and the web map (web parity).
+	src := "## Threads\n- [ ] keep\n\n## Ideas\n- [ ] doomed\n"
 	m := newMapModel(t, src, 80, 24)
 
-	focusMapSection(t, m, "Threads")
-	before := m.board.Render()
+	focusMapSection(t, m, "Ideas")
 	m.handleMapKey(keyPress("D"))
-	if m.board.Render() != before {
-		t.Errorf("D on a section mutated the board:\n%s", m.board.Render())
+	if got := m.board.Render(); strings.Contains(got, "Ideas") || strings.Contains(got, "doomed") {
+		t.Errorf("D on a section did not delete it:\n%s", got)
 	}
+	if m.board.Section("Threads") == nil {
+		t.Errorf("unrelated section was lost:\n%s", m.board.Render())
+	}
+}
+
+func TestMapItemDelete(t *testing.T) {
+	src := "## Threads\n- [ ] keep\n- [ ] gone\n"
+	m := newMapModel(t, src, 80, 24)
 
 	focusMapItem(t, m, "gone")
 	m.handleMapKey(keyPress("D"))

@@ -19,13 +19,14 @@ import (
 // the web client's form) or by Query (substring over the whole board — the
 // CLI's form). Section ops address by Section alone.
 type Op struct {
-	Name    string // add | reply | fork | edit | status | urgent | archive | delete | log | title | add-section | rename-section | archive-section | delete-section
+	Name    string // add | reply | fork | edit | status | urgent | pin | archive | delete | log | title | add-section | rename-section | archive-section | delete-section
 	Section string
 	Raw     string
 	Query   string
 	Text    string
 	Status  Status // for Name == "status"
 	Urgent  bool   // for Name == "urgent": the desired state (set, not toggle)
+	Pinned  bool   // for Name == "pin": the desired state (set, not toggle)
 	Author  string // for Name == "log"; empty means "user"
 }
 
@@ -124,6 +125,14 @@ func Apply(b *Board, op Op) (note string, err error) {
 		}
 		if it.Urgent != op.Urgent {
 			it.ToggleUrgent()
+		}
+	case "pin":
+		it, lerr := locate()
+		if lerr != nil {
+			return note, lerr
+		}
+		if it.Pinned != op.Pinned {
+			it.TogglePinned()
 		}
 	case "archive":
 		it, lerr := locate()

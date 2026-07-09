@@ -51,6 +51,39 @@ func boardFile(t *testing.T, path string) string {
 	return string(data)
 }
 
+func TestPinOp(t *testing.T) {
+	h, path := newTestServer(t)
+	if err := os.WriteFile(path, []byte("---\nsession: abc-123\n---\n\n## Plan\n- [ ] ship it\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// pin the item
+	body, _ := json.Marshal(map[string]any{"op": "pin", "section": "Plan", "raw": "- [ ] ship it", "pinned": true})
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", string(body)); w.Code != 204 {
+		t.Fatalf("pin: %d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(boardFile(t, path), "!pin") {
+		t.Fatalf("pin not written:\n%s", boardFile(t, path))
+	}
+	// the JSON now reports pinned:true
+	w := do(t, h, "GET", "/api/board/abc-123", "")
+	var b boardJSON
+	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Sections) == 0 || len(b.Sections[0].Items) == 0 || !b.Sections[0].Items[0].Pinned {
+		t.Fatalf("expected pinned item, got %+v", b.Sections)
+	}
+	// unpin using the new raw line
+	raw := b.Sections[0].Items[0].Raw
+	body, _ = json.Marshal(map[string]any{"op": "pin", "section": "Plan", "raw": raw, "pinned": false})
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", string(body)); w.Code != 204 {
+		t.Fatalf("unpin: %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(boardFile(t, path), "!pin") {
+		t.Fatalf("unpin left the marker:\n%s", boardFile(t, path))
+	}
+}
+
 func TestBoardJSON(t *testing.T) {
 	h, path := newTestServer(t)
 	if err := os.WriteFile(path, []byte(`---
@@ -548,31 +581,47 @@ func TestRawAndSetContent(t *testing.T) {
 		t.Fatal("raw != file")
 	}
 
-	// set-content with a matching base rewrites the file (newline ensured)
+	// set-content with a matching base rewrites the file verbatim (newline
+	// ensured) and reports a clean, non-conflicting merge (200 + conflicted:false).
 	newContent := raw.Content + "\n## Scratch\n- [ ] free-form"
 	body, _ := json.Marshal(map[string]string{"op": "set-content", "text": newContent, "base": raw.Content})
-	if w = do(t, h, "POST", "/api/board/abc-123/edit", string(body)); w.Code != 204 {
+	w = do(t, h, "POST", "/api/board/abc-123/edit", string(body))
+	if w.Code != 200 {
 		t.Fatalf("set-content: %d %s", w.Code, w.Body)
+	}
+	var sc struct {
+		Conflicted bool `json:"conflicted"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &sc); err != nil {
+		t.Fatal(err)
+	}
+	if sc.Conflicted {
+		t.Fatal("clean write reported a conflict")
 	}
 	if got := boardFile(t, path); got != newContent+"\n" {
 		t.Fatalf("set-content wrote:\n%q\nwant:\n%q", got, newContent+"\n")
 	}
 
-	// a stale base (someone wrote since the editor loaded) is refused with 409
-	body, _ = json.Marshal(map[string]string{"op": "set-content", "text": "clobber\n", "base": raw.Content})
-	if w = do(t, h, "POST", "/api/board/abc-123/edit", string(body)); w.Code != http.StatusConflict {
-		t.Fatalf("stale set-content: want 409, got %d %s", w.Code, w.Body)
+	// A concurrent change since the editor loaded is now 3-way MERGED, not
+	// refused: both the user's edit and the concurrent write survive — nothing
+	// is clobbered (the TUI's SaveEditorMerge behavior).
+	base := newContent + "\n"
+	theirs := base + "- [ ] theirs-added\n"
+	if err := os.WriteFile(path, []byte(theirs), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(boardFile(t, path), "clobber") {
-		t.Fatal("stale set-content clobbered the board")
+	mine := strings.Replace(base, "## Threads\n", "## Threads\n- [ ] mine-added\n", 1)
+	body, _ = json.Marshal(map[string]string{"op": "set-content", "text": mine, "base": base})
+	w = do(t, h, "POST", "/api/board/abc-123/edit", string(body))
+	if w.Code != 200 {
+		t.Fatalf("concurrent set-content: want 200, got %d %s", w.Code, w.Body)
 	}
-
-	// set-content participates in undo
-	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"undo"}`); w.Code != 204 {
-		t.Fatalf("undo set-content: %d %s", w.Code, w.Body)
+	got := boardFile(t, path)
+	if !strings.Contains(got, "mine-added") {
+		t.Fatalf("merge dropped the user's edit:\n%s", got)
 	}
-	if got := boardFile(t, path); got != raw.Content {
-		t.Fatal("undo did not restore pre-set-content board")
+	if !strings.Contains(got, "theirs-added") {
+		t.Fatalf("merge dropped the concurrent write:\n%s", got)
 	}
 }
 

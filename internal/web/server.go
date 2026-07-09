@@ -403,9 +403,12 @@ func shortSession(s string) string {
 
 func classify(mtime, now time.Time) (liveness, ago string) {
 	if mtime.IsZero() {
-		return "gone", ""
+		return "gone", "—"
 	}
 	d := now.Sub(mtime)
+	if d < 0 {
+		d = 0
+	}
 	switch {
 	case d < activeWindow:
 		liveness = "active"
@@ -419,7 +422,7 @@ func classify(mtime, now time.Time) (liveness, ago string) {
 		ago = fmt.Sprintf("%ds", int(d.Seconds()))
 	case d < time.Hour:
 		ago = fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 48*time.Hour:
+	case d < 24*time.Hour:
 		ago = fmt.Sprintf("%dh", int(d.Hours()))
 	default:
 		ago = fmt.Sprintf("%dd", int(d.Hours()/24))
@@ -443,6 +446,7 @@ type editReq struct {
 	Status  string `json:"status"`
 	Author  string `json:"author"`
 	Urgent  *bool  `json:"urgent"`
+	Pinned  *bool  `json:"pinned"`
 	// Base is set-content's optimistic lock: the verbatim content the client
 	// loaded into its editor. The write applies only if the board still reads
 	// exactly Base; otherwise 409, and the user's edit stays in their editor.
@@ -472,23 +476,26 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		err = board.Undo(path)
 	case "redo":
 		err = board.Redo(path)
+	case "set-content":
+		// Whole-board raw replace (the TUI's E): instead of an optimistic
+		// 409 on drift, do the same non-destructive 3-way merge the TUI uses
+		// (board.SaveEditorMerge) so a concurrent write from Claude or the TUI
+		// is recovered rather than forcing the user to copy/reload/re-apply.
+		out := req.Text
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += "\n"
+		}
+		res, merr := board.SaveEditorMerge(path, req.Base, out)
+		if merr != nil {
+			httpErr(w, http.StatusInternalServerError, merr.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"conflicted": res.Conflicted})
+		return
 	default:
 		// Every mutation is journaled (author "web") into the board's shared
 		// undo timeline — the same one `session-notes edit undo` walks.
 		err = board.EditUnderLockJournaled(path, "", "web", func(content string) (string, error) {
-			if req.Op == "set-content" {
-				// Whole-board raw replace (the TUI's E): optimistic-locked on
-				// the content the editor loaded, so a concurrent write from
-				// Claude or the TUI is never silently overwritten.
-				if content != req.Base {
-					return "", fmt.Errorf("%w: the board changed while you were editing — copy your text, reload, and re-apply", errConflict)
-				}
-				out := req.Text
-				if out != "" && !strings.HasSuffix(out, "\n") {
-					out += "\n"
-				}
-				return out, nil
-			}
 			b := board.Parse(content)
 			b.Path = path
 			if aerr := applyEdit(b, req); aerr != nil {
@@ -527,6 +534,11 @@ func applyEdit(b *board.Board, req editReq) error {
 			return fmt.Errorf("%w: urgent flag required", errBadReq)
 		}
 		op.Urgent = *req.Urgent
+	case "pin":
+		if req.Pinned == nil {
+			return fmt.Errorf("%w: pin flag required", errBadReq)
+		}
+		op.Pinned = *req.Pinned
 	}
 	_, err := board.Apply(b, op)
 	return err
