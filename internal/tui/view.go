@@ -551,7 +551,7 @@ func (m *model) viewHelp() string {
 		"Replies nest under an item as indented \"- author: text\" sub-bullets.",
 		"In the map, " + styleKey.Render("enter") + " cycles a node's fold: each press reveals more (default view,",
 		"then the full reply thread) until all is shown, then one more collapses it fully",
-		"to a single \"[+N]\" (or \"[N replies]\") summary of everything hidden.",
+		"to a single \"[+N]\" summary of everything hidden.",
 		"Continuation lines (indented text under a bullet, not \"- \") render verbatim as",
 		"part of that bullet's block — a single cursor stop. Author them with " + styleKey.Render("E") + " ($EDITOR).",
 		"Long lines soft-wrap; ASCII-art continuation lines clip at the edge, not wrap.",
