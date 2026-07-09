@@ -851,6 +851,8 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.startMapEdit()
 	case " ":
 		m.mapCycle()
+	case "p":
+		m.mapPin()
 	case "D":
 		m.mapDelete()
 	case "u":
@@ -942,6 +944,29 @@ func (m *model) mapCycle() {
 	op.newStatus = it.Status
 	m.saveWithRebase(op)
 	m.mp = nil // status change alters node text/width -> re-layout
+}
+
+// mapPin toggles the "!pin" marker on the focused item and saves. Sections and
+// the center are not pinnable (beep via a status message). Mirrors the list
+// view's p; pinned items are re-injected into Claude's context on a cadence.
+func (m *model) mapPin() {
+	ref := m.mp.refs[m.mp.focus]
+	if ref.kind != refItem {
+		m.status = "sections can't be pinned"
+		return
+	}
+	it := ref.item
+	m.snapshot()
+	op := pendingOp{typ: opPin, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+	it.TogglePinned()
+	op.newPinned = it.Pinned
+	m.saveWithRebase(op)
+	if it.Pinned {
+		m.status = "pinned"
+	} else {
+		m.status = "unpinned"
+	}
+	m.mp = nil // pin marker alters node text/width -> re-layout
 }
 
 // mapDelete hard-deletes the focused item's subtree (matching the list view's
@@ -1481,7 +1506,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · d archive (item/section) · D delete · y copy path · M log · m outline · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · p pin · d archive (item/section) · D delete · y copy path · M log · m outline · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

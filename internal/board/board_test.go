@@ -1009,6 +1009,33 @@ func TestPinnedItems(t *testing.T) {
 	}
 }
 
+func TestTogglePinned(t *testing.T) {
+	b := Parse(`## Working Agreements
+- [ ] agreement one
+- !pin agreement two
+`)
+	items := b.Section("Working Agreements").Items
+	// Pin an unpinned item: marker appears, flag set, one item still.
+	items[0].TogglePinned()
+	if !items[0].Pinned {
+		t.Fatal("TogglePinned did not set Pinned")
+	}
+	if !strings.Contains(b.Render(), "- [ ] !pin agreement one") {
+		t.Errorf("!pin not added to render: %q", b.Render())
+	}
+	// Unpin a pinned item: marker removed, flag cleared.
+	items[1].TogglePinned()
+	if items[1].Pinned {
+		t.Fatal("TogglePinned did not clear Pinned")
+	}
+	if strings.Contains(b.Render(), "!pin agreement two") {
+		t.Errorf("!pin not removed from render: %q", b.Render())
+	}
+	if got := len(b.PinnedItems()); got != 1 {
+		t.Errorf("after toggles: %d pinned, want 1", got)
+	}
+}
+
 func TestCoherenceQueries(t *testing.T) {
 	b := Parse(`## Waiting on User
 - [ ] approve the plan

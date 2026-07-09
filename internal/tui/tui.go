@@ -639,6 +639,19 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			op.newUrgent = it.Urgent
 			m.saveWithRebase(op)
 		}
+	case "p":
+		if it := m.currentItem(); it != nil {
+			m.snapshot()
+			op := pendingOp{typ: opPin, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+			it.TogglePinned()
+			op.newPinned = it.Pinned
+			m.saveWithRebase(op)
+			if it.Pinned {
+				m.status = "pinned"
+			} else {
+				m.status = "unpinned"
+			}
+		}
 	case "d":
 		// Archive: move the item (or a whole section) into ## Archive.
 		if sec, ok := m.onHeader(); ok {
@@ -948,6 +961,7 @@ const (
 	opLog                          // append a user log line to Log
 	opCycle                        // set an item's checkbox status (absolute)
 	opUrgent                       // set an item's urgency flag (absolute)
+	opPin                          // set an item's pinned flag (absolute)
 	opArchiveItem                  // move an item (+ subtree) into ## Archive
 	opArchiveSection               // archive a whole section
 	opDeleteItem                   // hard-delete an item (+ subtree)
@@ -976,6 +990,7 @@ type pendingOp struct {
 	payload   string
 	newStatus board.Status
 	newUrgent bool
+	newPinned bool
 	sections  []string
 }
 
@@ -1065,6 +1080,12 @@ func applyOp(fresh *board.Board, op pendingOp) string {
 			return "board changed, urgency reapplied"
 		}
 		return "board changed, urgency target gone"
+	case opPin:
+		if it := resolveTarget(fresh, op, true, false); it != nil {
+			it.Pinned = op.newPinned // absolute, not a relative re-toggle
+			return "board changed, pin reapplied"
+		}
+		return "board changed, pin target gone"
 	case opArchiveItem:
 		if it := resolveTarget(fresh, op, true, false); it != nil {
 			fresh.ArchiveItem(it)

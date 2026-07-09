@@ -506,7 +506,7 @@ func (m *model) viewFooter() string {
 		}
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
-	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
+	hints := "j/k move · tab section · 1-9 jump · a add · A section · R reply · F fork · space status · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -526,6 +526,7 @@ func (m *model) viewHelp() string {
 		{"F", "fork a sub-thread under the message at the cursor"},
 		{"space", "cycle status [ ] -> [>] -> [x]"},
 		{"!", "toggle urgent (!!)"},
+		{"p", "toggle pin (!pin) — re-injected into Claude's context on a cadence"},
 		{"d", "archive item (or whole section) into ## Archive"},
 		{"D", "hard-delete item (or whole section) from the file"},
 		{"enter / l", "collapse / expand the section under the cursor (on its header)"},
@@ -573,6 +574,7 @@ func (m *model) viewHelp() string {
 		"Long items show as one truncated line; " + styleKey.Render("w") + " wraps the one at the cursor to",
 		"its full height. ASCII-art continuation lines clip at the edge, never wrap.",
 		styleUrgent.Render("Urgent (!!)") + " open items are injected into Claude's context on your next prompt.",
+		stylePin.Render("Pinned (!pin)") + " items are re-injected into Claude's context on a cadence (p toggles).",
 		styleLink.Render("[[name]]") + " in an item's text links to a side notes file; " + styleKey.Render("o") + " opens it in",
 		"$EDITOR, creating it (with a \"# name\" heading) if missing.",
 		"Undo/redo track the last 100 changes; an external edit is kept in history too,",

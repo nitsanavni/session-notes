@@ -172,6 +172,15 @@ func (it *Item) ToggleUrgent() {
 	}
 }
 
+// TogglePinned flips the pinned flag on a recognized item. Pinned items carry a
+// leading "!pin" marker and are re-injected into Claude's context on a cadence
+// by the prompt-submit hook (see PinnedItems).
+func (it *Item) TogglePinned() {
+	if it.parsed {
+		it.Pinned = !it.Pinned
+	}
+}
+
 // SetTitle sets the frontmatter title (the empty string clears it). Setting a
 // title on a board that had no frontmatter block promotes it to one so the title
 // actually renders; clearing on such a board leaves it frontmatter-less.

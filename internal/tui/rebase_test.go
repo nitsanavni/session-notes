@@ -160,6 +160,32 @@ func TestApplyOpUrgentFuzzyAbsolute(t *testing.T) {
 	}
 }
 
+// Pin replays the resulting flag absolutely and hits through marker drift.
+func TestApplyOpPinFuzzyAbsolute(t *testing.T) {
+	fresh := board.Parse("## Threads\n- [x] alpha\n") // Claude flipped the marker
+	op := pendingOp{typ: opPin, section: "Threads", rawLine: "- [ ] alpha", newPinned: true}
+	applyOp(fresh, op)
+	applyOp(fresh, op)
+	if !strings.Contains(fresh.Render(), "!pin alpha") {
+		t.Errorf("pin not set: %q", fresh.Render())
+	}
+	if countOccur(fresh.Render(), "alpha") != 1 {
+		t.Errorf("item duplicated: %q", fresh.Render())
+	}
+	// Unpin replays absolutely too: the marker comes back off.
+	off := pendingOp{typ: opPin, section: "Threads", rawLine: "- [x] !pin alpha", newPinned: false}
+	applyOp(fresh, off)
+	if strings.Contains(fresh.Render(), "!pin") {
+		t.Errorf("pin not cleared: %q", fresh.Render())
+	}
+	// Target genuinely gone -> no-op, no resurrection.
+	gone := board.Parse("## Threads\n- [ ] beta\n")
+	applyOp(gone, op)
+	if strings.Contains(gone.Render(), "alpha") {
+		t.Errorf("pin resurrected a gone item: %q", gone.Render())
+	}
+}
+
 // Archive acts when the target is present (exact or single-fuzzy) and is a clean
 // no-op when it is gone — no resurrection, no spurious Archive section.
 func TestApplyOpArchiveItem(t *testing.T) {
