@@ -4,26 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>session-notes</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='14' height='14' rx='3' fill='%234a7d5f'/%3E%3Cpath d='M4 5h8M4 8h8M4 11h5' stroke='%23fff' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='7' fill='%231C2226'/%3E%3Cpath d='M13 16h-5M19 16c3 0 3-6 7-6M19 16c3 0 3 6 7 6' fill='none' stroke='%238B9997' stroke-width='2.8' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='4.2' fill='%2346B3A4'/%3E%3Ccircle cx='7' cy='16' r='2.6' fill='%238B9997'/%3E%3Ccircle cx='26.5' cy='10' r='2.6' fill='%238B9997'/%3E%3Ccircle cx='26.5' cy='22' r='2.6' fill='%238B9997'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #f7f7f5; --fg: #1a1a1a; --dim: #77776f; --border: #e2e2dd;
   --accent: #4a7d5f; --urgent: #b3442e; --pin: #6b7fb3; --input: #ffffff;
   --link: #6b7fb3; --cursor: #ecece6;
+  --author-claude: #b5651d; --author-user: #3b6fb5;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #16161a; --fg: #dcdcd4; --dim: #8a8a82; --border: #2e2e34;
     --accent: #7fbf9a; --urgent: #e07a5f; --pin: #8ea3d8; --input: #1f1f24;
     --link: #8ea3d8; --cursor: #23232a;
+    --author-claude: #e0a878; --author-user: #8ea3d8;
   }
 }
 * { box-sizing: border-box; }
 body {
-  margin: 0 auto; padding: 1.5rem 1.25rem 4rem; max-width: 780px;
+  margin: 0 auto; padding: 1.5rem 1.25rem 4rem; max-width: 960px;
   background: var(--bg); color: var(--fg);
   font: 15px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
+/* The map wants room to breathe — let map mode use the full window width. */
+body.mapmode { max-width: none; }
 header { display: flex; align-items: baseline; gap: .6rem; margin-bottom: 1rem; flex-wrap: wrap; }
 header a { color: var(--dim); text-decoration: none; }
 #title { font-size: 1.05rem; font-weight: 600; cursor: pointer; }
@@ -37,13 +41,18 @@ header .tools button {
 header .tools button:hover:not(:disabled) { color: var(--fg); background: var(--border); }
 header .tools button:disabled { opacity: .3; cursor: default; }
 .sechead { display: flex; align-items: baseline; gap: .4rem; margin: 1.25rem 0 .25rem; padding: 0 .3rem; border-radius: 6px; }
-.sechead h2 { font-size: .95rem; margin: 0; color: var(--accent); font-weight: 600; cursor: default; }
+.sechead h2 { font-size: .95rem; margin: 0; color: var(--accent); font-weight: 600; cursor: pointer; }
+.sechead .fold { flex: none; color: var(--dim); cursor: pointer; user-select: none; font-size: .8em; width: .9em; }
+.sechead .count { color: var(--dim); font-size: .85em; font-weight: 400; }
 .sechead .actions { visibility: hidden; }
 .sechead:hover .actions { visibility: visible; }
 ul { margin: 0; padding: 0; list-style: none; }
 ul ul { padding-left: 1.4rem; }
 li { padding: .1rem 0; }
 .row { display: flex; align-items: baseline; gap: .45rem; padding: 0 .3rem; border-radius: 6px; }
+/* Keep the selected line clear of the sticky top and the fixed footer bar when
+   scrollIntoView brings it to a viewport edge (else it hides behind the footer). */
+.row, .sechead { scroll-margin-top: 1.5rem; scroll-margin-bottom: 3rem; }
 .cursor { background: var(--cursor); outline: 1px solid var(--border); }
 .marker {
   cursor: pointer; user-select: none; flex: none; color: var(--dim);
@@ -51,8 +60,15 @@ li { padding: .1rem 0; }
 }
 .marker.wip { color: var(--accent); font-weight: 600; }
 .marker.blocked { color: var(--urgent); }
-.text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.done > .row .text { color: var(--dim); text-decoration: line-through; }
+/* Long items show as one truncated line by default; `w` toggles the .wrap
+   class to soft-wrap the item at the cursor to its full height (mirrors the
+   TUI's per-item wrap toggle). */
+.text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.text.wrap { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.done > .row .text { color: var(--dim); }
+.author { font-weight: 600; }
+.author.claude { color: var(--author-claude); }
+.author.user { color: var(--author-user); }
 .urgentflag { color: var(--urgent); font-weight: 700; }
 .pinflag { color: var(--pin); }
 .wikilink { color: var(--link); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
@@ -145,7 +161,7 @@ body.mapmode #mapwrap { display: block; }
 .mapnode.center { font-weight: 700; }
 .mapnode.section { color: var(--accent); font-weight: 600; }
 .mapnode.reply { color: var(--dim); }
-.mapnode.done { color: var(--dim); text-decoration: line-through; }
+.mapnode.done { color: var(--dim); }
 .mapnode.urgent { color: var(--urgent); }
 .mapnode .suffix { color: var(--pin); }
 #mapprompt {
@@ -182,7 +198,7 @@ body.mapmode #mapwrap { display: block; }
   <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
 </div>
 <div id="mapprompt"><div class="lbl"></div><input spellcheck="false"></div>
-<footer id="listfoot">j/k move · tab section · a add · R reply · F fork · space status · ! urgent · e edit · d archive · E raw · o link · m map · u undo · ? help</footer>
+<footer id="listfoot">j/k move · tab section · enter fold · a add · R reply · F fork · space status · ! urgent · w wrap · e edit · d archive · E raw · o link · m map · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 
@@ -212,6 +228,8 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>a</td><td>add to the cursor's section</td></tr>
     <tr><td>A</td><td>add a section</td></tr>
     <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
+    <tr><td>enter / l / h</td><td>fold / expand the section at the cursor (h collapses, l expands)</td></tr>
+    <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
     <tr><td>!</td><td>toggle urgent</td></tr>
@@ -223,7 +241,7 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>u / ctrl+r</td><td>undo / redo (shared journal — CLI edits too)</td></tr>
     <tr><td>H</td><td>history: what changed, by whom</td></tr>
     <tr><td>y</td><td>copy board file path</td></tr>
-    <tr><td>m</td><td>mindmap view (in the map: hjkl move, enter fold,
+    <tr><td>m</td><td>mindmap view (in the map: hjkl move, enter fold, w expand node,
       f focus subtree, b step out, M toggle Log, m/q back)</td></tr>
     <tr><td>?</td><td>this help</td></tr>
   </table>
@@ -235,6 +253,20 @@ const API = `/api/board/${encodeURIComponent(ID)}`;
 const MARKERS = { open: '[ ]', wip: '[>]', done: '[x]', blocked: '[?]', none: '·' };
 const NEXT = { open: 'wip', wip: 'done', done: 'open', blocked: 'open' };
 let cur = null;
+// Per-item wrap toggle (the `w` key), keyed by the item's raw source line: a
+// present key means "show this long item's full text wrapped" instead of the
+// default single truncated line. Mirrors the TUI's listExpanded.
+const listExpanded = new Set();
+// Per-section collapse override (the enter/l/h keys), keyed by section title.
+// An absent key means the section's default: Archive collapsed, all others
+// expanded (mirrors the TUI's collapsed map + defaultCollapsed).
+const collapsedSecs = {};
+const defaultCollapsed = title => title === 'Archive';
+const sectionCollapsed = title => title in collapsedSecs ? collapsedSecs[title] : defaultCollapsed(title);
+function setCollapsed(title, c) {
+  if (c === defaultCollapsed(title)) delete collapsedSecs[title];
+  else collapsedSecs[title] = c;
+}
 // While the user is typing in an inline input, live re-renders are deferred
 // (the TUI defers fsnotify reloads the same way); the freshest fetch lands
 // when the input closes, so your in-progress text is never destroyed.
@@ -310,6 +342,27 @@ function moveSection(delta) {
   setCursor(next);
 }
 
+// toggleWrap flips the cursor item's wrap state (the `w` key). It updates the
+// live .text node immediately and records the choice so it survives re-renders.
+function toggleWrap() {
+  const s = cursorStop();
+  if (!s || s.type !== 'item') return;
+  if (listExpanded.has(s.it.raw)) listExpanded.delete(s.it.raw);
+  else listExpanded.add(s.it.raw);
+  if (s.text) s.text.classList.toggle('wrap', listExpanded.has(s.it.raw));
+  s.el.scrollIntoView({ block: 'nearest' });
+}
+
+// toggleSectionCollapse flips the section at the cursor between collapsed
+// (header + count only) and expanded, then re-renders (enter/l/h keys).
+function toggleSectionCollapse(title, force) {
+  const c = force === undefined ? !sectionCollapsed(title) : force;
+  if (c === sectionCollapsed(title)) return;
+  setCollapsed(title, c);
+  cursorKey = `sec:${title}`; // keep the cursor on the toggled header
+  renderOutline(cur);
+}
+
 // ---- edits ----
 
 // post sends one edit. On failure the typed text (if any) is parked in the
@@ -334,6 +387,19 @@ async function post(body, lostText) {
     if (box) { box.value = lostText; box.focus(); }
   }
   return ok;
+}
+
+// A leading author token — "claude:" / "user:", tolerating a "HH:MM " log
+// timestamp ahead of it — is tinted in the author color (mirrors the TUI's
+// authorRe). tintAuthor appends the timestamp (plain) + tinted token to target
+// and returns the remaining text for the caller to render normally.
+const AUTHOR_RE = /^((?:\d{2}:\d{2}\s+)?)(claude|user)(:)/;
+function tintAuthor(target, str) {
+  const m = AUTHOR_RE.exec(str);
+  if (!m) return str;
+  if (m[1]) target.append(m[1]);
+  target.append(el('span', { class: 'author ' + m[2] }, m[2] + m[3]));
+  return str.slice(m[0].length);
 }
 
 // linkify renders [[wiki-links]] as live elements. Side notes open the note
@@ -395,7 +461,8 @@ function itemNode(section, it) {
   const li = el('li', { class: it.status === 'done' ? 'done' : '' });
   const row = el('div', { class: 'row' });
   const key = `it:${section}:${it.raw}`;
-  registerStop({ key, type: 'item', el: row, section, it, row, li });
+  const text = el('span', { class: 'text' + (listExpanded.has(it.raw) ? ' wrap' : '') });
+  registerStop({ key, type: 'item', el: row, section, it, row, li, text });
   row.addEventListener('click', () => setCursor(stops.find(s => s.key === key), false));
 
   if (it.status !== 'none') {
@@ -408,10 +475,9 @@ function itemNode(section, it) {
     row.append(el('span', { class: 'marker' }, MARKERS.none));
   }
 
-  const text = el('span', { class: 'text' });
   if (it.urgent) text.append(el('span', { class: 'urgentflag' }, '!! '));
   if (it.pinned) text.append(el('span', { class: 'pinflag' }, '⚲ '));
-  linkify(text, it.text);
+  linkify(text, tintAuthor(text, it.text));
   text.addEventListener('dblclick', () => act.edit(section, it, row));
   row.append(text);
 
@@ -470,6 +536,15 @@ function addInput(section, isLog) {
       post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v }, v);
     }
     if (e.key === 'Escape') inp.blur();
+    // Up/down means "I'm done adding, navigate away": discard the (unsent)
+    // text and move the cursor, so a stray keystroke doesn't strand you in
+    // the add box. Enter is the only thing that commits an add.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      inp.value = '';
+      inp.blur();
+      moveCursor(e.key === 'ArrowDown' ? 1 : -1);
+    }
   });
   return inp;
 }
@@ -477,13 +552,21 @@ function addInput(section, isLog) {
 const renameSection = (head, title) =>
   inlineInput(head, title, v => { cursorFollow = { section: v }; post({ op: 'rename-section', section: title, text: v }); });
 
-function sectionHead(title) {
+function sectionHead(title, collapsed, count) {
   const head = el('div', { class: 'sechead' });
   registerStop({ key: `sec:${title}`, type: 'section', el: head, title, head });
   head.addEventListener('click', () => setCursor(stops.find(s => s.key === `sec:${title}`), false));
-  const h = el('h2', { title: 'double-click to rename (e)' }, title);
+  // Fold caret: click toggles collapse (enter/l/h from the keyboard).
+  const caret = el('span', { class: 'fold', title: 'collapse / expand (enter)' }, collapsed ? '▸' : '▾');
+  caret.addEventListener('click', ev => { ev.stopPropagation(); toggleSectionCollapse(title); });
+  head.append(caret);
+  const h = el('h2', { title: 'double-click to rename (e) · click ▸ to fold' }, title);
   h.addEventListener('dblclick', () => renameSection(head, title));
   head.append(h);
+  if (collapsed) {
+    const label = title === 'Archive' ? `(${count} archived)` : `(${count} items)`;
+    head.append(el('span', { class: 'count' }, label));
+  }
   const guarded = title === 'Log' || title === 'Archive';
   head.append(el('div', { class: 'actions' },
     ...(guarded ? [] : [el('button', { title: 'archive whole section (d)', onclick: () =>
@@ -519,17 +602,16 @@ function renderOutline(b) {
   main.textContent = '';
   for (const sec of b.sections || []) {
     const isLog = sec.title === 'Log';
-    const isArchive = sec.title === 'Archive';
-    if (isArchive) {
-      // Archive registers no stops while collapsed; build items only.
-      const list = el('ul');
-      for (const it of sec.items || []) list.append(itemNode(sec.title, it));
-      const n = countItems(sec.items);
-      main.append(el('details', { class: 'archive' }, el('summary', {}, `Archive (${n})`), list));
+    const collapsed = sectionCollapsed(sec.title);
+    const count = countItems(sec.items);
+    // Head first so the stop order matches the visual order (j/k walk it).
+    const head = sectionHead(sec.title, collapsed, count);
+    if (collapsed) {
+      // A collapsed section shows only its header + count; its items build no
+      // stops (they are hidden and non-navigable, like the TUI).
+      main.append(head);
       continue;
     }
-    // Head first so the stop order matches the visual order (j/k walk it).
-    const head = sectionHead(sec.title);
     const list = el('ul', isLog ? { id: 'log' } : {});
     for (const it of sec.items || []) list.append(itemNode(sec.title, it));
     main.append(head, list, addInput(sec.title, isLog));
@@ -557,7 +639,12 @@ function renderOutline(b) {
     if (!back) back = stops.find(s => s.type === 'section' && s.title === cursorFollow.section);
   }
   cursorFollow = null;
-  if (back) setCursor(back, false);
+  // Rebuilding #board resets the scroll position, so re-scroll the restored
+  // cursor into view — otherwise a live re-render (SSE, an external edit)
+  // leaves the selected line stranded off-screen or behind the fixed footer.
+  // Skip the scroll while an add/section input is focused so it doesn't yank
+  // the viewport away from what the user is typing.
+  if (back) setCursor(back, !keep);
   else if (cursorKey) { cursorKey = null; }
 
   if (keep) {
@@ -670,8 +757,11 @@ document.getElementById('histclose').addEventListener('click', () => toggleModal
 // ---- map view (port of the TUI's mm-style mindmap) ----
 // The board as a center-outward map: title at center, sections as the first
 // ring, items as subtrees. Same data, same op layer — a second projection.
-const mapState = { in: false, folds: {}, root: 'center', focus: 'center', showLog: false };
+const mapState = { in: false, folds: {}, root: 'center', focus: 'center', showLog: false, expanded: {} };
 let mapNodes = []; // visible nodes of the last renderMap, in placement order
+// When set, the next renderMap centers the focused node in the viewport (on
+// first entry and after f/b re-roots) instead of the minimal-scroll default.
+let mapRecenter = false;
 
 // mapBuild converts the board JSON into the full node tree. Keys match the
 // outline's stop keys exactly, so selection carries over both ways.
@@ -769,7 +859,8 @@ function measureCharW() {
 
 function mapLabel(n) {
   let text = n.text;
-  if ([...text].length > TRUNC) text = [...text].slice(0, TRUNC - 1).join('') + '…';
+  // `w` expands the node: show its full text instead of the 40-col truncation.
+  if (!mapState.expanded[n.key] && [...text].length > TRUNC) text = [...text].slice(0, TRUNC - 1).join('') + '…';
   // [+N] counts only what THIS node hides (each shown child's subtree counts
   // as fully present — deeper folds carry their own suffix, like the TUI).
   const shown = visKids(n).reduce((s, c) => s + 1 + descCount(c), 0);
@@ -883,7 +974,8 @@ function renderMap(b) {
       if (n.it.urgent) cls.push('urgent');
     }
     if (n.key === mapState.focus) cls.push('focus');
-    const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - NODE_H / 2}px` }, l.text);
+    const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - NODE_H / 2}px` });
+    d.append(tintAuthor(d, l.text)); // tints a leading claude:/user: token
     if (l.suffix) d.append(el('span', { class: 'suffix' }, l.suffix));
     d.addEventListener('click', () => { mapState.focus = n.key; renderMap(cur); });
     d.addEventListener('dblclick', () => mapEdit(n));
@@ -908,12 +1000,20 @@ function renderMap(b) {
   for (let n = root; n; n = n.parent) crumb.unshift(n.kind === 'center' ? (b.title || 'board') : n.text);
   document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (b steps out)';
   document.getElementById('mapfoot').textContent =
-    `${focus.text}  ·  hjkl move · enter fold · f focus · b out · e edit · a add · space status · M log · m/q back`;
-  if (focus.el) focus.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    `${focus.text}  ·  hjkl move · enter fold · w expand · f focus · b out · e edit · a add · space status · M log · m/q back`;
+  // On first entry / after f/b, center the focused node in the viewport (the
+  // map opens centered, not with the node pinned to an edge); otherwise scroll
+  // the minimum needed to keep it visible.
+  if (focus.el) {
+    const mode = mapRecenter ? 'center' : 'nearest';
+    focus.el.scrollIntoView({ block: mode, inline: mode });
+    mapRecenter = false;
+  }
 }
 
 function enterMap() {
   mapState.in = true;
+  mapRecenter = true;
   document.body.classList.add('mapmode');
   document.getElementById('mapfoot').hidden = false;
   mapState.focus = cursorKey || 'center';
@@ -984,7 +1084,12 @@ const mapFocused = () => mapNodes.find(n => n.key === mapState.focus) || null;
 function mapSiblings(n) {
   if (!n.parent) return [n];
   let sibs = visKids(n.parent);
-  if (n.parent.kind === 'center') sibs = sibs.filter(s => sideSign(s) === sideSign(n));
+  // The layout root's children are the only ones split across both sides (by
+  // the balancer); everywhere else a subtree lives wholly on one side. So
+  // same-side filtering applies exactly when the parent IS the layout root —
+  // whether that's the center (unfocused) or a focused subtree. Filtering only
+  // for the center left j/k walking across both sides inside a focused subtree.
+  if (n.parent.key === mapState.root) sibs = sibs.filter(s => sideSign(s) === sideSign(n));
   return sibs;
 }
 const sideSign = n => {
@@ -996,12 +1101,14 @@ const sideSign = n => {
 function handleMapKey(e) {
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
-    'Enter', 'f', 'b', 'e', 'a', ' ', '!', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape']);
+    'Enter', 'f', 'b', 'e', 'a', 'w', ' ', '!', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   const refocus = key => { mapState.focus = key; renderMap(cur); };
   switch (e.key) {
     case 'j': case 'ArrowDown': case 'k': case 'ArrowUp': {
-      if (!n || n.kind === 'center') break;
+      // The layout root (center, or a focused subtree) has no siblings of its
+      // own — j/k from it is a no-op, same as the center when unfocused.
+      if (!n || n.kind === 'center' || n.key === mapState.root) break;
       const sibs = mapSiblings(n);
       const i = sibs.indexOf(n);
       const next = sibs[Math.max(0, Math.min(sibs.length - 1, i + (e.key === 'j' || e.key === 'ArrowDown' ? 1 : -1)))];
@@ -1011,7 +1118,10 @@ function handleMapKey(e) {
     case 'h': case 'ArrowLeft': case 'l': case 'ArrowRight': {
       if (!n) break;
       const toward = e.key === 'h' || e.key === 'ArrowLeft' ? -1 : 1; // screen direction
-      if (n.kind === 'center') {
+      // The layout root behaves like the center: it has children on BOTH sides
+      // (the balancer splits them), so h/l enter the branch on the chosen side.
+      // Without this, a focused (re-rooted) subtree traps nav to the right side.
+      if (n.kind === 'center' || n.key === mapState.root) {
         const kids = visKids(n).filter(c => sideSign(c) === toward);
         if (kids.length) refocus(kids[0].key);
         break;
@@ -1026,6 +1136,7 @@ function handleMapKey(e) {
       if (n && n.kind !== 'center' && visKids(n).length) {
         mapState.root = n.key;
         mapState.focus = visKids(n)[0].key;
+        mapRecenter = true;
         renderMap(cur);
       }
       break;
@@ -1036,9 +1147,11 @@ function handleMapKey(e) {
       const out = rootNode && rootNode.parent ? rootNode.parent.key : 'center';
       mapState.focus = mapState.root;
       mapState.root = out;
+      mapRecenter = true;
       renderMap(cur);
       break;
     }
+    case 'w': if (n) { mapState.expanded[n.key] = !mapState.expanded[n.key]; renderMap(cur); } break;
     case 'e': if (n) mapEdit(n); break;
     case 'a': if (n) mapAdd(n); break;
     case ' ': if (n && n.kind === 'item' && n.it.status !== 'none') act.cycle(n.section, n.it); break;
@@ -1088,12 +1201,18 @@ document.addEventListener('keydown', e => {
   }
   // preventDefault for every handled key: keys that open an input (a, e, R…)
   // must not also type their own character into it, space must not scroll.
-  const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'Tab', 'g', 'G', 'a', 'A',
-    ' ', 'b', '!', 'e', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'm', 'u', 'y', '?']);
+  const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
+    ' ', 'b', '!', 'e', 'w', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'm', 'u', 'y', '?', 'Enter', 'l', 'h']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
     case 'k': case 'ArrowUp': moveCursor(-1); break;
+    case 'w': toggleWrap(); break;
+    // enter / l / right toggle the section fold (l/right expand, h/left collapse
+    // when on a section header); no-op on items — mirrors the TUI.
+    case 'Enter': if (onSec) toggleSectionCollapse(s.title); break;
+    case 'l': case 'ArrowRight': if (onSec) toggleSectionCollapse(s.title, false); break;
+    case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); break;
     case 'Tab': moveSection(e.shiftKey ? -1 : 1); break;
     case 'g': { const v = visibleStops(); if (v.length) setCursor(v[0]); break; }
     case 'G': { const v = visibleStops(); if (v.length) setCursor(v[v.length - 1]); break; }
@@ -1143,7 +1262,12 @@ window.__sn = {
   get cursorKey() { return cursorKey; },
   get inputsOpen() { return inputsOpen; },
   get board() { return cur; },
-  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key) }; },
+  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded } }; },
+  get listExpanded() { return [...listExpanded]; },
+  get collapsedSecs() { return { ...collapsedSecs }; },
+  // A cursor stop's on-screen rect, for asserting the selected line is visible
+  // (not hidden behind the fixed footer).
+  cursorRect() { const s = cursorStop(); return s ? s.el.getBoundingClientRect().toJSON() : null; },
 };
 </script>
 </body>

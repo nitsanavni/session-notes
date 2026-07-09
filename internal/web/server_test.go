@@ -262,6 +262,46 @@ func TestPagesServe(t *testing.T) {
 	}
 }
 
+// TestServedAssetsHaveWebFixes guards the client-side behaviors the served
+// board/index pages must carry: the mindmap favicon on both pages, done items
+// styled grey (no strikethrough) in both views, and the wrap/collapse/author
+// wiring present. These are asserted on the embedded asset text so a stray edit
+// that drops them fails CI without needing a browser.
+func TestServedAssetsHaveWebFixes(t *testing.T) {
+	h, _ := newTestServer(t)
+	board := do(t, h, "GET", "/b/abc-123", "").Body.String()
+	index := do(t, h, "GET", "/", "").Body.String()
+
+	// Favicon: the mindmap mark (its teal center node color) on both pages.
+	for name, page := range map[string]string{"board": board, "index": index} {
+		if !strings.Contains(page, "fill='%2346B3A4'") {
+			t.Errorf("%s page missing mindmap favicon", name)
+		}
+	}
+
+	// Done items: grey, no line-through, in both outline and map.
+	if strings.Contains(board, "text-decoration: line-through") &&
+		strings.Contains(board, ".done > .row .text { color: var(--dim); text-decoration: line-through") {
+		t.Error("outline done item still uses line-through")
+	}
+	if strings.Contains(board, ".mapnode.done { color: var(--dim); text-decoration: line-through") {
+		t.Error("map done node still uses line-through")
+	}
+
+	// Wrap toggle, section collapse, author tint, and the map focus-root nav fix.
+	for _, want := range []string{
+		"function toggleWrap(",
+		"function toggleSectionCollapse(",
+		"function tintAuthor(",
+		"n.parent.key === mapState.root",                 // focus-mode sibling filtering
+		"n.kind === 'center' || n.key === mapState.root", // focus-root lateral nav
+	} {
+		if !strings.Contains(board, want) {
+			t.Errorf("board page missing %q", want)
+		}
+	}
+}
+
 func TestRegisterAndHome(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SESSION_NOTES_DIR", filepath.Join(dir, "boards")) // empty boards dir

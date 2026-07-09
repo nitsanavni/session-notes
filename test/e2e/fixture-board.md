@@ -26,6 +26,7 @@ title: e2e fixture
 ## Ideas
 - cache invalidation could be event-driven
 - see [[design-notes]] for the full sketch
+- this is a deliberately very long idea that should overflow the truncation width so the wrap toggle and the map node truncation both have a visible, testable effect on the layout
 
 ## Log
 - 10:00 start: session started in /tmp/e2e-project

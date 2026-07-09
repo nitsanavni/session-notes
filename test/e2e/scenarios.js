@@ -299,6 +299,192 @@ run({
     t.assert(map.nodes.includes('sec:Log'), 'Log shown after M');
   },
 
+  'w wraps the long item at the cursor (outline)': async t => {
+    await t.open();
+    await t.key('5'); // Ideas
+    await t.key('j', 3); // the deliberately long idea
+    const raw = await t.cursorKey();
+    t.assert(raw.includes('deliberately very long'), `on the long item (got ${raw})`);
+    // Default: single truncated line (no wrap class).
+    let wrapped = await t.page.evaluate(() => document.querySelector('.cursor .text').classList.contains('wrap'));
+    t.assert(!wrapped, 'long item truncated by default');
+    const h0 = await t.page.evaluate(() => document.querySelector('.cursor .text').getBoundingClientRect().height);
+    await t.key('w');
+    wrapped = await t.page.evaluate(() => document.querySelector('.cursor .text').classList.contains('wrap'));
+    t.assert(wrapped, 'w added the wrap class');
+    t.assert((await t.sn()).cursorKey === raw, 'cursor stayed on the item');
+    const h1 = await t.page.evaluate(() => document.querySelector('.cursor .text').getBoundingClientRect().height);
+    t.assert(h1 > h0, `wrapped item grew taller (${h0} -> ${h1})`);
+    await t.key('w');
+    wrapped = await t.page.evaluate(() => document.querySelector('.cursor .text').classList.contains('wrap'));
+    t.assert(!wrapped, 'w toggled wrap back off');
+  },
+
+  'enter/l/h collapse and expand a section (outline)': async t => {
+    await t.open();
+    const collapsed = () => t.page.evaluate(() => window.__sn.collapsedSecs);
+    await t.key('2'); // Plan head
+    const itemStop = 'it:Plan:- [x] extract middleware';
+    t.assert((await t.sn()).stops.some(s => s.key === itemStop && s.visible), 'plan items visible');
+    await t.key('h'); // collapse
+    t.assert((await collapsed()).Plan === true, 'Plan collapsed');
+    t.assert(!(await t.sn()).stops.some(s => s.key === itemStop), 'collapsed items build no stops');
+    t.assert((await t.page.textContent('.sechead .count')) || '', 'count hint shown');
+    await t.assertCursor('sec:Plan'); // cursor stays on the header
+    await t.key('l'); // expand
+    t.assert(!('Plan' in (await collapsed())), 'Plan expanded again');
+    t.assert((await t.sn()).stops.some(s => s.key === itemStop && s.visible), 'items back');
+    await t.key('Enter'); // enter toggles too
+    t.assert((await collapsed()).Plan === true, 'enter collapsed');
+  },
+
+  'done items are grey with no strikethrough (outline + map)': async t => {
+    await t.open();
+    const deco = await t.page.evaluate(() => {
+      const li = [...document.querySelectorAll('li.done')][0];
+      return getComputedStyle(li.querySelector('.text')).textDecorationLine;
+    });
+    t.assert(deco === 'none', `outline done not struck through (got ${deco})`);
+    await t.key('m');
+    await t.settled();
+    const mdeco = await t.page.evaluate(() => {
+      const n = document.querySelector('.mapnode.done');
+      return n ? getComputedStyle(n).textDecorationLine : 'none';
+    });
+    t.assert(mdeco === 'none', `map done not struck through (got ${mdeco})`);
+  },
+
+  'author tokens are tinted in outline and map': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('j'); // the thread item
+    await t.key('j'); // its "claude: extracted, tests green" reply
+    const tint = await t.page.evaluate(() => {
+      const a = document.querySelector('.cursor .text .author');
+      return a ? { txt: a.textContent, cls: a.className } : null;
+    });
+    t.assert(tint && tint.txt === 'claude:' && tint.cls.includes('claude'), `claude token tinted (got ${JSON.stringify(tint)})`);
+    await t.key('m');
+    await t.key('Enter'); // reveal the reply node
+    await t.settled();
+    const mtint = await t.page.evaluate(() => {
+      const nodes = [...document.querySelectorAll('.mapnode .author')];
+      return nodes.map(a => ({ txt: a.textContent, cls: a.className }));
+    });
+    t.assert(mtint.some(a => a.txt === 'claude:' && a.cls.includes('claude')), `map claude token tinted (got ${JSON.stringify(mtint)})`);
+  },
+
+  'add-mode: arrow up/down exits the add box and navigates': async t => {
+    await t.open();
+    await t.key('2'); // Plan head
+    await t.key('a'); // open add box
+    await t.page.waitForFunction(() => document.activeElement && document.activeElement.classList.contains('add'));
+    await t.type('half-typed'); // discarded on arrow
+    await t.page.keyboard.press('ArrowDown');
+    await t.page.waitForTimeout(80);
+    const active = await t.page.evaluate(() => document.activeElement.tagName);
+    t.assert(active !== 'INPUT', `add box left on ArrowDown (active=${active})`);
+    // Discarded text was not committed to the board.
+    t.assert(!t.file().includes('half-typed'), 'unsent add text discarded');
+    // Cursor moved onto the first Plan item.
+    const key = await t.cursorKey();
+    t.assert(key === 'it:Plan:- [x] extract middleware', `navigated to first item (got ${key})`);
+  },
+
+  'selected line stays clear of the fixed footer when scrolled': async t => {
+    await t.open();
+    // Build a tall board so the list must scroll.
+    for (let i = 0; i < 40; i++) {
+      await t.editExternally({ op: 'add', section: 'Plan', text: `filler item ${i}` });
+    }
+    await t.settled();
+    await t.key('G'); // jump to the last stop
+    await t.page.waitForTimeout(120);
+    const vis = await t.page.evaluate(() => {
+      const r = window.__sn.cursorRect();
+      const foot = document.getElementById('listfoot').getBoundingClientRect();
+      return { r, footTop: foot.top, winH: window.innerHeight };
+    });
+    t.assert(vis.r, 'cursor has a rect');
+    t.assert(vis.r.top >= 0, `cursor not above the viewport top (top=${vis.r.top})`);
+    t.assert(vis.r.bottom <= vis.footTop + 1, `cursor sits above the fixed footer (bottom=${vis.r.bottom}, footTop=${vis.footTop})`);
+  },
+
+  'map: focus mode navigates all four directions (f, hjkl, b)': async t => {
+    await t.open();
+    await t.key('3'); // Threads head
+    await t.key('m');
+    await t.key('f'); // re-root on Threads
+    let map = (await t.sn2()).map;
+    t.assert(map.root === 'sec:Threads', `re-rooted (got ${map.root})`);
+    const firstChild = map.focus;
+    t.assert(firstChild.startsWith('it:Threads:'), 'focus on first child of the new root');
+    // j/k walk the root's children (same-side siblings). Threads has 2 items;
+    // from the first, j should reach the other and k return — as long as the
+    // balancer put them on the same side. Assert j moves and k comes back.
+    await t.key('j');
+    const afterJ = (await t.sn2()).map.focus;
+    if (afterJ !== firstChild) { // both on one side: round-trips
+      await t.key('k');
+      t.assert((await t.sn2()).map.focus === firstChild, 'k returned to the first child');
+    }
+    // Inward toward the root reaches it, from either physical side.
+    await t.key('h');
+    map = (await t.sn2()).map;
+    if (map.focus !== 'sec:Threads') { await t.key('l'); map = (await t.sn2()).map; }
+    t.assert(map.focus === 'sec:Threads', `inward move reached the focused root (got ${map.focus})`);
+    // Outward from the root re-enters a child (root behaves like the center).
+    await t.key('h');
+    let outLeft = (await t.sn2()).map.focus;
+    if (outLeft === 'sec:Threads') { await t.key('l'); outLeft = (await t.sn2()).map.focus; }
+    t.assert(outLeft.startsWith('it:Threads:'), `outward from root entered a child (got ${outLeft})`);
+    // b steps out of focus mode back to the whole board.
+    await t.key('b');
+    map = (await t.sn2()).map;
+    t.assert(map.root === 'center', `b stepped out (got ${map.root})`);
+    t.assert(map.focus === 'sec:Threads', 'focus rests on the stepped-out node');
+  },
+
+  'map: w expands a truncated node to its full label': async t => {
+    await t.open();
+    await t.key('5'); // Ideas
+    await t.key('j', 3); // the long idea
+    await t.key('m');
+    await t.settled();
+    const truncated = await t.page.evaluate(() => document.querySelector('.mapnode.focus').textContent);
+    t.assert(truncated.includes('…'), `node truncated by default (got ${JSON.stringify(truncated)})`);
+    await t.key('w');
+    await t.settled();
+    const full = await t.page.evaluate(() => document.querySelector('.mapnode.focus').textContent);
+    t.assert(!full.includes('…') && full.length > truncated.length, `w expanded the node (got ${JSON.stringify(full)})`);
+    t.assert((await t.sn2()).map.expanded[(await t.sn2()).map.focus] === true, 'expand state recorded');
+  },
+
+  'map: opens centered, not pinned to an edge': async t => {
+    await t.open();
+    // Make the map taller than the viewport so vertical centering is exercised
+    // (a short map that fits needs no scroll and can't be "pinned to an edge").
+    for (let i = 0; i < 30; i++) {
+      await t.editExternally({ op: 'add', section: 'Plan', text: `filler ${i}` });
+    }
+    await t.settled();
+    await t.key('m');
+    await t.settled();
+    await t.page.waitForTimeout(150);
+    const geom = await t.page.evaluate(() => {
+      const view = document.getElementById('mapview');
+      const node = document.querySelector('.mapnode.center') || document.querySelector('.mapnode.focus');
+      const vr = view.getBoundingClientRect(), nr = node.getBoundingClientRect();
+      return { nodeMid: nr.top + nr.height / 2, viewTop: vr.top, viewH: vr.height,
+        canvasH: document.getElementById('mapcanvas').offsetHeight };
+    });
+    t.assert(geom.canvasH > geom.viewH, `map taller than viewport (${geom.canvasH} > ${geom.viewH})`);
+    // The center node sits near the vertical middle of the viewport, not jammed
+    // against the bottom edge (the pre-fix behavior put it at the bottom).
+    const rel = (geom.nodeMid - geom.viewTop) / geom.viewH;
+    t.assert(rel > 0.25 && rel < 0.75, `center node vertically centered (rel=${rel.toFixed(2)})`);
+  },
+
   'dashboard lists the board and enter opens it': async t => {
     await t.openDash();
     await t.key('j');
