@@ -9,7 +9,7 @@ maintains it during the session via hooks + file watching.
 - `session-notes` (no args) — open the TUI for the current session's board.
 - `session-notes --pane <tmux-pane-id>` — resolve board via pane mapping (used by tmux keybind).
 - `session-notes --board <path>` — open a specific board file.
-- `session-notes docs <topic>` — print an on-demand protocol/recipe topic (`protocol`, `monitor`, `conflicts`, `cli`); no/unknown topic lists them. Versioned with the binary; keeps the session-start blurb small.
+- `session-notes docs <topic>` — print an on-demand protocol/recipe topic (`protocol`, `monitor`, `conflicts`, `cli`, `blurb`); no/unknown topic lists them. `blurb` prints the session-start blurb itself (placeholder board path) — the single source shared with the `session-start` hook injection. Versioned with the binary; keeps the session-start blurb small.
 - `session-notes hook session-start` — Claude Code SessionStart hook (JSON on stdin).
 - `session-notes hook session-end` — SessionEnd hook.
 - `session-notes hook prompt-submit` — UserPromptSubmit hook.

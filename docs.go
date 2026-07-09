@@ -5,6 +5,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/nitsanavni/session-notes/internal/hooks"
 )
 
 // docTopics maps a `session-notes docs <topic>` topic to its recipe text. The
@@ -129,6 +131,13 @@ atomic rename each save). Do NOT hand-roll this; use the CLI.`,
 // list the available topics when the topic is missing or unknown.
 func runDocs(args []string) int {
 	if len(args) >= 1 {
+		// blurb is dynamic: it is the session-start injection text with the board
+		// path substituted. docs has no session context, so use a placeholder path
+		// to keep the injected text and the on-demand doc a single source.
+		if args[0] == "blurb" {
+			fmt.Print(hooks.Blurb("<board-path>"))
+			return 0
+		}
 		if body, ok := docTopics[args[0]]; ok {
 			fmt.Println(body)
 			return 0
@@ -147,7 +156,7 @@ func runDocs(args []string) int {
 
 // docTopicNames returns the topic names in a stable, meaningful order.
 func docTopicNames() []string {
-	order := []string{"protocol", "monitor", "conflicts", "cli"}
+	order := []string{"protocol", "monitor", "conflicts", "cli", "blurb"}
 	// Guard against a topic being added to the map but not the order list.
 	seen := map[string]bool{}
 	for _, t := range order {

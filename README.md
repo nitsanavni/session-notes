@@ -473,6 +473,7 @@ from actual behavior). Topics:
 | `docs monitor` | The `Monitor` watcher recipe with self-edit suppression via `edit --refresh-snapshot`. |
 | `docs conflicts` | Reconciling `<<<<<<<`/`=======`/`>>>>>>>` markers under the lock with `edit replace`. |
 | `docs cli` | The `session-notes edit` subcommand reference. |
+| `docs blurb` | The session-start blurb itself (with a placeholder board path) — the single source shared with the `session-start` hook injection. |
 
 Running `session-notes docs` with no topic (or an unknown one) lists the topics.
 

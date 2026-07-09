@@ -76,7 +76,21 @@ func SessionStart(stdin io.Reader, stdout io.Writer) {
 		})
 	}
 
-	fmt.Fprintf(stdout, `Session board: %s
+	fmt.Fprint(stdout, Blurb(path))
+
+	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
+		fmt.Fprintf(stdout, "\nBoards from previous sessions in this project (read them for history/context if useful):\n")
+		for _, p := range prev {
+			fmt.Fprintf(stdout, "- %s\n", p)
+		}
+	}
+}
+
+// Blurb returns the protocol blurb SessionStart prints, with boardPath
+// substituted in. It is also exposed as `session-notes docs blurb` (with a
+// placeholder path), so the injected text and the on-demand doc are one source.
+func Blurb(boardPath string) string {
+	return fmt.Sprintf(`Session board: %s
 
 This session has a shared markdown board you and the user both maintain:
 - Set a short "title:" in the frontmatter early (e.g. "auth refactor") so pickers show a name, not a uuid.
@@ -86,15 +100,8 @@ This session has a shared markdown board you and the user both maintain:
 - WRITE THE BOARD VIA THE CLI, never by editing the file: "session-notes edit <add|reply|status|log|title|replace> --board %s [--refresh-snapshot <snap>] args…" does the whole locked read → modify → atomic-replace (the same lock the TUI uses), so your write never clobbers the user's concurrent edit.
 - The user edits live in a TUI; watch the board with the Monitor tool and pass --refresh-snapshot to every edit so the watch ignores your own writes.
 - Preserve content you don't understand; edit surgically.
-- Run "session-notes docs <topic>" (protocol|monitor|conflicts|cli) for the full recipes (reply/threading, [[links]], watcher setup, conflict reconciliation, edit reference).
-`, path, path)
-
-	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
-		fmt.Fprintf(stdout, "\nBoards from previous sessions in this project (read them for history/context if useful):\n")
-		for _, p := range prev {
-			fmt.Fprintf(stdout, "- %s\n", p)
-		}
-	}
+- Run "session-notes docs <topic>" (protocol|monitor|conflicts|cli|blurb) for the full recipes (reply/threading, [[links]], watcher setup, conflict reconciliation, edit reference).
+`, boardPath, boardPath)
 }
 
 // previousBoards returns up to max paths of other sessions' boards whose

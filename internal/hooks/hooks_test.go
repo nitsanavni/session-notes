@@ -9,6 +9,22 @@ import (
 	"github.com/nitsanavni/session-notes/internal/board"
 )
 
+// TestBlurb checks the session-start blurb substitutes the board path and keeps
+// its key lines (it is the single source for `session-notes docs blurb`).
+func TestBlurb(t *testing.T) {
+	b := Blurb("/tmp/board.md")
+	for _, want := range []string{
+		"Session board: /tmp/board.md",
+		"WRITE THE BOARD VIA THE CLI",
+		"--board /tmp/board.md",
+		"(protocol|monitor|conflicts|cli|blurb)",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("blurb missing %q", want)
+		}
+	}
+}
+
 // TestPinsDueCadence exercises the three branches: first injection, unchanged +
 // fresh (suppressed), unchanged + stale (>35m), and content change.
 func TestPinsDueCadence(t *testing.T) {
