@@ -111,8 +111,13 @@ non-zero with a one-line reason on failure.
 
   edit add <section> <text>     append a top-level item to an existing section
                                 (errors, listing sections, if it is missing)
-  edit reply <query> <text>     append an indented reply under the first item whose
-                                raw line or text contains <query>
+  edit reply <query> <text>     reply in-thread under the first item whose raw
+                                line or text contains <query>. Replying to a
+                                reply continues the conversation FLAT (appended
+                                to the thread's parent) — same semantics as the
+                                TUI's R and the web UI
+  edit fork <query> <text>      nest a sub-thread under the exact matched item
+                                (the TUI's F) — use when forking a side topic
   edit status <query> <state>   set an item's checkbox:
                                 open|wip|done|blocked|none → [ ]|[>]|[x]|[?]|plain
   edit log <text>               append "- HH:MM claude: <text>" to Log

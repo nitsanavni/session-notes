@@ -202,11 +202,12 @@ func TestEditErrors(t *testing.T) {
 		t.Errorf("missing item: want 409, got %d %s", w.Code, w.Body)
 	}
 
-	// Unknown section on add → 400.
+	// Unknown section on add → 409: an addressing failure (the section may
+	// have been renamed under you), so the client refetches.
 	w = do(t, h, "POST", "/api/board/abc-123/edit",
 		`{"op":"add","section":"Nope","text":"x"}`)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("bad section: want 400, got %d %s", w.Code, w.Body)
+	if w.Code != http.StatusConflict {
+		t.Errorf("bad section: want 409, got %d %s", w.Code, w.Body)
 	}
 
 	// Unknown op → 400.
@@ -568,6 +569,63 @@ func TestHistoryEndpoint(t *testing.T) {
 	}
 	if resp.Entries[1].Added[0] != "- [ ] first" {
 		t.Fatalf("oldest entry: %+v", resp.Entries[1])
+	}
+}
+
+func TestAuthToken(t *testing.T) {
+	h, _ := newTestServer(t)
+	// newTestServer builds an un-tokened handler; rebuild with a token.
+	s := New()
+	s.SetToken("s3cret")
+	h = s.Handler()
+
+	// No credentials → 401, for pages and API alike.
+	for _, url := range []string{"/", "/api/boards", "/b/abc-123"} {
+		if w := do(t, h, "GET", url, ""); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s without token: want 401, got %d", url, w.Code)
+		}
+	}
+
+	// Bearer header works.
+	req := httptest.NewRequest("GET", "/api/boards", nil)
+	req.Header.Set("Authorization", "Bearer s3cret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Errorf("bearer: want 200, got %d", w.Code)
+	}
+
+	// Wrong bearer refused.
+	req = httptest.NewRequest("GET", "/api/boards", nil)
+	req.Header.Set("Authorization", "Bearer nope")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("bad bearer: want 401, got %d", w.Code)
+	}
+
+	// ?token= sets the cookie and redirects to a clean URL.
+	w = do(t, h, "GET", "/b/abc-123?token=s3cret", "")
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/b/abc-123" {
+		t.Fatalf("token param: %d %s", w.Code, w.Header().Get("Location"))
+	}
+	var cookie string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == authCookie {
+			cookie = c.Value
+		}
+	}
+	if cookie != "s3cret" {
+		t.Fatalf("cookie not set: %q", cookie)
+	}
+
+	// The cookie then admits everything (this is how SSE authenticates).
+	req = httptest.NewRequest("GET", "/api/boards", nil)
+	req.AddCookie(&http.Cookie{Name: authCookie, Value: cookie})
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Errorf("cookie: want 200, got %d", w.Code)
 	}
 }
 
