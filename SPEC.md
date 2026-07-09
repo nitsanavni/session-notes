@@ -141,12 +141,33 @@ atomic-write step — the CLI does not hand-roll a second lock protocol).
   - `replace <old> <new>` — exact first-occurrence string replace over the raw
     file bytes; the escape hatch (and the way to reconcile conflict markers).
     `<old>` absent is an error.
+  - `undo` / `redo` — walk the board's shared undo journal (below). Refuses
+    with a one-line error when the board changed through a non-journaling
+    writer since the journaled edit.
 - **`--refresh-snapshot <path>`** — after the rename, still inside the lock, copy
   the new content over `<path>`. This is the monitor self-edit-suppression hook: a
   `Monitor` watch that snapshots/diffs under the same lock then emits only the
   user's edits, never Claude's.
 - **Output contract:** silent on success (unix-quiet); any failure prints a single
   `session-notes: <reason>` line to stderr and exits non-zero.
+
+## Shared undo journal
+
+`<board>.md.undo.json` (sidecar, like `.feedback.jsonl`) holds one undo
+timeline per board: `{undo: [entries], redo: [entries]}`, each entry the full
+before/after content plus author (`web`, `claude`) and timestamp, capped at
+100. It is read and written ONLY inside the board's advisory lock:
+`board.EditUnderLockJournaled(path, snapshot, author, transform)` journals any
+content-changing write (the web server and the edit CLI both use it), and
+`board.Undo`/`board.Redo` pop an entry, verify the board still reads exactly
+the state that entry left behind, and restore the other side — an intervening
+write from a non-journaling writer (TUI, `$EDITOR`, hooks) returns
+`ErrUndoConflict` (web: 409; CLI: exit non-zero) instead of clobbering it. A
+fresh journaled edit clears the redo line; a corrupt journal degrades to empty
+(history is a convenience — never worth failing a write over); no-op
+transforms are not journaled. `board.UndoDepths` backs the web UI's button
+states. The TUI keeps its richer in-memory undo (rebase-aware) for now; its
+writes simply make journal undo refuse, never lose data.
 
 ## Hooks behavior
 

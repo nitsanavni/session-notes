@@ -120,6 +120,10 @@ non-zero with a one-line reason on failure.
   edit title <text>             set the frontmatter title ("" clears it)
   edit replace <old> <new>      exact first-occurrence string replace over the raw
                                 file (escape hatch; errors if <old> not found)
+  edit undo | edit redo         walk the board's shared undo journal (last 100
+                                journaled edits — yours and the web UI's, one
+                                timeline). Refuses if the board changed through
+                                a non-journaling writer (TUI, $EDITOR) since.
 
 Flags (any subcommand):
   --board <path> | --session <id>   the target board (exactly one)

@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
@@ -32,34 +31,18 @@ const (
 )
 
 // Server holds the web UI's state: boards registered explicitly (paths outside
-// the boards dir), an optional home board that "/" redirects to, and a
-// per-board undo history of this server's own writes.
+// the boards dir) and an optional home board that "/" redirects to. Undo state
+// is NOT here — it lives in the board's shared undo journal (board.Undo), so
+// web undo survives server restarts and interleaves with `session-notes edit
+// undo` on one timeline.
 type Server struct {
 	extra map[string]string // board id -> explicit path
 	home  string            // board id "/" redirects to ("" = dashboard)
-
-	// mu serializes web edits and guards the history stacks. Web-originated
-	// writes are rare and human-paced; one lock keeps undo bookkeeping simple.
-	mu   sync.Mutex
-	hist map[string][]histEntry // board path -> undo stack (oldest first)
-	redo map[string][]histEntry // board path -> redo stack
 }
-
-// histEntry is one web edit: the full board content before and after. Undo
-// only applies when the board still reads exactly `after` — an intervening
-// write from Claude or the TUI refuses the undo instead of clobbering it.
-type histEntry struct{ before, after string }
-
-// histLimit bounds the per-board undo stack, mirroring the TUI's depth.
-const histLimit = 100
 
 // New returns an empty server; boards in board.BoardsDir() are always visible.
 func New() *Server {
-	return &Server{
-		extra: map[string]string{},
-		hist:  map[string][]histEntry{},
-		redo:  map[string][]histEntry{},
-	}
+	return &Server{extra: map[string]string{}}
 }
 
 // Register makes a board outside the boards directory reachable, returning the
@@ -241,9 +224,8 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.mu.Lock()
-	canUndo, canRedo := len(s.hist[path]) > 0, len(s.redo[path]) > 0
-	s.mu.Unlock()
+	undoN, redoN := board.UndoDepths(path)
+	canUndo, canRedo := undoN > 0, redoN > 0
 	resp := boardJSON{
 		ID:      id,
 		Session: b.Frontmatter.Session,
@@ -428,19 +410,16 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	var err error
 	switch req.Op {
 	case "undo":
-		err = s.timeTravel(path, s.hist, s.redo, func(e histEntry) (string, string) { return e.after, e.before })
+		err = board.Undo(path)
 	case "redo":
-		err = s.timeTravel(path, s.redo, s.hist, func(e histEntry) (string, string) { return e.before, e.after })
+		err = board.Redo(path)
 	default:
-		var entry histEntry
-		err = board.EditUnderLock(path, "", func(content string) (string, error) {
-			var out string
+		// Every mutation is journaled (author "web") into the board's shared
+		// undo timeline — the same one `session-notes edit undo` walks.
+		err = board.EditUnderLockJournaled(path, "", "web", func(content string) (string, error) {
 			if req.Op == "set-content" {
 				// Whole-board raw replace (the TUI's E): optimistic-locked on
 				// the content the editor loaded, so a concurrent write from
@@ -448,67 +427,31 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 				if content != req.Base {
 					return "", fmt.Errorf("%w: the board changed while you were editing — copy your text, reload, and re-apply", errConflict)
 				}
-				out = req.Text
+				out := req.Text
 				if out != "" && !strings.HasSuffix(out, "\n") {
 					out += "\n"
 				}
-			} else {
-				b := board.Parse(content)
-				b.Path = path
-				if aerr := applyEdit(b, req); aerr != nil {
-					return "", aerr
-				}
-				out = b.Render()
+				return out, nil
 			}
-			entry = histEntry{before: content, after: out}
-			return out, nil
+			b := board.Parse(content)
+			b.Path = path
+			if aerr := applyEdit(b, req); aerr != nil {
+				return "", aerr
+			}
+			return b.Render(), nil
 		})
-		if err == nil && entry.before != entry.after {
-			s.hist[path] = append(s.hist[path], entry)
-			if len(s.hist[path]) > histLimit {
-				s.hist[path] = s.hist[path][1:]
-			}
-			s.redo[path] = nil // a fresh edit invalidates the redo line
-		}
 	}
 
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, errNotFound), errors.Is(err, errConflict):
+	case errors.Is(err, errNotFound), errors.Is(err, errConflict), errors.Is(err, board.ErrUndoConflict):
 		httpErr(w, http.StatusConflict, err.Error())
-	case errors.Is(err, errBadReq):
+	case errors.Is(err, errBadReq), errors.Is(err, board.ErrUndoEmpty):
 		httpErr(w, http.StatusBadRequest, err.Error())
 	default:
 		httpErr(w, http.StatusInternalServerError, err.Error())
 	}
-}
-
-// timeTravel pops the top of `from` and writes its other side, but only when
-// the board on disk still reads exactly the state this server last left it in
-// — an intervening write from Claude or the TUI refuses with a conflict
-// rather than silently discarding that write. A successful move lands the
-// entry on `to`, so undo and redo are the same walk in opposite directions.
-// Callers hold s.mu.
-func (s *Server) timeTravel(path string, from, to map[string][]histEntry, pick func(histEntry) (expect, restore string)) error {
-	stack := from[path]
-	if len(stack) == 0 {
-		return fmt.Errorf("%w: nothing to undo/redo", errBadReq)
-	}
-	entry := stack[len(stack)-1]
-	expect, restore := pick(entry)
-	err := board.EditUnderLock(path, "", func(content string) (string, error) {
-		if content != expect {
-			return "", fmt.Errorf("%w: the board changed since the last web edit; undo/redo refused", errConflict)
-		}
-		return restore, nil
-	})
-	if err != nil {
-		return err
-	}
-	from[path] = stack[:len(stack)-1]
-	to[path] = append(to[path], entry)
-	return nil
 }
 
 func applyEdit(b *board.Board, req editReq) error {

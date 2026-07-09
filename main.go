@@ -266,8 +266,9 @@ Usage:
                                       --gen-test print replayable Go test source)
   session-notes edit <sub> …          locked board write (--board <path> or
                                       --session <id>); subs: add reply status
-                                      log title replace. --refresh-snapshot <p>
-                                      refreshes a monitor snapshot in-lock
+                                      log title replace undo redo.
+                                      --refresh-snapshot <p> refreshes a
+                                      monitor snapshot in-lock
   session-notes pins [--due] …        print a board's pinned-item block (--board
                                       <path> or --session <id>); --due prints only
                                       when due on the re-injection cadence and

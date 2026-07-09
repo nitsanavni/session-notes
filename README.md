@@ -378,9 +378,12 @@ multi-line continuation blocks. Saves are optimistically locked on the content
 you loaded: if Claude or the TUI wrote meanwhile, the save is refused and your
 text stays in the editor. `[[side-note]]` links open in the same kind of
 overlay (created on first save, seeded like the TUI); path-form links render
-inert — open those in your editor. Undo/redo covers the last 100 edits made
-through this server; an undo that would overwrite an intervening write from
-Claude or the TUI is refused instead.
+inert — open those in your editor. Undo/redo walks the board's **shared undo
+journal** (`<board>.undo.json`, last 100 journaled edits): the web UI and
+Claude's `session-notes edit` record into one timeline, so `u` in the browser
+can revert Claude's CLI edit and `session-notes edit undo` can revert yours —
+and it survives server restarts. An undo that would overwrite an intervening
+write from a non-journaling writer (the TUI, `$EDITOR`) is refused instead.
 
 Every write goes through the same advisory lock + atomic rename as the TUI and
 `session-notes edit`, so browser, terminal, and Claude can all edit the same
@@ -513,6 +516,7 @@ or `--session <id>` (resolved to `~/.claude/boards/<id>.md`). Every write is
 | `edit log <text>` | Append `- HH:MM claude: <text>` to Log (`--as <author>` overrides the author). |
 | `edit title <text>` | Set the frontmatter `title` (`""` clears it). |
 | `edit replace <old> <new>` | Exact first-occurrence string replace over the raw file — the escape hatch for anything the structural subcommands don't cover, and for reconciling conflict markers. Errors if `<old>` is not found. Quote multi-word arguments. |
+| `edit undo` / `edit redo` | Walk the board's shared undo journal (`<board>.undo.json`, last 100 journaled edits — the CLI's and the web UI's, one timeline). Refuses when the board changed through a non-journaling writer (TUI, `$EDITOR`) since the journaled edit, rather than clobbering it. |
 
 Pass `--refresh-snapshot <path>` to any of them to copy the freshly written
 content over `<path>` **inside the same lock**, right after the atomic replace.
@@ -565,6 +569,7 @@ Everything the tool creates or touches outside the repo, and why:
 | `~/.local/bin/session-notes` | the installed binary | on `PATH` for tmux popups and hooks from any directory |
 | `~/.claude/boards/<id>.md` | one board per session | central so boards survive repo moves and the picker can list all sessions |
 | `~/.claude/boards/<id>.notes/` | `[[linked]]` side notes | long-form content stays next to its board, not in your project |
+| `~/.claude/boards/<id>.md.undo.json` | shared undo journal | one undo timeline for web + CLI edits; written only inside the board's lock |
 | `~/.claude/boards/panes/*.json` | tmux pane → session mapping | written by `session-start`, read by `prefix+g`; must be findable from outside any repo |
 | `~/.claude/boards/.state/` | per-session `last-seen` markers | lets `prompt-submit` tell Claude "the board changed" without touching the board |
 | `~/.claude/projects/<munged-cwd>/*.jsonl` | Claude Code session transcripts | **read-only** — the dashboard uses each transcript's mtime as its liveness signal; never written or modified |

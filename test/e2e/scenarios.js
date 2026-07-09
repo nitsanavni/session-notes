@@ -171,6 +171,30 @@ run({
     await t.waitBoardContains('- [?] !! drop legacy endpoint');
   },
 
+  'undo journal is shared: CLI undoes a web edit, live in the page': async t => {
+    const { execFileSync } = require('child_process');
+    const BIN = process.env.SN_BIN;
+    await t.open();
+    await t.key('2'); // Plan
+    await t.key('a');
+    await t.type('web wrote this');
+    await t.key('Enter');
+    await t.waitBoardContains('- [ ] web wrote this');
+    // Claude's CLI walks the same journal…
+    execFileSync(BIN, ['edit', 'undo', '--board', t.boardPath]);
+    await t.waitBoardContains('- [ ] web wrote this', false);
+    // …and the page reflects it via SSE.
+    await t.page.waitForFunction(
+      () => !document.getElementById('board').textContent.includes('web wrote this'),
+      null, { timeout: 4000 });
+    // CLI redo brings it back; the web undo button lights up from the journal
+    // once the SSE-triggered refetch lands.
+    execFileSync(BIN, ['edit', 'redo', '--board', t.boardPath]);
+    await t.waitBoardContains('- [ ] web wrote this');
+    await t.page.waitForFunction(() => !document.getElementById('undo').disabled, null, { timeout: 4000 });
+    t.log('undo button lit from the shared journal');
+  },
+
   'map: m toggles and selection carries over both ways': async t => {
     await t.open();
     await t.key('3'); // Threads head

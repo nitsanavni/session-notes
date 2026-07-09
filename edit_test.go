@@ -140,6 +140,54 @@ func TestEditSubcommands(t *testing.T) {
 }
 
 // TestEditResolveBySession checks --session resolves via the boards dir.
+func TestEditUndoRedo(t *testing.T) {
+	p := writeSample(t)
+
+	if code := runEdit([]string{"add", "Plan", "revert me", "--board", p}); code != 0 {
+		t.Fatalf("add: exit %d", code)
+	}
+	if !strings.Contains(read(t, p), "revert me") {
+		t.Fatal("add missing")
+	}
+	if code := runEdit([]string{"undo", "--board", p}); code != 0 {
+		t.Fatal("undo failed")
+	}
+	if strings.Contains(read(t, p), "revert me") {
+		t.Fatal("undo did not remove the add")
+	}
+	if code := runEdit([]string{"redo", "--board", p}); code != 0 {
+		t.Fatal("redo failed")
+	}
+	if !strings.Contains(read(t, p), "revert me") {
+		t.Fatal("redo did not restore the add")
+	}
+
+	// The journal is shared: an entry recorded through the board package
+	// directly (as the web server records) is undoable from the CLI.
+	if err := board.EditUnderLockJournaled(p, "", "web", func(c string) (string, error) {
+		return strings.Replace(c, "revert me", "web edit", 1), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code := runEdit([]string{"undo", "--board", p}); code != 0 {
+		t.Fatal("undo of web edit failed")
+	}
+	if !strings.Contains(read(t, p), "revert me") {
+		t.Fatal("CLI undo did not revert the web edit")
+	}
+
+	// An unjournaled write (TUI-style) makes undo refuse, not clobber.
+	if err := os.WriteFile(p, []byte(read(t, p)+"- external\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runEdit([]string{"undo", "--board", p}); code == 0 {
+		t.Fatal("undo over external write must fail")
+	}
+	if !strings.Contains(read(t, p), "external") {
+		t.Fatal("external write clobbered")
+	}
+}
+
 func TestEditResolveBySession(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SESSION_NOTES_DIR", dir)

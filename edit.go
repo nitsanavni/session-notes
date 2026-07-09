@@ -59,7 +59,7 @@ func runEdit(args []string) int {
 	}
 
 	if len(pos) == 0 {
-		return editErr("usage: session-notes edit <add|reply|status|log|title|replace> [flags] args…")
+		return editErr("usage: session-notes edit <add|reply|status|log|title|replace|undo|redo> [flags] args…")
 	}
 	sub := pos[0]
 	rest := pos[1:]
@@ -145,13 +145,28 @@ func runEdit(args []string) int {
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit replace <old> <new>")
 		}
-		err := board.EditUnderLock(path, snapshot, func(content string) (string, error) {
+		err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
 			if !strings.Contains(content, rest[0]) {
 				return "", fmt.Errorf("string not found: %q", rest[0])
 			}
 			return strings.Replace(content, rest[0], rest[1], 1), nil
 		})
 		if err != nil {
+			return editErr(err.Error())
+		}
+		return 0
+	case "undo", "redo":
+		// Walk the board's shared undo journal — the same timeline the web
+		// UI's u/ctrl+r use. Refuses (instead of clobbering) when the board
+		// changed through a non-journaling writer since the journaled edit.
+		if len(rest) != 0 {
+			return editErr("usage: session-notes edit " + sub)
+		}
+		fn := board.Undo
+		if sub == "redo" {
+			fn = board.Redo
+		}
+		if err := fn(path); err != nil {
 			return editErr(err.Error())
 		}
 		return 0
@@ -162,9 +177,10 @@ func runEdit(args []string) int {
 
 // editStructural runs a parse → mutate → render write of the board at path under
 // the lock, refreshing snapshot when set. mutate operates on the freshly-parsed
-// board; returning an error aborts the write.
+// board; returning an error aborts the write. Every write is journaled into the
+// board's shared undo timeline (author "claude"), so `edit undo` can revert it.
 func editStructural(path, snapshot string, mutate func(*board.Board) error) int {
-	err := board.EditUnderLock(path, snapshot, func(content string) (string, error) {
+	err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
 		b := board.Parse(content)
 		b.Path = path
 		if err := mutate(b); err != nil {
