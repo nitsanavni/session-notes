@@ -391,7 +391,20 @@ your typed text in the section's add box rather than losing it.
 
 The dashboard speaks keyboard too: `j`/`k` select a card, `enter` opens it.
 
-Not (yet) in the web UI: the mindmap view and opening path-form `[[links]]`.
+`m` toggles the **mindmap view**, like the TUI's: the board as a center-outward
+map (title at center, sections as the first ring, items as subtrees, sides
+balanced mm-style), with the selection carried over both ways between outline
+and map. `hjkl` move tree-structurally (`j`/`k` walk siblings on your side of
+the center, `h`/`l` cross the parent/child axis toward and away from the
+center), `enter` runs the unified fold cycle (default → replies-shown →
+collapsed `[+N]` → default, states that render identically skipped), `f`
+focuses into the selected subtree with a breadcrumb trail and `b` steps back
+out, `e`/`a`/`space`/`!`/`d`/`D`/`o` edit the focused node through the same
+ops as everything else, and `M` toggles the Log ring (hidden by default). Node
+text truncates at 40 columns with the full text in the footer; the `[+N]`
+suffix is truncation-exempt and counts only what that node hides.
+
+Not (yet) in the web UI: opening path-form `[[links]]`.
 The web UI has a browser e2e suite — `./test/e2e/run.sh` (see CLAUDE.md).
 
 The server binds `127.0.0.1` and has **no auth** — anyone who can reach it can

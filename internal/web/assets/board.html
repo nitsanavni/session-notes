@@ -115,7 +115,43 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 footer {
   position: fixed; bottom: 0; left: 0; right: 0; text-align: center;
   padding: .25rem; color: var(--dim); font-size: .78em; background: var(--bg);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ---- map view ---- */
+body.mapmode #board, body.mapmode footer#listfoot { display: none; }
+#mapwrap { display: none; }
+body.mapmode #mapwrap { display: block; }
+#mapcrumb { color: var(--dim); font-size: .8em; margin: 0 0 .3rem; min-height: 1.2em; }
+#mapview {
+  position: relative; overflow: auto; height: calc(100vh - 9rem);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+#mapcanvas { position: relative; }
+#edges { position: absolute; top: 0; left: 0; pointer-events: none; }
+#edges path { stroke: var(--border); stroke-width: 1.2; fill: none; }
+.mapnode {
+  position: absolute; padding: 1px 7px; border: 1px solid transparent;
+  border-radius: 6px; white-space: pre; font-size: .9em; cursor: pointer;
+  max-width: none; line-height: 20px;
+}
+.mapnode.focus { border-color: var(--accent); background: var(--cursor); }
+.mapnode.center { font-weight: 700; }
+.mapnode.section { color: var(--accent); font-weight: 600; }
+.mapnode.reply { color: var(--dim); }
+.mapnode.done { color: var(--dim); text-decoration: line-through; }
+.mapnode.urgent { color: var(--urgent); }
+.mapnode .suffix { color: var(--pin); }
+#mapprompt {
+  position: fixed; top: 20%; left: 50%; transform: translateX(-50%);
+  background: var(--bg); border: 1px solid var(--accent); border-radius: 8px;
+  padding: .6rem .8rem; z-index: 25; width: min(480px, 90vw); display: none;
+}
+#mapprompt.open { display: block; }
+#mapprompt .lbl { color: var(--dim); font-size: .8em; margin-bottom: .3rem; }
+#mapprompt input {
+  width: 100%; font: inherit; color: var(--fg); background: var(--input);
+  border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
 }
 </style>
 </head>
@@ -134,7 +170,13 @@ footer {
   </span>
 </header>
 <main id="board"></main>
-<footer>j/k move · tab section · a add · R reply · F fork · space status · ! urgent · e edit · d archive · E raw · o link · u undo · ? help</footer>
+<div id="mapwrap">
+  <div id="mapcrumb"></div>
+  <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
+</div>
+<div id="mapprompt"><div class="lbl"></div><input spellcheck="false"></div>
+<footer id="listfoot">j/k move · tab section · a add · R reply · F fork · space status · ! urgent · e edit · d archive · E raw · o link · m map · u undo · ? help</footer>
+<footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 
 <div class="modal" id="notemodal"><div class="panel">
@@ -168,6 +210,8 @@ footer {
     <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
     <tr><td>u / ctrl+r</td><td>undo / redo (this browser's edits)</td></tr>
     <tr><td>y</td><td>copy board file path</td></tr>
+    <tr><td>m</td><td>mindmap view (in the map: hjkl move, enter fold,
+      f focus subtree, b step out, M toggle Log, m/q back)</td></tr>
     <tr><td>?</td><td>this help</td></tr>
   </table>
 </div></div>
@@ -441,6 +485,11 @@ function sectionHead(title) {
 function render(b) {
   if (!b) return;
   if (inputsOpen > 0) { pendingRender = true; return; }
+  if (mapState.in) { renderMap(b); return; }
+  renderOutline(b);
+}
+
+function renderOutline(b) {
   document.title = (b.title || shortId(b.session || b.id)) + ' — session-notes';
   document.getElementById('title').textContent = b.title || shortId(b.session || b.id);
   document.getElementById('sid').textContent = shortId(b.session || b.id);
@@ -581,6 +630,400 @@ document.getElementById('notetext').addEventListener('keydown', e => {
 });
 document.getElementById('helpclose').addEventListener('click', () => toggleModal('helpmodal', false));
 
+// ---- map view (port of the TUI's mm-style mindmap) ----
+// The board as a center-outward map: title at center, sections as the first
+// ring, items as subtrees. Same data, same op layer — a second projection.
+const mapState = { in: false, folds: {}, root: 'center', focus: 'center', showLog: false };
+let mapNodes = []; // visible nodes of the last renderMap, in placement order
+
+// mapBuild converts the board JSON into the full node tree. Keys match the
+// outline's stop keys exactly, so selection carries over both ways.
+function mapBuild(b) {
+  const center = { key: 'center', kind: 'center', text: b.title || shortId(b.session || b.id), children: [], parent: null };
+  for (const sec of b.sections || []) {
+    if (sec.title === 'Log' && !mapState.showLog) continue;
+    const sn = { key: 'sec:' + sec.title, kind: 'section', title: sec.title, text: sec.title, children: [], parent: center };
+    center.children.push(sn);
+    const add = (items, parent) => {
+      for (const it of items || []) {
+        if (it.continuation) continue;
+        let label = it.text;
+        if (it.urgent) label = '!! ' + label;
+        if (it.status !== 'none') label = MARKERS[it.status] + ' ' + label;
+        const n = { key: `it:${sec.title}:${it.raw}`, kind: 'item', it, section: sec.title,
+          text: label, isReply: it.status === 'none', children: [], parent };
+        parent.children.push(n);
+        add(it.children, n);
+      }
+    };
+    add(sec.items, sn);
+  }
+  return center;
+}
+
+// Fold model (the TUI's unified enter-cycle): default hides conversational
+// replies behind a [+N] suffix, 'all' shows everything, 'closed' collapses
+// the whole subtree to [+N].
+function visKids(n) {
+  const f = mapState.folds[n.key] || 'default';
+  if (f === 'closed') return [];
+  if (f === 'default' && n.kind === 'item') return n.children.filter(c => !c.isReply);
+  return n.children;
+}
+const descCount = n => n.children.reduce((s, c) => s + 1 + descCount(c), 0);
+const visDescCount = n => visKids(n).reduce((s, c) => s + 1 + visDescCount(c), 0);
+
+function cycleFold(n) {
+  if (!n.children.length) return;
+  const f = mapState.folds[n.key] || 'default';
+  // States that render identically are skipped (no replies → default==all).
+  const defaultEqualsAll = n.kind !== 'item' || n.children.every(c => !c.isReply);
+  let next;
+  if (f === 'default') next = defaultEqualsAll ? 'closed' : 'all';
+  else if (f === 'all') next = 'closed';
+  else next = 'default';
+  mapState.folds[n.key] = next;
+  renderMap(cur);
+}
+
+// reveal un-folds ancestors so `node` is visible (used when carrying the
+// outline cursor into the map).
+function reveal(node) {
+  for (let p = node.parent, c = node; p; c = p, p = p.parent) {
+    const f = mapState.folds[p.key] || 'default';
+    if (f === 'closed') mapState.folds[p.key] = c.isReply ? 'all' : 'default';
+    if (f === 'default' && c.isReply && p.kind === 'item') mapState.folds[p.key] = 'all';
+  }
+}
+
+const findNode = (root, key) => {
+  if (root.key === key) return root;
+  for (const c of root.children) { const f = findNode(c, key); if (f) return f; }
+  return null;
+};
+
+// splitSides: mm's balancing, ported. Heaviest-first onto the lighter side;
+// the first (or lone) child claims the right; document order kept per side.
+const weight = n => { const k = visKids(n); return k.length ? Math.max(1, k.reduce((s, c) => s + weight(c), 0)) : 1; };
+function splitSides(children) {
+  const idx = new Map(children.map((c, i) => [c, i]));
+  const byWeight = [...children].sort((a, b) => weight(b) - weight(a) || idx.get(a) - idx.get(b));
+  const right = [], left = [];
+  let hR = 0, hL = 0;
+  for (const c of byWeight) {
+    if (!right.length || hR < hL) { right.push(c); hR += weight(c); }
+    else { left.push(c); hL += weight(c); }
+  }
+  const doc = a => a.sort((x, y) => idx.get(x) - idx.get(y));
+  return [doc(right), doc(left)];
+}
+
+// Layout: measure (monospace estimate), stack subtrees vertically, columns
+// per depth per side. Node text truncates at 40 columns; the [+N] suffix is
+// truncation-exempt, like the TUI.
+const NODE_H = 24, GAP = 8, COL_GAP = 40, TRUNC = 40;
+let CHAR_W = 8; // measured at first map render
+function measureCharW() {
+  const r = el('span', { style: 'position:absolute;visibility:hidden;font-size:.9em;white-space:pre' }, 'M'.repeat(40));
+  document.body.append(r);
+  CHAR_W = r.offsetWidth / 40;
+  r.remove();
+}
+
+function mapLabel(n) {
+  let text = n.text;
+  if ([...text].length > TRUNC) text = [...text].slice(0, TRUNC - 1).join('') + '…';
+  // [+N] counts only what THIS node hides (each shown child's subtree counts
+  // as fully present — deeper folds carry their own suffix, like the TUI).
+  const shown = visKids(n).reduce((s, c) => s + 1 + descCount(c), 0);
+  const hidden = descCount(n) - shown;
+  return { text, suffix: hidden > 0 ? ` [+${hidden}]` : '' };
+}
+
+function renderMap(b) {
+  if (!mapNodes.length) measureCharW();
+  const full = mapBuild(b);
+  let root = findNode(full, mapState.root) || full;
+  mapState.root = root.key;
+
+  // Restore focus; if its raw line changed under it, follow by section+text.
+  let focus = findNode(root, mapState.focus);
+  if (!focus && cursorFollow) {
+    const scan = n => {
+      if (n.kind === 'item' && n.section === cursorFollow.section &&
+          (cursorFollow.text == null || n.it.text === cursorFollow.text)) return n;
+      for (const c of n.children) { const f = scan(c); if (f) return f; }
+      return null;
+    };
+    focus = cursorFollow.text != null ? scan(root) : findNode(root, 'sec:' + cursorFollow.section);
+  }
+  cursorFollow = null;
+  if (!focus) focus = root;
+  mapState.focus = focus.key;
+  if (focus !== root) reveal(focus);
+
+  // A focused (re-rooted) collapsed node would hide the children being shown.
+  if ((mapState.folds[root.key] || 'default') === 'closed') mapState.folds[root.key] = 'default';
+
+  // measure + place
+  const label = new Map(), width = new Map(), h = new Map();
+  const measure = n => {
+    const l = mapLabel(n);
+    label.set(n, l);
+    width.set(n, ([...l.text].length + [...l.suffix].length) * CHAR_W + 16);
+    const kids = visKids(n);
+    kids.forEach(measure);
+    h.set(n, Math.max(NODE_H, kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1)));
+  };
+  measure(root);
+
+  const [rightKids, leftKids] = splitSides(visKids(root));
+  const pos = new Map(); // n -> {x, y, side, depth}
+  const colW = { 1: {}, [-1]: {} };
+  const record = (n, depth, side) => {
+    colW[side][depth] = Math.max(colW[side][depth] || 0, width.get(n));
+    visKids(n).forEach(c => record(c, depth + 1, side));
+  };
+  rightKids.forEach(c => record(c, 1, 1));
+  leftKids.forEach(c => record(c, 1, -1));
+
+  const place = (n, yTop, depth, side) => {
+    const kids = visKids(n);
+    pos.set(n, { cy: yTop + h.get(n) / 2, depth, side });
+    const inner = kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1);
+    let y = yTop + (h.get(n) - inner) / 2;
+    for (const c of kids) { place(c, y, depth + 1, side); y += h.get(c) + GAP; }
+  };
+  const stack = (kids, side) => {
+    const total = kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1);
+    let y = -total / 2;
+    for (const c of kids) { place(c, y, 1, side); y += h.get(c) + GAP; }
+  };
+  stack(rightKids, 1);
+  stack(leftKids, -1);
+  pos.set(root, { cy: 0, depth: 0, side: 0 });
+
+  // x per column, from the root outward
+  const colX = { 1: {}, [-1]: {} };
+  const rootW = width.get(root);
+  for (const side of [1, -1]) {
+    let edge = rootW / 2 + COL_GAP;
+    for (let d = 1; colW[side][d]; d++) { colX[side][d] = edge; edge += colW[side][d] + COL_GAP; }
+  }
+  const xOf = n => {
+    const p = pos.get(n);
+    if (p.side === 0) return -rootW / 2;
+    if (p.side === 1) return colX[1][p.depth];
+    return -colX[-1][p.depth] - width.get(n);
+  };
+
+  // extents → canvas size, then draw
+  let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+  const walk = (n, fn) => { fn(n); visKids(n).forEach(c => walk(c, fn)); };
+  walk(root, n => {
+    const x = xOf(n), p = pos.get(n);
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x + width.get(n));
+    minY = Math.min(minY, p.cy - NODE_H / 2); maxY = Math.max(maxY, p.cy + NODE_H / 2);
+  });
+  const PAD = 24, ox = PAD - minX, oy = PAD - minY;
+  const canvas = document.getElementById('mapcanvas');
+  canvas.style.width = (maxX - minX + 2 * PAD) + 'px';
+  canvas.style.height = (maxY - minY + 2 * PAD) + 'px';
+  for (const eln of [...canvas.querySelectorAll('.mapnode')]) eln.remove();
+  const svg = document.getElementById('edges');
+  svg.setAttribute('width', maxX - minX + 2 * PAD);
+  svg.setAttribute('height', maxY - minY + 2 * PAD);
+  svg.textContent = '';
+
+  mapNodes = [];
+  walk(root, n => {
+    const p = pos.get(n), x = xOf(n) + ox, cy = p.cy + oy;
+    const l = label.get(n);
+    const cls = ['mapnode', n.kind];
+    if (n.kind === 'item') {
+      if (n.isReply) cls.push('reply');
+      if (n.it.status === 'done') cls.push('done');
+      if (n.it.urgent) cls.push('urgent');
+    }
+    if (n.key === mapState.focus) cls.push('focus');
+    const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - NODE_H / 2}px` }, l.text);
+    if (l.suffix) d.append(el('span', { class: 'suffix' }, l.suffix));
+    d.addEventListener('click', () => { mapState.focus = n.key; renderMap(cur); });
+    d.addEventListener('dblclick', () => mapEdit(n));
+    canvas.append(d);
+    n.el = d;
+    mapNodes.push(n);
+    // edge to parent
+    if (n.parent && pos.has(n.parent)) {
+      const pp = pos.get(n.parent);
+      const px = p.side >= 0 ? xOf(n.parent) + width.get(n.parent) + ox : xOf(n.parent) + ox;
+      const py = pp.cy + oy;
+      const nx = p.side >= 0 ? x : x + width.get(n);
+      const mx = (px + nx) / 2;
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', `M ${px} ${py} C ${mx} ${py}, ${mx} ${cy}, ${nx} ${cy}`);
+      svg.append(path);
+    }
+  });
+
+  // breadcrumb + footer
+  const crumb = [];
+  for (let n = root; n; n = n.parent) crumb.unshift(n.kind === 'center' ? (b.title || 'board') : n.text);
+  document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (b steps out)';
+  document.getElementById('mapfoot').textContent =
+    `${focus.text}  ·  hjkl move · enter fold · f focus · b out · e edit · a add · space status · M log · m/q back`;
+  if (focus.el) focus.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function enterMap() {
+  mapState.in = true;
+  document.body.classList.add('mapmode');
+  document.getElementById('mapfoot').hidden = false;
+  mapState.focus = cursorKey || 'center';
+  const full = mapBuild(cur);
+  const target = findNode(full, mapState.focus);
+  if (!target) mapState.focus = 'center';
+  else reveal(target);
+  renderMap(cur);
+}
+
+function exitMap() {
+  mapState.in = false;
+  document.body.classList.remove('mapmode');
+  document.getElementById('mapfoot').hidden = true;
+  // Selection carries back: the map's focus becomes the outline cursor.
+  if (mapState.focus !== 'center') cursorKey = mapState.focus;
+  renderOutline(cur);
+}
+
+// mapPrompt: the map's single-line input overlay (edit/add/rename/title).
+function mapPrompt(lbl, initial, submit) {
+  const box = document.getElementById('mapprompt');
+  const inp = box.querySelector('input');
+  box.querySelector('.lbl').textContent = lbl;
+  inp.value = initial;
+  box.classList.add('open');
+  inputsOpen++;
+  const close = () => {
+    inputsOpen--;
+    box.classList.remove('open');
+    inp.onkeydown = null;
+    if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
+  };
+  inp.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && inp.value.trim()) { const v = inp.value.trim(); close(); submit(v); }
+    if (e.key === 'Escape') close();
+  };
+  inp.focus();
+  inp.setSelectionRange(initial.length, initial.length);
+}
+
+function mapEdit(n) {
+  if (n.kind === 'item') {
+    mapPrompt('edit item', n.it.text, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'edit', section: n.section, raw: n.it.raw, text: v }, v); });
+  } else if (n.kind === 'section') {
+    mapPrompt('rename section', n.title, v => { cursorFollow = { section: v }; mapState.focus = 'sec:' + v; post({ op: 'rename-section', section: n.title, text: v }); });
+  } else {
+    mapPrompt('board title', cur.title || '', v => post({ op: 'title', text: v }));
+  }
+}
+
+function mapAdd(n) {
+  if (n.kind === 'item') {
+    mapPrompt('add child (fork)', 'user: ', v => post({ op: 'fork', section: n.section, raw: n.it.raw, text: v }, v));
+  } else if (n.kind === 'section') {
+    mapPrompt('add to ' + n.title, '', v => post({ op: 'add', section: n.title, text: v }, v));
+  } else {
+    mapPrompt('add section', '', v => { mapState.focus = 'sec:' + v; post({ op: 'add-section', text: v }); });
+  }
+}
+
+const mapFocused = () => mapNodes.find(n => n.key === mapState.focus) || null;
+
+// Tree-structural navigation (mm-style): j/k walk siblings on the node's own
+// side of the center; h/l cross the parent/child axis — toward the center is
+// the parent, away enters the branch at its first visible child.
+function mapSiblings(n) {
+  if (!n.parent) return [n];
+  let sibs = visKids(n.parent);
+  if (n.parent.kind === 'center') sibs = sibs.filter(s => sideSign(s) === sideSign(n));
+  return sibs;
+}
+const sideSign = n => {
+  // Recover a node's side from its rendered position vs its parent.
+  if (!n.el || !n.parent || !n.parent.el) return 1;
+  return n.el.offsetLeft >= n.parent.el.offsetLeft ? 1 : -1;
+};
+
+function handleMapKey(e) {
+  const n = mapFocused();
+  const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
+    'Enter', 'f', 'b', 'e', 'a', ' ', '!', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape']);
+  if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
+  const refocus = key => { mapState.focus = key; renderMap(cur); };
+  switch (e.key) {
+    case 'j': case 'ArrowDown': case 'k': case 'ArrowUp': {
+      if (!n || n.kind === 'center') break;
+      const sibs = mapSiblings(n);
+      const i = sibs.indexOf(n);
+      const next = sibs[Math.max(0, Math.min(sibs.length - 1, i + (e.key === 'j' || e.key === 'ArrowDown' ? 1 : -1)))];
+      if (next) refocus(next.key);
+      break;
+    }
+    case 'h': case 'ArrowLeft': case 'l': case 'ArrowRight': {
+      if (!n) break;
+      const toward = e.key === 'h' || e.key === 'ArrowLeft' ? -1 : 1; // screen direction
+      if (n.kind === 'center') {
+        const kids = visKids(n).filter(c => sideSign(c) === toward);
+        if (kids.length) refocus(kids[0].key);
+        break;
+      }
+      const side = sideSign(n);
+      if (toward === side) { const kids = visKids(n); if (kids.length) refocus(kids[0].key); }
+      else if (n.parent) refocus(n.parent.key);
+      break;
+    }
+    case 'Enter': if (n) cycleFold(n); break;
+    case 'f':
+      if (n && n.kind !== 'center' && visKids(n).length) {
+        mapState.root = n.key;
+        mapState.focus = visKids(n)[0].key;
+        renderMap(cur);
+      }
+      break;
+    case 'b': case 'Escape': {
+      if (mapState.root === 'center') { if (e.key === 'Escape') exitMap(); break; }
+      const full = mapBuild(cur);
+      const rootNode = findNode(full, mapState.root);
+      const out = rootNode && rootNode.parent ? rootNode.parent.key : 'center';
+      mapState.focus = mapState.root;
+      mapState.root = out;
+      renderMap(cur);
+      break;
+    }
+    case 'e': if (n) mapEdit(n); break;
+    case 'a': if (n) mapAdd(n); break;
+    case ' ': if (n && n.kind === 'item' && n.it.status !== 'none') act.cycle(n.section, n.it); break;
+    case '!': if (n && n.kind === 'item') act.urgent(n.section, n.it); break;
+    case 'd':
+      if (n && n.kind === 'item') act.archive(n.section, n.it);
+      else if (n && n.kind === 'section') { cursorFollow = { section: n.title }; post({ op: 'archive-section', section: n.title }); }
+      break;
+    case 'D':
+      if (n && n.kind === 'item') act.del(n.section, n.it);
+      else if (n && n.kind === 'section' && confirm(`Hard-delete section "${n.title}" and everything in it?`)) post({ op: 'delete-section', section: n.title });
+      break;
+    case 'o': if (n && n.kind === 'item') act.open(n.section, n.it); break;
+    case 'M': mapState.showLog = !mapState.showLog; renderMap(cur); break;
+    case 'm': case 'q': exitMap(); break;
+    case 'u': post({ op: 'undo' }); break;
+    case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
+    case 'y': copyPath(); break;
+    case '?': toggleModal('helpmodal', true); break;
+  }
+}
+
 // ---- keyboard layer ----
 document.addEventListener('keydown', e => {
   const a = document.activeElement;
@@ -589,6 +1032,7 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape' || e.key === 'q') document.querySelectorAll('.modal.open .bar button:last-child, #helpclose').forEach(b => b.click());
     return;
   }
+  if (mapState.in) { handleMapKey(e); return; }
   const s = cursorStop();
   const onItem = s && s.type === 'item';
   const onSec = s && s.type === 'section';
@@ -608,7 +1052,7 @@ document.addEventListener('keydown', e => {
   // preventDefault for every handled key: keys that open an input (a, e, R…)
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'Tab', 'g', 'G', 'a', 'A',
-    ' ', 'b', '!', 'e', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'u', 'y', '?']);
+    ' ', 'b', '!', 'e', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'm', 'u', 'y', '?']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
@@ -635,6 +1079,7 @@ document.addEventListener('keydown', e => {
       break;
     case 'L': focusAdd('Log'); break;
     case 'E': openRaw(); break;
+    case 'm': enterMap(); break;
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
     case 'y': copyPath(); break;
@@ -660,6 +1105,7 @@ window.__sn = {
   get cursorKey() { return cursorKey; },
   get inputsOpen() { return inputsOpen; },
   get board() { return cur; },
+  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key) }; },
 };
 </script>
 </body>

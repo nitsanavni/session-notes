@@ -130,6 +130,13 @@ class Ctx {
     stops: window.__sn.stops,
   })); }
 
+  // sn2 includes the map state as well.
+  async sn2() { return this.page.evaluate(() => ({
+    cursorKey: window.__sn.cursorKey,
+    inputsOpen: window.__sn.inputsOpen,
+    map: window.__sn.map,
+  })); }
+
   async cursorKey() { return (await this.sn()).cursorKey; }
 
   // waitBoard polls until the board FILE contains (or stops containing) a string.
