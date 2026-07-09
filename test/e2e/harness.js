@@ -116,6 +116,15 @@ class Ctx {
     await this.page.keyboard.type(text);
   }
 
+  // selectAll issues the platform's "select all" chord for the focused input.
+  // On macOS Chrome, Control+a is the emacs line-start binding (not select-all),
+  // so it would leave the pre-filled text in place — use Meta+a there.
+  async selectAll() {
+    const chord = process.platform === 'darwin' ? 'Meta+a' : 'Control+a';
+    this.log(`selectAll (${chord})`);
+    await this.page.keyboard.press(chord);
+  }
+
   // settled waits until the page has no deferred render pending and the last
   // fetch cycle finished — cheap: poll the __sn handle.
   async settled() {
@@ -138,6 +147,9 @@ class Ctx {
   })); }
 
   async cursorKey() { return (await this.sn()).cursorKey; }
+
+  // searchState exposes the incremental-search debug handle.
+  async searchState() { return this.page.evaluate(() => window.__sn.search); }
 
   // waitBoard polls until the board FILE contains (or stops containing) a string.
   async waitBoardContains(str, should = true) {

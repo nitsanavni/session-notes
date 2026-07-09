@@ -136,7 +136,7 @@ run({
     await t.key('5'); // Ideas head
     await t.key('e');
     // rename input pre-filled with "Ideas": select-all replace
-    await t.page.keyboard.press('Control+a');
+    await t.selectAll();
     await t.type('Sparks');
     await t.key('Enter');
     await t.waitBoardContains('## Sparks');
@@ -483,6 +483,70 @@ run({
     // against the bottom edge (the pre-fix behavior put it at the bottom).
     const rel = (geom.nodeMid - geom.viewTop) / geom.viewH;
     t.assert(rel > 0.25 && rel < 0.75, `center node vertically centered (rel=${rel.toFixed(2)})`);
+  },
+
+  'search (outline): incremental jump, n/N wrap, esc restores': async t => {
+    await t.open();
+    await t.key('j'); // sec:Waiting on User
+    await t.key('j'); // its item
+    const saved = await t.cursorKey();
+    // `/` opens the prompt; typing jumps the cursor live to the first match.
+    await t.key('/');
+    let s = await t.searchState();
+    t.assert(s.promptOpen, 'search prompt open');
+    await t.type('legacy');
+    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint'); // first match, document order
+    // Esc cancels and restores the pre-search cursor.
+    await t.key('Escape');
+    await t.assertCursor(saved);
+    s = await t.searchState();
+    t.assert(!s.active && !s.promptOpen, `search inactive after esc (got ${JSON.stringify(s)})`);
+    // Re-run, confirm with Enter, then step with n/N (wrapping).
+    await t.key('/');
+    await t.type('legacy');
+    await t.key('Enter');
+    s = await t.searchState();
+    t.assert(s.active && s.matches === 2 && s.idx === 0, `2 matches confirmed (got ${JSON.stringify(s)})`);
+    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint');
+    await t.key('n'); // forward to the second match
+    await t.assertCursor('it:Questions:- [ ] !! drop the legacy endpoint? @user');
+    await t.key('n'); // wraps back to the first
+    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint');
+    await t.key('N'); // previous wraps to the last
+    await t.assertCursor('it:Questions:- [ ] !! drop the legacy endpoint? @user');
+  },
+
+  'search (map): jump reveals a folded reply': async t => {
+    await t.open();
+    await t.key('m'); // enter map
+    await t.settled();
+    const replyKey = 'it:Threads:  - claude: extracted, tests green';
+    let map = (await t.sn2()).map;
+    t.assert(!map.nodes.includes(replyKey), 'reply hidden behind the default fold');
+    await t.key('/');
+    await t.type('extracted'); // only the reply matches
+    map = (await t.sn2()).map;
+    t.assert(map.focus === replyKey, `map focus jumped to the match (got ${map.focus})`);
+    t.assert(map.nodes.includes(replyKey), 'match revealed through the fold');
+    await t.key('Enter');
+    const s = await t.searchState();
+    t.assert(s.active && s.matches === 1, `confirmed one match (got ${JSON.stringify(s)})`);
+  },
+
+  'search box typing does not trigger hotkeys': async t => {
+    await t.open();
+    const before = t.file();
+    await t.key('/');
+    // Letters that are live single-key bindings outside the box: a (add), d
+    // (archive), m (map), ? (help). Inside the search input they must be text.
+    await t.type('add design ??');
+    const s = await t.searchState();
+    t.assert(s.promptOpen, 'still in the search prompt');
+    t.assert(!(await t.sn2()).map.in, 'did not enter map from typed m');
+    t.assert(!(await t.page.$('.modal.open')), 'no modal opened from typed ?');
+    t.assert(t.file() === before, 'board unchanged by typed hotkey letters');
+    const val = await t.page.$eval('#searchprompt input', i => i.value);
+    t.assert(val === 'add design ??', `query captured verbatim (got ${JSON.stringify(val)})`);
   },
 
   'dashboard lists the board and enter opens it': async t => {

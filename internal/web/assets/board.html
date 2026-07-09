@@ -175,6 +175,19 @@ body.mapmode #mapwrap { display: block; }
   width: 100%; font: inherit; color: var(--fg); background: var(--input);
   border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
 }
+/* Incremental search prompt (`/`), shared by both views. */
+#searchprompt {
+  position: fixed; top: 12%; left: 50%; transform: translateX(-50%);
+  background: var(--bg); border: 1px solid var(--accent); border-radius: 8px;
+  padding: .5rem .7rem; z-index: 25; width: min(480px, 90vw);
+  display: none; align-items: baseline; gap: .4rem;
+}
+#searchprompt.open { display: flex; }
+#searchprompt .lbl { color: var(--accent); font-weight: 700; flex: none; }
+#searchprompt input {
+  flex: 1; font: inherit; color: var(--fg); background: var(--input);
+  border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
+}
 </style>
 </head>
 <body>
@@ -198,7 +211,8 @@ body.mapmode #mapwrap { display: block; }
   <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
 </div>
 <div id="mapprompt"><div class="lbl"></div><input spellcheck="false"></div>
-<footer id="listfoot">j/k move · tab section · enter fold · a add · R reply · F fork · space status · ! urgent · w wrap · e edit · d archive · E raw · o link · m map · u undo · ? help</footer>
+<div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"></div>
+<footer id="listfoot">j/k move · tab section · enter fold · a add · R reply · F fork · space status · ! urgent · w wrap · e edit · d archive · E raw · o link · m map · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 
@@ -236,6 +250,7 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>e</td><td>edit item · rename section (on a heading)</td></tr>
     <tr><td>E</td><td>edit the whole board markdown</td></tr>
     <tr><td>o</td><td>open the item's first [[link]]</td></tr>
+    <tr><td>/ · n / N</td><td>incremental search · next / previous match (wrapping)</td></tr>
     <tr><td>L</td><td>log entry</td></tr>
     <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
     <tr><td>u / ctrl+r</td><td>undo / redo (shared journal — CLI edits too)</td></tr>
@@ -1000,7 +1015,7 @@ function renderMap(b) {
   for (let n = root; n; n = n.parent) crumb.unshift(n.kind === 'center' ? (b.title || 'board') : n.text);
   document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (b steps out)';
   document.getElementById('mapfoot').textContent =
-    `${focus.text}  ·  hjkl move · enter fold · w expand · f focus · b out · e edit · a add · space status · M log · m/q back`;
+    `${focus.text}  ·  hjkl move · enter fold · w expand · f focus · b out · e edit · a add · space status · / search · M log · m/q back`;
   // On first entry / after f/b, center the focused node in the viewport (the
   // map opens centered, not with the node pinned to an edge); otherwise scroll
   // the minimum needed to keep it visible.
@@ -1101,7 +1116,8 @@ const sideSign = n => {
 function handleMapKey(e) {
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
-    'Enter', 'f', 'b', 'e', 'a', 'w', ' ', '!', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape']);
+    'Enter', 'f', 'b', 'e', 'a', 'w', ' ', '!', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
+    '/', 'n', 'N']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   const refocus = key => { mapState.focus = key; renderMap(cur); };
   switch (e.key) {
@@ -1170,8 +1186,127 @@ function handleMapKey(e) {
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
     case 'y': copyPath(); break;
+    case '/': startSearch(); break;
+    case 'n': searchNext(1); break;
+    case 'N': searchNext(-1); break;
     case '?': toggleModal('helpmodal', true); break;
   }
+}
+
+// ---- incremental search (`/`), shared by both views ----
+// A port of the TUI's search.go: `/` opens a live prompt; every keystroke jumps
+// the outline cursor / map focus to the first case-insensitive substring match
+// over item text (all sections, replies included, document order). Enter
+// confirms (leaving n/N to step, wrapping), Esc restores the pre-search
+// cursor/focus. Matches behind a collapsed section (outline) or folded subtree
+// (map) are revealed on the way in, reusing the existing reveal machinery.
+let searchActive = false, searchQuery = '', searchIdx = 0;
+let searchSaveCursor = null, searchSaveMapFocus = null, searchSaveMapRoot = null;
+
+// searchMatches: every non-continuation item whose text contains q (case-
+// insensitive), in document order across all sections, replies included.
+function searchMatches(q) {
+  q = (q || '').trim().toLowerCase();
+  if (!q || !cur) return [];
+  const out = [];
+  const walk = (items, section) => {
+    for (const it of items || []) {
+      if (!it.continuation && (it.text || '').toLowerCase().includes(q)) out.push({ section, it });
+      walk(it.children, section);
+    }
+  };
+  for (const sec of cur.sections || []) walk(sec.items, sec.title);
+  return out;
+}
+
+// jumpToMatch lands the active view on a match, revealing it first.
+function jumpToMatch(m) { if (mapState.in) jumpMatchMap(m); else jumpMatchOutline(m); }
+
+function jumpMatchOutline(m) {
+  if (sectionCollapsed(m.section)) setCollapsed(m.section, false);
+  cursorKey = `it:${m.section}:${m.it.raw}`;
+  renderOutline(cur); // rebuild so a revealed section's stops exist, then restore
+}
+
+function jumpMatchMap(m) {
+  const key = `it:${m.section}:${m.it.raw}`;
+  let full = mapBuild(cur);
+  let node = findNode(full, key);
+  // A Log match is invisible unless the Log ring is shown — reveal it.
+  if (!node && m.section === 'Log') { mapState.showLog = true; full = mapBuild(cur); node = findNode(full, key); }
+  if (!node) return;
+  // If the match lies outside the currently focused subtree, drop back to center.
+  if (!findNode(findNode(full, mapState.root) || full, key)) mapState.root = 'center';
+  reveal(node); // un-fold ancestors (mutates mapState.folds; renderMap reads them)
+  mapState.focus = key;
+  renderMap(cur);
+}
+
+function setSearchStatus(total) { toast(`${searchIdx + 1}/${total} matches`, true); }
+
+function startSearch() {
+  searchSaveCursor = cursorKey;
+  searchSaveMapFocus = mapState.focus;
+  searchSaveMapRoot = mapState.root;
+  searchIdx = 0;
+  const box = document.getElementById('searchprompt');
+  const inp = box.querySelector('input');
+  inp.value = '';
+  box.classList.add('open');
+  inputsOpen++; // defer live SSE re-renders while typing, like the add/map inputs
+  inp.oninput = () => {
+    const matches = searchMatches(inp.value);
+    if (matches.length) { searchIdx = 0; jumpToMatch(matches[0]); setSearchStatus(matches.length); }
+    else if (inp.value.trim()) toast('no matches', true);
+  };
+  inp.onkeydown = e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { const v = inp.value; closeSearchPrompt(); confirmSearch(v); }
+    else if (e.key === 'Escape') { closeSearchPrompt(); cancelSearch(); }
+  };
+  inp.focus();
+}
+
+function closeSearchPrompt() {
+  const box = document.getElementById('searchprompt');
+  const inp = box.querySelector('input');
+  box.classList.remove('open');
+  inp.oninput = null; inp.onkeydown = null;
+  inputsOpen--;
+  if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
+}
+
+function confirmSearch(q) {
+  searchQuery = (q || '').trim();
+  const matches = searchMatches(searchQuery);
+  if (!searchQuery || !matches.length) {
+    searchActive = false;
+    if (searchQuery) toast('no matches', true);
+    return;
+  }
+  searchActive = true;
+  setSearchStatus(matches.length); // current match is matches[searchIdx]
+}
+
+function cancelSearch() {
+  searchActive = false; searchQuery = '';
+  if (mapState.in) {
+    mapState.root = searchSaveMapRoot; mapState.focus = searchSaveMapFocus;
+    renderMap(cur);
+  } else {
+    cursorKey = searchSaveCursor; renderOutline(cur);
+  }
+}
+
+// searchNext steps to the next (dir=1) / previous (dir=-1) match, wrapping.
+// Matches are recomputed each time so edits between steps stay honored.
+function searchNext(dir) {
+  if (!searchActive) return;
+  const matches = searchMatches(searchQuery);
+  if (!matches.length) { searchActive = false; toast('no matches', true); return; }
+  searchIdx = ((searchIdx + dir) % matches.length + matches.length) % matches.length;
+  jumpToMatch(matches[searchIdx]);
+  setSearchStatus(matches.length);
 }
 
 // ---- keyboard layer ----
@@ -1202,7 +1337,8 @@ document.addEventListener('keydown', e => {
   // preventDefault for every handled key: keys that open an input (a, e, R…)
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
-    ' ', 'b', '!', 'e', 'w', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'm', 'u', 'y', '?', 'Enter', 'l', 'h']);
+    ' ', 'b', '!', 'e', 'w', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
+    '/', 'n', 'N']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
@@ -1240,6 +1376,9 @@ document.addEventListener('keydown', e => {
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
     case 'y': copyPath(); break;
+    case '/': startSearch(); break;
+    case 'n': searchNext(1); break;
+    case 'N': searchNext(-1); break;
     case '?': toggleModal('helpmodal', true); break;
   }
 });
@@ -1265,6 +1404,15 @@ window.__sn = {
   get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded } }; },
   get listExpanded() { return [...listExpanded]; },
   get collapsedSecs() { return { ...collapsedSecs }; },
+  // Search state for the e2e harness: active flag, query, 1-based current
+  // index, total match count, and whether the prompt is open.
+  get search() {
+    return {
+      active: searchActive, query: searchQuery, idx: searchIdx,
+      matches: searchMatches(searchQuery).length,
+      promptOpen: document.getElementById('searchprompt').classList.contains('open'),
+    };
+  },
   // A cursor stop's on-screen rect, for asserting the selected line is visible
   // (not hidden behind the fixed footer).
   cursorRect() { const s = cursorStop(); return s ? s.el.getBoundingClientRect().toJSON() : null; },

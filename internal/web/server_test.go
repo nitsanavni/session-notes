@@ -295,6 +295,10 @@ func TestServedAssetsHaveWebFixes(t *testing.T) {
 		"function tintAuthor(",
 		"n.parent.key === mapState.root",                 // focus-mode sibling filtering
 		"n.kind === 'center' || n.key === mapState.root", // focus-root lateral nav
+		"function searchMatches(",                        // incremental search core
+		"function startSearch(",                          // `/` opens the prompt
+		"function searchNext(",                           // n/N stepping, wrapping
+		"searchprompt",                                   // the shared search overlay
 	} {
 		if !strings.Contains(board, want) {
 			t.Errorf("board page missing %q", want)
