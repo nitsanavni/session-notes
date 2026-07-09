@@ -115,18 +115,18 @@ type model struct {
 	hist *history // bounded undo/redo of full board snapshots
 
 	// Map (mindmap) view state. mapView toggles the whole board between the list
-	// view and the center-outward map (see mapview.go). mapFolded and mapFocusKey
-	// persist collapse and focus across the frequent tree rebuilds (every board
-	// mutation nils mp so it re-lays out); mp is the transient built layout.
-	// mapInput* capture the target of an inline map add/edit until enter.
+	// view and the center-outward map (see mapview.go). mapFold and mapFocusKey
+	// persist per-node fold state and focus across the frequent tree rebuilds
+	// (every board mutation nils mp so it re-lays out); mp is the transient built
+	// layout. mapInput* capture the target of an inline map add/edit until enter.
 	mapView     bool
-	mapFolded   map[string]bool
 	mapFocusKey string
-	// mapRepliesShown records, keyed by parent node key, which nodes have their
-	// reply children expanded. Reply children (user:/claude: sub-bullets) default
-	// to COLLAPSED into a "[N replies]" suffix on the parent; enter on the parent
-	// expands them. Non-reply children are unaffected.
-	mapRepliesShown map[string]bool
+	// mapFold holds, keyed by stable node key, each node's fold state in the
+	// unified three-state cycle (see foldState in mapview.go). Absent keys are
+	// foldDefault: non-reply children visible, reply children summarized into a
+	// "[N replies]" suffix. `enter` cycles a node collapsed -> default ->
+	// replies-expanded -> collapsed (skipping states that render identically).
+	mapFold map[string]foldState
 	// mapShowLog includes the append-only Log section in the map. It is excluded
 	// by default (noise); M toggles it back on.
 	mapShowLog bool

@@ -42,12 +42,18 @@ const feedbackSidecarThreshold = 8 * 1024
 // the map-view knobs that shape the layout (folds, reply expansion, Log
 // visibility) and the focused node's stable key ("" is the center).
 type feedbackState struct {
-	Board        string   `json:"board"`
-	FocusKey     string   `json:"focusKey"`
-	FocusText    string   `json:"focusText"`
+	Board     string `json:"board"`
+	FocusKey  string `json:"focusKey"`
+	FocusText string `json:"focusText"`
+	// Fold is the unified per-node fold state, keyed by stable node key. Replaces
+	// the old Folded/RepliesShown pair; those are still read (see restoreMapModel)
+	// so pre-existing JSONL records replay unchanged.
+	Fold    map[string]foldState `json:"fold,omitempty"`
+	ShowLog bool                 `json:"showLog,omitempty"`
+	// Deprecated: read-only back-compat for records written before the fold
+	// model was unified. Never written now (see captureMapState).
 	Folded       []string `json:"folded,omitempty"`
 	RepliesShown []string `json:"repliesShown,omitempty"`
-	ShowLog      bool     `json:"showLog,omitempty"`
 }
 
 // feedbackAfter is where an action landed: the focus after the key ran.
@@ -95,21 +101,21 @@ func feedbackSidecarDir(jsonlPath string) string {
 var recordedMapKeys = map[string]bool{
 	"h": true, "j": true, "k": true, "l": true,
 	"left": true, "right": true, "up": true, "down": true,
-	"d": true,
+	"d":     true,
 	"enter": true, "w": true, " ": true, "D": true, "M": true,
 	"u": true, "ctrl+r": true, "r": true,
 }
 
-// sortedFlags returns a bool-set's keys sorted, for stable JSON.
-func sortedFlags(m map[string]bool) []string {
+// cloneFold copies a fold-state map (nil for empty), so the recorded before-
+// state is a snapshot independent of later mutations.
+func cloneFold(m map[string]foldState) map[string]foldState {
 	if len(m) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+	out := make(map[string]foldState, len(m))
+	for k, v := range m {
+		out[k] = v
 	}
-	sort.Strings(out)
 	return out
 }
 
@@ -118,12 +124,11 @@ func sortedFlags(m map[string]bool) []string {
 func (m *model) captureMapState() feedbackState {
 	m.ensureMap()
 	return feedbackState{
-		Board:        m.board.Render(),
-		FocusKey:     m.mapFocusKey,
-		FocusText:    mapFocusDetail(m.mp),
-		Folded:       sortedFlags(m.mapFolded),
-		RepliesShown: sortedFlags(m.mapRepliesShown),
-		ShowLog:      m.mapShowLog,
+		Board:     m.board.Render(),
+		FocusKey:  m.mapFocusKey,
+		FocusText: mapFocusDetail(m.mp),
+		Fold:      cloneFold(m.mapFold),
+		ShowLog:   m.mapShowLog,
 	}
 }
 
@@ -320,13 +325,17 @@ func restoreMapModel(st feedbackState) *model {
 	m.board = board.Parse(st.Board)
 	m.mapView = true
 	m.mapShowLog = st.ShowLog
-	m.mapFolded = map[string]bool{}
-	for _, k := range st.Folded {
-		m.mapFolded[k] = true
+	m.mapFold = map[string]foldState{}
+	for k, v := range st.Fold {
+		m.mapFold[k] = v
 	}
-	m.mapRepliesShown = map[string]bool{}
+	// Back-compat: records written before the fold model was unified stored a
+	// folded-set (fully collapsed) and a replies-shown set (replies expanded).
+	for _, k := range st.Folded {
+		m.mapFold[k] = foldCollapsed
+	}
 	for _, k := range st.RepliesShown {
-		m.mapRepliesShown[k] = true
+		m.mapFold[k] = foldRepliesExpanded
 	}
 	m.mapFocusKey = st.FocusKey
 	m.rebuildPositions()
@@ -426,11 +435,8 @@ func generateFeedbackTests(recs []feedbackRecord) string {
 		if last.Before.ShowLog {
 			b.WriteString("\tm.mapShowLog = true\n")
 		}
-		if len(last.Before.Folded) > 0 {
-			fmt.Fprintf(&b, "\tm.mapFolded = map[string]bool{%s}\n", setLiteral(last.Before.Folded))
-		}
-		if len(last.Before.RepliesShown) > 0 {
-			fmt.Fprintf(&b, "\tm.mapRepliesShown = map[string]bool{%s}\n", setLiteral(last.Before.RepliesShown))
+		if fold := mergedFold(last.Before); len(fold) > 0 {
+			fmt.Fprintf(&b, "\tm.mapFold = map[string]foldState{%s}\n", foldLiteral(fold))
 		}
 		fmt.Fprintf(&b, "\tm.mapFocusKey = %s // %s\n", strconv.Quote(last.Before.FocusKey), oneLine(last.Before.FocusText))
 		b.WriteString("\tm.mp = nil\n\tm.ensureMap()\n\n")
@@ -448,11 +454,45 @@ func generateFeedbackTests(recs []feedbackRecord) string {
 // oneLine collapses whitespace so free text fits in a comment.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// setLiteral renders the body of a map[string]bool literal for gen-test.
-func setLiteral(keys []string) string {
+// mergedFold resolves a before-state's fold map, folding in any legacy
+// Folded/RepliesShown sets so gen-test reproduces old records too.
+func mergedFold(st feedbackState) map[string]foldState {
+	out := map[string]foldState{}
+	for k, v := range st.Fold {
+		out[k] = v
+	}
+	for _, k := range st.Folded {
+		out[k] = foldCollapsed
+	}
+	for _, k := range st.RepliesShown {
+		out[k] = foldRepliesExpanded
+	}
+	return out
+}
+
+// foldName is the source-literal name of a fold state, for gen-test output.
+func foldName(s foldState) string {
+	switch s {
+	case foldCollapsed:
+		return "foldCollapsed"
+	case foldRepliesExpanded:
+		return "foldRepliesExpanded"
+	default:
+		return "foldDefault"
+	}
+}
+
+// foldLiteral renders the body of a map[string]foldState literal for gen-test,
+// keys sorted for stable output.
+func foldLiteral(fold map[string]foldState) string {
+	keys := make([]string, 0, len(fold))
+	for k := range fold {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 	parts := make([]string, len(keys))
 	for i, k := range keys {
-		parts[i] = strconv.Quote(k) + ": true"
+		parts[i] = strconv.Quote(k) + ": " + foldName(fold[k])
 	}
 	return strings.Join(parts, ", ")
 }

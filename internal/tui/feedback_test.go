@@ -59,14 +59,17 @@ func TestRecorderCapturesMapKnobs(t *testing.T) {
 	m.mp = nil
 	m.ensureMap()
 	focusMapSection(t, m, "Plan")
-	m.handleMapKey(keyPress("enter")) // fold Plan — recorded, and sets mapFolded
+	m.handleMapKey(keyPress("enter")) // fold Plan — recorded, and sets mapFold
 	m.handleMapKey(keyPress("j"))
 	last := m.feedbackEvents[len(m.feedbackEvents)-1]
 	if !last.Before.ShowLog {
 		t.Errorf("showLog not captured")
 	}
-	if len(last.Before.Folded) != 1 || last.Before.Folded[0] != "s0" {
-		t.Errorf("folded = %v, want [s0]", last.Before.Folded)
+	if got := last.Before.Fold["s0"]; got != foldCollapsed {
+		t.Errorf("fold[s0] = %v, want foldCollapsed", got)
+	}
+	if len(last.Before.Fold) != 1 {
+		t.Errorf("fold = %v, want a single s0 entry", last.Before.Fold)
 	}
 }
 

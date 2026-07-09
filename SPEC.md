@@ -142,12 +142,19 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   Node text is truncated to 40 display columns (unicode-width aware) with a `…`
   so maps don't sprawl; the focused node's full text still shows in the detail
   footer, and `w` toggles the focused node expanded in place — rendered as a
-  wrapped multi-line block instead of one truncated line. `enter` folds a
-  subtree, `a`/`e`/`space`/`D` edit (sections aren't editable/markable/deletable); every
-  mutation saves through the same locked write + rebase path as the list view and
-  shares its undo history. Conversational reply children (`user:`/`claude:`
-  sub-bullets) render dim and collapse by default into a `[N replies]` suffix on
-  their parent; `enter` on the parent expands/collapses the thread. The
+  wrapped multi-line block instead of one truncated line. `enter` runs one
+  unified fold cycle on the focused node: **collapsed → default → replies-shown →
+  collapsed**. Each press reveals more (the default view, then the full reply
+  thread) until everything is shown, then one more press collapses the whole
+  subtree to a single summary suffix — `[+N]` counting every hidden descendant,
+  or `[N replies]` when the hidden set is replies only. States that would render
+  identically are skipped, so a node with no replies just toggles
+  default↔collapsed and a replies-only node toggles summary↔expanded. Nested fold
+  state survives a parent's collapse/expand round trip. `a`/`e`/`space`/`D` edit
+  (sections aren't editable/markable/deletable); every mutation saves through the
+  same locked write + rebase path as the list view and shares its undo history.
+  Conversational reply children (`user:`/`claude:` sub-bullets) render dim and, in
+  the default view, collapse into a `[N replies]` suffix on their parent. The
   append-only `Log` section is excluded from the map by default (a "Log hidden ·
   M" footer hint shows when it is); `M` toggles it back on. When a move surprises
   you (focus didn't land where your fingers expected), `!` opens a prompt showing

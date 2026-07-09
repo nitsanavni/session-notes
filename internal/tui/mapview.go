@@ -37,7 +37,7 @@ type mapRef struct {
 // mapState is the transient, built map: the bridged tree, its center-outward
 // layout, the node→board back-references and node→stable-key index, and the
 // focused node. It is rebuilt (m.mp niled) on every board change; focus and fold
-// survive via m.mapFocusKey / m.mapFolded, both keyed by the stable node key.
+// survive via m.mapFocusKey / m.mapFold, both keyed by the stable node key.
 type mapState struct {
 	root   *mindmap.Node
 	layout mindmap.Layout
@@ -129,14 +129,45 @@ func isReplyItem(it *board.Item) bool {
 // its direct reply children plus every reply nested beneath them (a
 // user->claude->user turn chain counts as 3). Non-reply branches are excluded.
 func countReplies(it *board.Item) int {
+	return countRepliesIn(it.Children)
+}
+
+// countRepliesIn counts reply items over a child slice (recursively down reply
+// chains only), so it works for both an item's children and a section's items.
+func countRepliesIn(items []*board.Item) int {
 	n := 0
-	for _, c := range it.Children {
+	for _, c := range items {
 		if isReplyItem(c) {
 			n++
-			n += countReplies(c)
+			n += countRepliesIn(c.Children)
 		}
 	}
 	return n
+}
+
+// countDescendantsIn counts every map-visible (IsItem) descendant under a child
+// slice — replies and non-replies alike. This is the N behind a fully-collapsed
+// node's "[+N]" suffix.
+func countDescendantsIn(items []*board.Item) int {
+	n := 0
+	for _, c := range items {
+		if !c.IsItem() {
+			continue
+		}
+		n++
+		n += countDescendantsIn(c.Children)
+	}
+	return n
+}
+
+// hasNonReplyChild reports whether a child slice has any non-reply item child.
+func hasNonReplyChild(items []*board.Item) bool {
+	for _, c := range items {
+		if c.IsItem() && !isReplyItem(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // replyCountSuffix is the collapsed-reply indicator appended to a parent node,
@@ -146,6 +177,81 @@ func replyCountSuffix(n int) string {
 		return " [1 reply]"
 	}
 	return fmt.Sprintf(" [%d replies]", n)
+}
+
+// foldState is a node's place in the unified fold cycle. A node has one state,
+// persisted by stable key in model.mapFold (absent == foldDefault).
+type foldState int
+
+const (
+	// foldDefault is the resting view: non-reply children shown, reply children
+	// summarized into a "[N replies]" suffix.
+	foldDefault foldState = iota
+	// foldCollapsed hides ALL children behind one suffix ("[+N]" over every
+	// hidden descendant, or "[N replies]" when the hidden set is replies only).
+	foldCollapsed
+	// foldRepliesExpanded shows everything: non-reply children AND the reply
+	// thread, no suffix.
+	foldRepliesExpanded
+)
+
+// foldSuffix is the "[…]" summary a node in state st shows for the children of
+// the given slice. Empty when nothing is hidden (a leaf, or a fully-expanded
+// node). "[+N]" counts every hidden descendant (replies included); "[N replies]"
+// is used when the hidden set is replies only.
+func foldSuffix(items []*board.Item, st foldState) string {
+	replies := countRepliesIn(items)
+	total := countDescendantsIn(items)
+	if st == foldCollapsed {
+		if total == 0 {
+			return ""
+		}
+		if replies == total { // everything hidden is a reply
+			return replyCountSuffix(replies)
+		}
+		return fmt.Sprintf(" [+%d]", total)
+	}
+	// Default view: reply children fold into a count; expanded view hides nothing.
+	if st != foldRepliesExpanded && replies > 0 {
+		return replyCountSuffix(replies)
+	}
+	return ""
+}
+
+// nextFold advances a node's fold state one step of the collapse cycle
+// (collapsed -> default -> replies-expanded -> collapsed), skipping any state
+// that would render identically to the current one for this node's children:
+//   - no children: no change (nothing to fold).
+//   - non-reply children, no replies: default <-> collapsed (replies-expanded ==
+//     default, skipped).
+//   - replies only: default <-> replies-expanded (collapsed == default, skipped).
+//   - mixed: default -> replies-expanded -> collapsed -> default (all distinct).
+func nextFold(items []*board.Item, cur foldState) foldState {
+	hasReply := countRepliesIn(items) > 0
+	hasNonReply := hasNonReplyChild(items)
+	switch {
+	case hasReply && hasNonReply:
+		switch cur {
+		case foldDefault:
+			return foldRepliesExpanded
+		case foldRepliesExpanded:
+			return foldCollapsed
+		default:
+			return foldDefault
+		}
+	case hasReply: // replies only: toggle summary <-> expanded
+		if cur == foldRepliesExpanded {
+			return foldDefault
+		}
+		return foldRepliesExpanded
+	case hasNonReply: // no replies: toggle shown <-> collapsed
+		if cur == foldCollapsed {
+			return foldDefault
+		}
+		return foldCollapsed
+	default:
+		return cur // leaf: nothing to fold
+	}
 }
 
 // mapNextStatus is the map's `space` cycle: none -> [ ] -> [>] -> [x] -> [?] ->
@@ -171,13 +277,42 @@ func mapNextStatus(s board.Status) board.Status {
 // item subtree. Nodes are keyed by a stable position path ("" center, "sN"
 // section, "sN/i/j" nested item) so focus and fold survive rebuilds; refs point
 // each node back to its board thing. Continuation (non-item) lines are skipped.
-func buildMapTree(b *board.Board, folded, repliesShown map[string]bool, showLog bool) (*mindmap.Node, map[*mindmap.Node]mapRef, map[*mindmap.Node]string) {
+func buildMapTree(b *board.Board, fold map[string]foldState, showLog bool) (*mindmap.Node, map[*mindmap.Node]mapRef, map[*mindmap.Node]string) {
 	refs := map[*mindmap.Node]mapRef{}
 	keys := map[*mindmap.Node]string{}
 
 	root := &mindmap.Node{Text: boardTitle(b), Heading: true}
 	refs[root] = mapRef{kind: refCenter}
 	keys[root] = ""
+
+	// walk emits the visible children of a parent given the PARENT's fold state,
+	// and appends each child's own fold suffix (from the child's own state).
+	// Nodes are never mindmap.Folded — collapse is done by simply not emitting
+	// the hidden children, so the suffix counts are fully under our control.
+	var walk func(items []*board.Item, parent *mindmap.Node, parentKey, sec string, parentState foldState)
+	walk = func(items []*board.Item, parent *mindmap.Node, parentKey, sec string, parentState foldState) {
+		if parentState == foldCollapsed {
+			return // whole subtree hidden behind the parent's suffix
+		}
+		showReplies := parentState == foldRepliesExpanded
+		idx := 0
+		for _, it := range items {
+			if !it.IsItem() {
+				continue // continuation / stray lines are not map nodes
+			}
+			ck := parentKey + "/" + strconv.Itoa(idx)
+			idx++
+			if isReplyItem(it) && !showReplies {
+				continue // folded into the parent's "[N replies]" suffix
+			}
+			st := fold[ck]
+			cn := &mindmap.Node{Text: mapNodeText(it) + foldSuffix(it.Children, st)}
+			refs[cn] = mapRef{kind: refItem, section: sec, item: it}
+			keys[cn] = ck
+			parent.Children = append(parent.Children, cn)
+			walk(it.Children, cn, ck, sec, st)
+		}
+	}
 
 	for i, s := range b.Sections {
 		// The append-only Log section is excluded by default (noise); M toggles
@@ -187,38 +322,12 @@ func buildMapTree(b *board.Board, folded, repliesShown map[string]bool, showLog 
 			continue
 		}
 		skey := "s" + strconv.Itoa(i)
-		sn := &mindmap.Node{Text: s.Title, Folded: folded[skey]}
+		sState := fold[skey]
+		sn := &mindmap.Node{Text: s.Title + foldSuffix(s.Items, sState)}
 		refs[sn] = mapRef{kind: refSection, section: s.Title}
 		keys[sn] = skey
 		root.Children = append(root.Children, sn)
-
-		var walk func(items []*board.Item, parent *mindmap.Node, parentKey, sec string)
-		walk = func(items []*board.Item, parent *mindmap.Node, parentKey, sec string) {
-			// Reply children of this parent are collapsed into a suffix unless
-			// explicitly expanded.
-			showReplies := repliesShown[parentKey]
-			idx := 0
-			for _, it := range items {
-				if !it.IsItem() {
-					continue // continuation / stray lines are not map nodes
-				}
-				ck := parentKey + "/" + strconv.Itoa(idx)
-				idx++
-				if isReplyItem(it) && !showReplies {
-					continue // folded into the parent's "[N replies]" suffix
-				}
-				text := mapNodeText(it)
-				if n := countReplies(it); n > 0 && !repliesShown[ck] {
-					text += replyCountSuffix(n)
-				}
-				cn := &mindmap.Node{Text: text, Folded: folded[ck]}
-				refs[cn] = mapRef{kind: refItem, section: sec, item: it}
-				keys[cn] = ck
-				parent.Children = append(parent.Children, cn)
-				walk(it.Children, cn, ck, sec)
-			}
-		}
-		walk(s.Items, sn, skey, s.Title)
+		walk(s.Items, sn, skey, s.Title, sState)
 	}
 	return root, refs, keys
 }
@@ -235,7 +344,7 @@ func (m *model) ensureMap() {
 	if m.mp != nil {
 		return
 	}
-	root, refs, keys := buildMapTree(m.board, m.mapFolded, m.mapRepliesShown, m.mapShowLog)
+	root, refs, keys := buildMapTree(m.board, m.mapFold, m.mapShowLog)
 	expanded := map[*mindmap.Node]bool{}
 	for n, k := range keys {
 		if m.mapExpanded[k] {
@@ -527,8 +636,11 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// mapToggleFold collapses/expands the focused subtree (section or item). The
-// center never folds; a childless node has nothing to fold.
+// mapToggleFold advances the focused node through the unified fold cycle
+// (collapsed -> default -> replies-expanded -> collapsed, skipping states that
+// render identically). enter reveals more each press until the whole subtree is
+// shown, then one more press collapses it fully. The center never folds; a
+// childless node has nothing to fold.
 func (m *model) mapToggleFold() {
 	ms := m.mp
 	ref := ms.refs[ms.focus]
@@ -536,32 +648,29 @@ func (m *model) mapToggleFold() {
 		m.status = "can't fold the center"
 		return
 	}
-	// Reply children collapse into a "[N replies]" suffix by default; on an item
-	// that has them, enter toggles the whole reply thread's visibility instead of
-	// the ordinary subtree fold.
-	if ref.kind == refItem && countReplies(ref.item) > 0 {
-		if m.mapRepliesShown == nil {
-			m.mapRepliesShown = map[string]bool{}
+	// A node's children are the item's children, or a section's items.
+	var items []*board.Item
+	switch ref.kind {
+	case refItem:
+		items = ref.item.Children
+	case refSection:
+		if sec := m.board.Section(ref.section); sec != nil {
+			items = sec.Items
 		}
-		if m.mapRepliesShown[m.mapFocusKey] {
-			delete(m.mapRepliesShown, m.mapFocusKey)
-		} else {
-			m.mapRepliesShown[m.mapFocusKey] = true
-		}
-		m.mp = nil // re-layout with the new reply visibility
-		return
 	}
-	if len(ms.focus.Children) == 0 {
+	if countDescendantsIn(items) == 0 {
 		m.status = "nothing to fold"
 		return
 	}
-	if m.mapFolded == nil {
-		m.mapFolded = map[string]bool{}
+	cur := m.mapFold[m.mapFocusKey]
+	next := nextFold(items, cur)
+	if m.mapFold == nil {
+		m.mapFold = map[string]foldState{}
 	}
-	if m.mapFolded[m.mapFocusKey] {
-		delete(m.mapFolded, m.mapFocusKey)
+	if next == foldDefault {
+		delete(m.mapFold, m.mapFocusKey)
 	} else {
-		m.mapFolded[m.mapFocusKey] = true
+		m.mapFold[m.mapFocusKey] = next
 	}
 	m.mp = nil // re-layout with the new fold state
 }

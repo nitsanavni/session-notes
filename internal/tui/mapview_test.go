@@ -58,7 +58,7 @@ func focusMapSection(t *testing.T, m *model, title string) {
 func TestBridgeSkeletonAlwaysPresent(t *testing.T) {
 	src := "---\ntitle: My Board\n---\n## Plan\n\n## Threads\n- [ ] a task\n\n## Questions\n\n## Ideas\n\n## Log\n"
 	b := board.Parse(src)
-	root, refs, _ := buildMapTree(b, nil, nil, true)
+	root, refs, _ := buildMapTree(b, nil, true)
 
 	if refs[root].kind != refCenter || root.Text != "My Board" {
 		t.Fatalf("root is not the titled center: %+v text=%q", refs[root], root.Text)
@@ -305,8 +305,8 @@ func TestMapFoldReduces(t *testing.T) {
 	focusMapSection(t, m, "Threads")
 	m.handleMapKey(keyPress("enter")) // fold
 	m.ensureMap()
-	if !m.mapFolded[m.mapFocusKey] {
-		t.Fatalf("section not marked folded")
+	if m.mapFold[m.mapFocusKey] != foldCollapsed {
+		t.Fatalf("section not marked collapsed")
 	}
 	folded := len(m.mp.layout.Placements)
 	if folded >= full {
@@ -425,6 +425,217 @@ func TestMapNonReplyChildrenStayExpanded(t *testing.T) {
 	}
 	if strings.Contains(out, "replies]") {
 		t.Errorf("non-reply children should not produce a reply-count suffix:\n%s", out)
+	}
+}
+
+// mapVisibleTexts returns the on-map display text of every laid-out item node.
+func mapVisibleTexts(m *model) []string {
+	var out []string
+	for _, ref := range m.mp.refs {
+		if ref.kind == refItem {
+			out = append(out, ref.item.Text)
+		}
+	}
+	return out
+}
+
+// mapContains reports whether an item with the given board text is laid out.
+func mapContains(m *model, text string) bool {
+	for _, t := range mapVisibleTexts(m) {
+		if t == text {
+			return true
+		}
+	}
+	return false
+}
+
+// TestMapFoldCycleRepliesOnly: a node whose only children are replies toggles
+// between the summary and the expanded thread (two distinct states).
+func TestMapFoldCycleRepliesOnly(t *testing.T) {
+	src := "## Threads\n- [ ] question\n  - user: hi\n    - claude: hello\n"
+	m := newMapModel(t, src, 100, 30)
+	focusMapItem(t, m, "question")
+
+	// Default: replies summarized, none shown.
+	if mapHasReplyNode(m) {
+		t.Fatalf("replies laid out in default view")
+	}
+	// enter -> replies expanded.
+	m.handleMapKey(keyPress("enter"))
+	m.ensureMap()
+	if m.mapFold[m.mapFocusKey] != foldRepliesExpanded {
+		t.Fatalf("state = %v, want repliesExpanded", m.mapFold[m.mapFocusKey])
+	}
+	if !mapHasReplyNode(m) {
+		t.Fatalf("replies not shown after expand")
+	}
+	// enter -> back to default summary (collapsed == default here, skipped).
+	m.handleMapKey(keyPress("enter"))
+	m.ensureMap()
+	if _, ok := m.mapFold[m.mapFocusKey]; ok {
+		t.Fatalf("state = %v, want default (absent)", m.mapFold[m.mapFocusKey])
+	}
+	if mapHasReplyNode(m) {
+		t.Fatalf("replies still shown after re-collapse")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+		t.Errorf("summary suffix missing after re-collapse:\n%s", out)
+	}
+}
+
+// TestMapFoldCycleMixed: a node with both a non-reply child and a reply thread
+// cycles through all three distinct states: default -> replies-expanded ->
+// collapsed -> default.
+func TestMapFoldCycleMixed(t *testing.T) {
+	src := "## Threads\n- [ ] parent\n  - [ ] sub task\n  - user: hi\n    - claude: hello\n"
+	m := newMapModel(t, src, 120, 40)
+	focusMapItem(t, m, "parent")
+
+	// Default: non-reply child shown, replies summarized.
+	if !mapContains(m, "sub task") {
+		t.Fatalf("non-reply child hidden in default view")
+	}
+	if mapHasReplyNode(m) {
+		t.Fatalf("replies shown in default view")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[2 replies]") {
+		t.Errorf("default view missing reply summary:\n%s", out)
+	}
+
+	// enter -> replies expanded: everything visible, no suffix.
+	m.handleMapKey(keyPress("enter"))
+	m.ensureMap()
+	if m.mapFold[m.mapFocusKey] != foldRepliesExpanded {
+		t.Fatalf("state = %v, want repliesExpanded", m.mapFold[m.mapFocusKey])
+	}
+	if !mapContains(m, "sub task") || !mapHasReplyNode(m) {
+		t.Fatalf("expanded view should show both the sub task and the replies")
+	}
+	if out := stripANSI(m.viewMap()); strings.Contains(out, "replies]") {
+		t.Errorf("expanded view should carry no reply suffix:\n%s", out)
+	}
+
+	// enter -> fully collapsed: no children, one "[+N]" summary over ALL hidden
+	// descendants (sub task + user + claude = 3).
+	m.handleMapKey(keyPress("enter"))
+	m.ensureMap()
+	if m.mapFold[m.mapFocusKey] != foldCollapsed {
+		t.Fatalf("state = %v, want collapsed", m.mapFold[m.mapFocusKey])
+	}
+	if mapContains(m, "sub task") || mapHasReplyNode(m) {
+		t.Fatalf("collapsed view still shows children")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[+3]") {
+		t.Errorf("collapsed view missing [+3] over all hidden descendants:\n%s", out)
+	}
+
+	// enter -> back to default.
+	m.handleMapKey(keyPress("enter"))
+	m.ensureMap()
+	if _, ok := m.mapFold[m.mapFocusKey]; ok {
+		t.Fatalf("state = %v, want default (absent)", m.mapFold[m.mapFocusKey])
+	}
+	if !mapContains(m, "sub task") || mapHasReplyNode(m) {
+		t.Fatalf("cycle did not return to the default view")
+	}
+}
+
+// TestMapFoldCycleNoReplies: a node with only non-reply children toggles between
+// shown and fully collapsed (two states); collapsed shows "[+N]".
+func TestMapFoldCycleNoReplies(t *testing.T) {
+	src := "## Threads\n- [ ] parent\n  - [ ] a\n  - [ ] b\n"
+	m := newMapModel(t, src, 100, 30)
+	focusMapItem(t, m, "parent")
+
+	m.handleMapKey(keyPress("enter")) // collapse
+	m.ensureMap()
+	if m.mapFold[m.mapFocusKey] != foldCollapsed {
+		t.Fatalf("state = %v, want collapsed", m.mapFold[m.mapFocusKey])
+	}
+	if mapContains(m, "a") || mapContains(m, "b") {
+		t.Fatalf("collapsed view still shows children")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[+2]") {
+		t.Errorf("collapsed view missing [+2]:\n%s", out)
+	}
+	m.handleMapKey(keyPress("enter")) // back to default
+	m.ensureMap()
+	if _, ok := m.mapFold[m.mapFocusKey]; ok {
+		t.Fatalf("state = %v, want default (absent)", m.mapFold[m.mapFocusKey])
+	}
+	if !mapContains(m, "a") || !mapContains(m, "b") {
+		t.Fatalf("children not restored after unfold")
+	}
+}
+
+// TestMapFoldNestedSurvivesRoundTrip: a descendant's own fold state is preserved
+// when an ancestor is collapsed and re-expanded.
+func TestMapFoldNestedSurvivesRoundTrip(t *testing.T) {
+	src := "## Threads\n- [ ] parent\n  - [ ] child\n    - [ ] gc1\n    - [ ] gc2\n"
+	m := newMapModel(t, src, 120, 40)
+
+	// Collapse the inner child first.
+	focusMapItem(t, m, "child")
+	m.handleMapKey(keyPress("enter"))
+	m.ensureMap()
+	childKey := m.mapFocusKey
+	if m.mapFold[childKey] != foldCollapsed {
+		t.Fatalf("child not collapsed")
+	}
+
+	// Collapse then re-expand the parent.
+	focusMapItem(t, m, "parent")
+	m.handleMapKey(keyPress("enter")) // collapse parent
+	m.ensureMap()
+	m.handleMapKey(keyPress("enter")) // expand parent
+	m.ensureMap()
+
+	// Child's collapse survived: grandchildren stay hidden, child shows [+2].
+	if m.mapFold[childKey] != foldCollapsed {
+		t.Fatalf("child fold state lost across the parent round trip")
+	}
+	if mapContains(m, "gc1") || mapContains(m, "gc2") {
+		t.Fatalf("grandchildren reappeared: nested fold not preserved")
+	}
+	if !mapContains(m, "child") {
+		t.Fatalf("child missing after parent re-expand")
+	}
+	if out := stripANSI(m.viewMap()); !strings.Contains(out, "[+2]") {
+		t.Errorf("child's [+2] summary missing after round trip:\n%s", out)
+	}
+}
+
+// TestFoldSuffixCounts checks the suffix text for each state directly.
+func TestFoldSuffixCounts(t *testing.T) {
+	// mixed: one non-reply child, a 2-deep reply thread.
+	src := "## Threads\n- [ ] parent\n  - [ ] sub\n  - user: hi\n    - claude: hey\n"
+	b := board.Parse(src)
+	kids := b.Sections[0].Items[0].Children
+	if got := foldSuffix(kids, foldDefault); got != " [2 replies]" {
+		t.Errorf("default suffix = %q, want ' [2 replies]'", got)
+	}
+	if got := foldSuffix(kids, foldRepliesExpanded); got != "" {
+		t.Errorf("expanded suffix = %q, want empty", got)
+	}
+	if got := foldSuffix(kids, foldCollapsed); got != " [+3]" {
+		t.Errorf("collapsed suffix = %q, want ' [+3]'", got)
+	}
+	// replies only: collapsed summarizes as replies, not [+N].
+	rsrc := "## Threads\n- [ ] q\n  - user: a\n    - claude: b\n"
+	rb := board.Parse(rsrc)
+	rkids := rb.Sections[0].Items[0].Children
+	if got := foldSuffix(rkids, foldCollapsed); got != " [2 replies]" {
+		t.Errorf("replies-only collapsed = %q, want ' [2 replies]'", got)
+	}
+	// no replies: collapsed is [+N], default is empty.
+	nsrc := "## Threads\n- [ ] p\n  - [ ] a\n  - [ ] b\n"
+	nb := board.Parse(nsrc)
+	nkids := nb.Sections[0].Items[0].Children
+	if got := foldSuffix(nkids, foldDefault); got != "" {
+		t.Errorf("no-reply default suffix = %q, want empty", got)
+	}
+	if got := foldSuffix(nkids, foldCollapsed); got != " [+2]" {
+		t.Errorf("no-reply collapsed suffix = %q, want ' [+2]'", got)
 	}
 }
 

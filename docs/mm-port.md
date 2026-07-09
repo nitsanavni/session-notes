@@ -83,8 +83,8 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
 - Phase 2 landed (338c523): `m` toggles the interactive map view in the TUI;
   spatial nav, folding, edits through the shared locked-save/rebase path.
 - Phase 3 landed: reply-aware styling (dim `user:`/`claude:` sub-bullets) with
-  automatic collapse into a `[N replies]` suffix (enter on the parent
-  expands/collapses); the `Log` section excluded from the map by default with a
+  automatic collapse into a `[N replies]` suffix in the default view; the `Log`
+  section excluded from the map by default with a
   "Log hidden · M" footer hint (`M` toggles it on); and the pane-resolution
   fallback — a pane with no mapping resolves to the newest board matching the
   pane's current directory (via tmux `pane_current_path`) before the picker,
@@ -126,3 +126,26 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   (`LayoutTreeOpts`) that the TUI turns on and the golden tests leave off, so the
   byte-identical-to-mm fixtures are untouched; the Go-only truncation and
   multi-line-layout cases have their own tests (`layout_opts_test.go`).
+- Fold model unified (was two overlapping toggles). The original design had
+  `enter` do one of two unrelated things depending on the node: on a node with
+  reply children it toggled ONLY reply visibility (`mapRepliesShown`), so its
+  non-reply children and any already-expanded nested reply subtrees stayed on
+  screen; the ordinary whole-subtree fold (`mapFolded`) was unreachable there.
+  Users reported "collapsing a thing with replies doesn't fully collapse it" —
+  two half-collapses, no full one. Replaced both boolean maps with a single
+  per-node `mapFold map[string]foldState` (`foldDefault`/`foldCollapsed`/
+  `foldRepliesExpanded`, absent == default) and one predictable cycle:
+  **collapsed → default → replies-shown → collapsed**. Each `enter` reveals more
+  until the whole subtree is visible, then one more press collapses it fully to a
+  single suffix — `[+N]` over every hidden descendant (replies included), or
+  `[N replies]` when the hidden set is replies only. States that render
+  identically for a given node are skipped, so a no-reply node is a two-state
+  default↔collapsed toggle and a replies-only node is summary↔expanded. Collapse
+  is done by simply not emitting hidden children (never `mindmap.Folded`), so the
+  suffix counts are computed in the TUI and are always right; nested descendant
+  fold state is keyed by stable node key and survives an ancestor's round trip.
+  Recorder change (`feedback.go`): the captured before-state now carries a single
+  `fold` object (`{key: state}`) instead of the old `folded`/`repliesShown`
+  string arrays. Old JSONL records still replay — `restoreMapModel` and the
+  `--gen-test` emitter read the legacy fields, mapping `folded`→collapsed and
+  `repliesShown`→replies-expanded — so no data migration is needed.
