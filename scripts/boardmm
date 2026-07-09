@@ -34,10 +34,20 @@ Round trip
    The monitor snapshot `board.snap` is refreshed inside the same lock.
 """
 import fcntl
+import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+
+# A leading GFM checkbox on a *section* bullet. mm's editor can attach a
+# checkbox to any node (space/`t`), and the CLI `done` toggle cycles x<->space
+# (never back to none), so a round trip through mm can turn `- Threads` into
+# `- [ ] Threads`. On the way back that marker is not part of the section title
+# and must be stripped, or the title stops matching the base skeleton and the
+# whole section gets emptied + re-appended under a bogus `## [ ] Threads`.
+_SECTION_CHECKBOX = re.compile(r"^\[[ xX]\]\s+")
 
 MM_DIR = os.environ.get("MM_DIR", os.path.expanduser("~/code/mm"))
 SNAP = os.environ.get("BOARDMM_SNAP") or None  # optional monitor snapshot to refresh
@@ -93,6 +103,33 @@ def parse_sections(text):
     return "\n".join(preamble), sections
 
 
+def parse_sections_raw(text):
+    """Like parse_sections but also returns, per section, the *exact* raw lines
+    (`## header` through the last line before the next header, blank lines and
+    all). Reconstructing `preamble_lines + sum(raw_lines)` reproduces `text`
+    byte-for-byte, which is what lets outline_to_board reproduce the base's
+    actual layout for unmodified sections.
+
+    Returns (preamble_lines, [(title, bullets, raw_lines)])."""
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines) and not lines[i].startswith("## "):
+        i += 1
+    preamble_lines = lines[:i]
+    sections = []
+    while i < len(lines):
+        start = i
+        title = lines[i][len("## ") :].strip()
+        i += 1
+        bullets = []
+        while i < len(lines) and not lines[i].startswith("## "):
+            if lines[i].lstrip().startswith("- "):
+                bullets.append(lines[i])
+            i += 1
+        sections.append((title, bullets, lines[start:i]))
+    return preamble_lines, sections
+
+
 # --------------------------------------------------------------------------- #
 # board  ->  outline
 # --------------------------------------------------------------------------- #
@@ -124,7 +161,8 @@ def outline_to_sections(outline_text):
         if line.startswith("# "):
             continue  # center node (title) — display only
         if line.startswith("- "):  # top-level bullet == section
-            cur = (line[2:].strip(), [])
+            title = _SECTION_CHECKBOX.sub("", line[2:].strip())
+            cur = (title, [])
             sections.append(cur)
         elif line.startswith("  ") and cur is not None:
             # section bullet: strip exactly one level (2 spaces) to de-indent
@@ -146,20 +184,33 @@ def section_lines(title, bullets):
 
 
 def outline_to_board(outline_text, base_board):
-    """Reconstruct a board from the edited outline, restoring the base skeleton."""
+    """Reconstruct a board from the edited outline, restoring the base skeleton.
+
+    Unmodified sections are emitted from the base VERBATIM (their exact raw
+    lines) so a no-edit round trip is byte-identical to the base — otherwise
+    pure formatting drift (e.g. a normalized blank line after `## Archive`)
+    would pollute the 3-way merge. Only sections whose bullets actually changed
+    are re-rendered in the canonical layout."""
     fm, body = split_frontmatter(base_board)
-    _, base_sections = parse_sections(body)
-    base_order = [t for t, _ in base_sections]
+    preamble_lines, base_sections = parse_sections_raw(body)
 
     edited = outline_to_sections(outline_text)
     edited_map = {t: b for t, b in edited}
 
-    lines = []
+    lines = list(preamble_lines)
     seen = set()
-    for title in base_order:
+    for title, base_bullets, raw_lines in base_sections:
         seen.add(title)
-        bullets = edited_map.get(title, [])  # missing in map => emptied
-        lines += section_lines(title, bullets)
+        if title in edited_map:
+            new_bullets = edited_map[title]
+            if new_bullets == base_bullets:
+                lines += raw_lines  # unchanged -> reproduce base layout verbatim
+            else:
+                lines += section_lines(title, new_bullets)
+        elif not base_bullets:
+            lines += raw_lines  # base section was empty and stayed empty -> verbatim
+        else:
+            lines += section_lines(title, [])  # emptied in mm
     for title, bullets in edited:
         if title not in seen:  # brand-new section from mm, appended at the end
             seen.add(title)
@@ -167,7 +218,7 @@ def outline_to_board(outline_text, base_board):
 
     body_out = "\n".join(lines)
     if fm:
-        return fm + "\n" + body_out
+        return fm + body_out
     return body_out
 
 
@@ -276,6 +327,38 @@ def run(board_path):
 # --------------------------------------------------------------------------- #
 # tests
 # --------------------------------------------------------------------------- #
+def _mm_available():
+    """(ok, reason). ok True iff bun and the mm cli.ts are both present."""
+    import shutil as _sh
+
+    if _sh.which("bun") is None:
+        return False, "bun not on PATH"
+    if not os.path.exists(os.path.join(MM_DIR, "src", "cli.ts")):
+        return False, "mm checkout not at %s" % MM_DIR
+    return True, ""
+
+
+def _mm_save(outline_text):
+    """Round-trip `outline_text` through mm's REAL save path with NO user edit.
+    The `done --at 0.0` toggle applied twice is a no-op *content* change that
+    still forces mm to re-serialize (autosave) the whole outline, exposing any
+    normalization mm applies (e.g. attaching `[ ]` to the first section node).
+    Returns the outline text mm wrote back."""
+    fd, tmp = tempfile.mkstemp(suffix=".md")
+    os.write(fd, outline_text.encode())
+    os.close(fd)
+    try:
+        for _ in range(2):
+            subprocess.run(
+                ["bun", "src/cli.ts", "done", tmp, "--at", "0.0"],
+                cwd=MM_DIR, capture_output=True,
+            )
+        return open(tmp).read()
+    finally:
+        os.unlink(tmp)
+
+
+
 def _run_tests():
     import shutil
 
@@ -292,7 +375,8 @@ def _run_tests():
     raw = open(board).read()
     raw = raw.replace(
         "## Ideas\n\n",
-        "## Ideas\n\n- [?] a lurking question\n  - " + special + "\n\n",
+        "## Ideas\n\n- [>] idea in flight\n- [?] a lurking question\n  - "
+        + special + "\n\n",
         1,
     )
     open(board, "w").write(raw)
@@ -394,6 +478,56 @@ def _run_tests():
     check("conflict keeps both sides",
           "(claude touched)" in content and "(mm touched)" in content)
 
+    # 8. pane resolution: _board_from_pane reads ~/.claude/boards/panes/<id>.json
+    panes_dir = os.path.join(workdir, "panes")
+    os.makedirs(panes_dir, exist_ok=True)
+    pane_board = os.path.join(workdir, "pane-board.md")
+    open(pane_board, "w").write("x\n")
+    open(os.path.join(panes_dir, "%42.json"), "w").write(
+        json.dumps({"board": pane_board})
+    )
+    got = _board_from_pane_at(panes_dir, "%42")
+    check("pane resolves to mapped board", got == pane_board, "got=%r" % got)
+
+    # 9. THE INVARIANT, driven through mm's real save path:
+    #    board -> outline -> mm save (no edit) -> outline -> board  ==  board.
+    #    Covers the live board + minimal fixtures. Guarded on bun/mm.
+    ok, reason = _mm_available()
+    if not ok:
+        print("[SKIP] mm real-save invariant — %s" % reason)
+    else:
+        def mm_invariant(name, board_text):
+            outline = board_to_outline(board_text)
+            saved = _mm_save(outline)
+            rt = outline_to_board(saved, board_text)
+            check("mm real-save invariant: " + name, rt == board_text,
+                  "diff at " + repr(_first_diff(board_text, rt)))
+            # and the section-checkbox marker mm attaches must actually appear,
+            # proving the test drives the bug rather than passing vacuously
+            return saved
+
+        saved_live = mm_invariant("live board", base)
+        check("mm attaches [ ] to a section node (bug reproduced)",
+              re.search(r"^- \[[ xX]\] ", saved_live, re.M) is not None,
+              "no section checkbox in mm output — trick not exercising the bug")
+
+        fixtures = {
+            # checkboxed children under a plain item, header WITH blank line
+            "checked children / plain parent":
+                "---\ntitle: fix\n---\n\n## Sec\n\n- plain parent\n"
+                "  - [ ] c1\n  - [x] c2\n\n## Other\n\n- lone\n",
+            # plain children under a checkboxed item, header WITHOUT blank line
+            "plain children / checked parent":
+                "---\ntitle: fix\n---\n\n## Sec\n- [ ] parent\n"
+                "  - reply one\n  - reply two\n\n## Log\n- 08:00 note\n",
+            # [>] / [?] literal markers survive mm verbatim
+            "gt/question markers":
+                "---\ntitle: fix\n---\n\n## Ideas\n\n- [>] in progress\n"
+                "  - a reply\n- [?] a question\n\n## Done\n",
+        }
+        for name, text in sorted(fixtures.items()):
+            mm_invariant(name, text)
+
     shutil.rmtree(workdir, ignore_errors=True)
     print("\n%d checks passed%s" % (n_pass, "" if not check.failed else " — FAILURES ABOVE"))
     return 0 if not check.failed else 1
@@ -409,11 +543,34 @@ def _first_diff(a, b):
 
 
 # --------------------------------------------------------------------------- #
+def _board_from_pane_at(panes_dir, pane_id):
+    """Resolve a board path from `<panes_dir>/<pane_id>.json`. Factored out of
+    _board_from_pane so it's testable without touching the real ~/.claude."""
+    mapping = os.path.join(panes_dir, pane_id + ".json")
+    try:
+        board = json.load(open(mapping)).get("board", "")
+    except (OSError, ValueError):
+        sys.exit("no board mapped to pane %s" % pane_id)
+    if not board or not os.path.exists(board):
+        sys.exit("pane %s maps to a missing board" % pane_id)
+    return board
+
+
+def _board_from_pane(pane_id):
+    """Resolve the board path via the pane mapping the session-start hook
+    records (same mechanism as `session-notes --pane`)."""
+    return _board_from_pane_at(
+        os.path.expanduser("~/.claude/boards/panes"), pane_id)
+
+
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "--test":
         sys.exit(_run_tests())
+    if len(sys.argv) == 3 and sys.argv[1] == "--pane":
+        run(_board_from_pane(sys.argv[2]))
+        return
     if len(sys.argv) != 2:
-        sys.exit("usage: boardmm <board.md>  |  boardmm --test")
+        sys.exit("usage: boardmm <board.md>  |  boardmm --pane <tmux-pane-id>  |  boardmm --test")
     run(sys.argv[1])
 
 

@@ -363,9 +363,19 @@ skeleton preserved) and merges onto the board under the usual lock — 3-way
 against the snapshot taken on open, so concurrent TUI or Claude edits survive;
 true conflicts are left as markers for reconciliation per the write protocol.
 
+`scripts/boardmm --pane <tmux-pane-id>` resolves the board via the pane
+mapping (like `session-notes --pane`), so a tmux bind mirrors the TUI popup:
+
+```tmux
+bind-key M display-popup -E -w 95% -h 90% "scripts/boardmm --pane '#{pane_id}'"
+```
+
 Requires a checkout of mm (default `~/code/mm`, override with `MM_DIR`) and
 bun. `scripts/boardmm --test` runs its round-trip and merge test suite —
-self-contained, never touches `~/.claude/boards`.
+self-contained, never touches `~/.claude/boards`. The convert-back
+defensively strips checkboxes mm attaches to section nodes (mm's toggle
+cycles `x` ↔ ` ` and never back to no-box), and reproduces untouched
+sections byte-for-byte from the base so no-op round trips are exact.
 
 **Write protocol (avoiding lost updates).** You and Claude edit the same file
 concurrently, so every writer serializes on an advisory lock. Before any
