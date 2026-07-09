@@ -169,9 +169,19 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   always `[+N]`. States that would render
   identically are skipped, so a node with no replies just toggles
   default↔collapsed and a replies-only node toggles summary↔expanded. Nested fold
-  state survives a parent's collapse/expand round trip. `a`/`e`/`space`/`D` edit
-  (sections aren't editable/markable/deletable); on the center node `e` edits the
-  board title (same as `T` in the list view). Every mutation saves through the
+  state survives a parent's collapse/expand round trip. `a`/`e`/`space`/`d`/`D`
+  edit. Items: `e` edits, `space` cycles status, `a`/`A` add child/sibling, `d`
+  archives, `D` deletes. Sections: `e` renames the heading (contents intact; a
+  rename that would collide with an existing section is refused), `d` archives
+  the whole section into `## Archive` (with the same Archive/Log guards as the
+  list view); sections still can't be marked (`space`) or hard-deleted (`D`) from
+  the map. On the center node `e` edits the board title (same as `T` in the list
+  view) and `a` opens the add-sections overlay; the center is never markable,
+  archivable, or deletable. A section rename replays by matching the OLD title in
+  the fresh disk tree (no-op if it vanished); the map's fold/expand state is keyed
+  by section index so it follows a rename automatically, while the list view's
+  per-title collapse override is migrated to the new title (so state never leaks
+  onto a later section that reuses the old name). Every mutation saves through the
   same locked write + rebase path as the list view and shares its undo history.
   The title edit is a single-field, last-writer-wins op under the lock (no
   per-item merge — the whole value is set absolutely on rebase).

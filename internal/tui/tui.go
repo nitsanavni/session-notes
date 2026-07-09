@@ -36,6 +36,7 @@ const (
 	modeDash
 	modeMapAdd
 	modeMapEdit
+	modeMapRename
 	modeMapFeedback
 )
 
@@ -544,7 +545,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) isInputMode() bool {
 	switch m.mode {
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection,
-		modeInputTitle, modeMapAdd, modeMapEdit, modeMapFeedback:
+		modeInputTitle, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback:
 		return true
 	}
 	return false
@@ -560,7 +561,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInputKey(msg)
 	case modeInputTitle:
 		return m.handleTitleInputKey(msg)
-	case modeMapAdd, modeMapEdit:
+	case modeMapAdd, modeMapEdit, modeMapRename:
 		return m.handleMapInputKey(msg)
 	case modeMapFeedback:
 		return m.handleMapFeedbackKey(msg)
@@ -850,6 +851,7 @@ func (m *model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.rebuildPositions()
 			m.jumpToSectionByTitle(text)
 			m.saveWithRebase(pendingOp{typ: opAddSection, sections: []string{text}})
+			m.mp = nil // section set changed -> map (if shown) re-layouts
 		}
 		return m, nil
 	}
@@ -922,6 +924,7 @@ const (
 	opAddSection                   // add one or more sections (idempotent)
 	opAddChild                     // append a plain child bullet under an existing item
 	opSetTitle                     // set the frontmatter title (absolute, last-writer-wins)
+	opRenameSection                // rename a section heading, contents intact
 )
 
 // pendingOp captures the one mutation a keystroke or inline input produced, in a
@@ -1050,6 +1053,18 @@ func applyOp(fresh *board.Board, op pendingOp) string {
 			return "board changed, section archived"
 		}
 		return "board changed, section already gone"
+	case opRenameSection:
+		// Match the section by its OLD title in the fresh disk tree and rename it.
+		// If it vanished (external delete/rename), no-op — don't resurrect it. If
+		// the new name now collides with a section an external writer added,
+		// RenameSection refuses and the old heading stands.
+		if s := fresh.Section(op.section); s != nil {
+			if fresh.RenameSection(s, op.payload) {
+				return "board changed, section renamed"
+			}
+			return "board changed, rename skipped (name taken)"
+		}
+		return "board changed, section already gone"
 	case opDeleteSection:
 		if s := fresh.Section(op.section); s != nil {
 			fresh.RemoveSection(s)
@@ -1143,6 +1158,7 @@ func (m *model) confirmAddSections() (tea.Model, tea.Cmd) {
 		m.rebuildPositions()
 		m.saveWithRebase(pendingOp{typ: opAddSection, sections: append([]string(nil), toAdd...)})
 	}
+	m.mp = nil // section set changed -> map (if shown) re-layouts
 	if custom {
 		// Prompt for the free-text name; canonical picks (if any) are already saved.
 		m.startInput(modeInputCustomSection, "", "custom section name")

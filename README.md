@@ -43,7 +43,12 @@ your side of the center (the node visually above/below), `h`/`l` cross the
 parent/child axis toward and away from the center. `f` focuses into the selected
 subtree — re-rooting the map on that node with a breadcrumb trail back — and `b`
 (or `esc`) steps focus out one level; folds and edits work as normal within the
-focused subtree. `o` opens a `[[wiki-link]]` on the focused item (a chooser
+focused subtree. Editing keys act on whatever is focused: on an item, `e` edits,
+`space` cycles status, `a`/`A` add a child/sibling, `d` archives and `D` deletes;
+on a section, `e` renames its heading (contents intact; a name that collides with
+another section is refused) and `d` archives the whole section (Archive/Log are
+guarded); on the center node, `e` edits the board title and `a` adds a section.
+`o` opens a `[[wiki-link]]` on the focused item (a chooser
 appears when it has several). Long node text is truncated
 to 40 columns with a `…` (the full text shows in the footer); `w` expands the
 focused node in place as a wrapped multi-line block. `enter` cycles the focused

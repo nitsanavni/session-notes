@@ -904,7 +904,9 @@ func parentKeyOf(key string) string {
 func (m *model) startMapAdd() {
 	ref := m.mp.refs[m.mp.focus]
 	if ref.kind == refCenter {
-		m.status = "focus a section or item to add"
+		// a on the center adds a section: reuse the list view's add-sections
+		// overlay. mapView stays set, so confirming returns to the map.
+		m.openAddSections()
 		return
 	}
 	m.mapInputParent = nil
@@ -937,11 +939,17 @@ func (m *model) startMapAddSibling() {
 }
 
 // mapArchive moves the focused item (+ subtree) to ## Archive, like the list
-// view's d.
+// view's d. On a section node it archives the whole section (list view's d on a
+// header), keeping the "cannot archive Archive/Log" guards. The center is never
+// archivable.
 func (m *model) mapArchive() {
 	ref := m.mp.refs[m.mp.focus]
-	if ref.kind != refItem {
-		m.status = "only items can be archived from the map"
+	if ref.kind == refCenter {
+		m.status = "can't archive the title"
+		return
+	}
+	if ref.kind == refSection {
+		m.mapArchiveSection(ref.section)
 		return
 	}
 	it := ref.item
@@ -955,6 +963,80 @@ func (m *model) mapArchive() {
 	}
 }
 
+// mapArchiveSection archives the section named title (its items move to ##
+// Archive, the heading is removed), mirroring the list view's d on a header.
+// The Archive and Log sections refuse to be archived. Focus falls back to the
+// center after the section vanishes; the map re-layouts.
+func (m *model) mapArchiveSection(title string) {
+	sec := m.board.Section(title)
+	if sec == nil {
+		m.status = "section already gone"
+		return
+	}
+	m.snapshot()
+	if !m.board.ArchiveSection(sec) {
+		m.status = "can't archive this section"
+		return
+	}
+	m.migrateSectionState(title, "") // section gone: drop its per-title state
+	m.mapFocusKey = ""               // node vanished -> snap to center on rebuild
+	m.rebuildPositions()
+	m.saveWithRebase(pendingOp{typ: opArchiveSection, section: title})
+	m.mp = nil
+	m.status = "section archived"
+}
+
+// migrateSectionState moves (or drops, when newTitle is "") the list view's
+// per-section collapse override from oldTitle to newTitle. The map's own fold
+// and expand state is keyed by section INDEX ("sN"), not title, so a rename
+// leaves those keys pointing at the same (renamed) section with no migration —
+// only the title-keyed collapse map needs to follow. Migrating rather than
+// resetting keeps state attached to the right section and, crucially, prevents
+// stale state from leaking onto a later section that happens to reuse oldTitle.
+func (m *model) migrateSectionState(oldTitle, newTitle string) {
+	if m.collapsed == nil {
+		return
+	}
+	v, ok := m.collapsed[oldTitle]
+	if !ok {
+		return
+	}
+	delete(m.collapsed, oldTitle)
+	if newTitle != "" {
+		m.setCollapsed(newTitle, v)
+	}
+}
+
+// applyMapRename renames the section captured in m.mapInputSection to newTitle.
+// A no-op when the name is unchanged; refused (with a status error) when another
+// section already carries newTitle — merging sections is out of scope. On
+// success it migrates the list view's per-title collapse state and persists via
+// the rebase path (rebase matches by the OLD title, see applyOp's
+// opRenameSection). The caller already snapshotted for undo.
+func (m *model) applyMapRename(newTitle string) {
+	oldTitle := m.mapInputSection
+	if newTitle == oldTitle {
+		return // nothing changed
+	}
+	sec := m.board.Section(oldTitle)
+	if sec == nil {
+		m.status = "section already gone"
+		return
+	}
+	if m.board.Section(newTitle) != nil {
+		m.status = "a section named " + strconv.Quote(newTitle) + " already exists"
+		return
+	}
+	if !m.board.RenameSection(sec, newTitle) {
+		m.status = "rename refused"
+		return
+	}
+	m.migrateSectionState(oldTitle, newTitle)
+	m.rebuildPositions()
+	m.saveWithRebase(pendingOp{typ: opRenameSection, section: oldTitle, payload: newTitle})
+	m.status = "section renamed"
+}
+
 func (m *model) startMapEdit() {
 	ref := m.mp.refs[m.mp.focus]
 	if ref.kind == refCenter {
@@ -962,8 +1044,10 @@ func (m *model) startMapEdit() {
 		m.startTitleInput()
 		return
 	}
-	if ref.kind != refItem {
-		m.status = "only items are editable"
+	if ref.kind == refSection {
+		// e on a section renames its heading: pre-fill with the current title.
+		m.mapInputSection = ref.section
+		m.startInput(modeMapRename, ref.section, "rename section")
 		return
 	}
 	m.mapInputItem = ref.item
@@ -1005,6 +1089,8 @@ func (m *model) handleMapInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.mapInputItem.Text = text
 				m.saveWithRebase(op)
 			}
+		case modeMapRename:
+			m.applyMapRename(text)
 		}
 		m.mp = nil
 		return m, nil
@@ -1281,6 +1367,9 @@ func (m *model) viewMapFooter() string {
 	if m.mode == modeInputTitle {
 		return styleStatus.Render("title: ") + m.input.View()
 	}
+	if m.mode == modeMapRename {
+		return styleStatus.Render("rename section: ") + m.input.View()
+	}
 	if m.mode == modeMapAdd || m.mode == modeMapEdit {
 		label := "add"
 		if m.mode == modeMapEdit {
@@ -1316,7 +1405,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add · A sibling · e edit (title on center) · space status · d archive · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
+	hints := "hjkl move · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · d archive (item/section) · D delete · y copy path · M log · m list · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

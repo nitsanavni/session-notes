@@ -73,3 +73,36 @@ started: 2026-07-06T21:30:00+03:00
 		t.Fatalf("title-less round trip mismatch:\n%s", got)
 	}
 }
+
+func TestRenameSection(t *testing.T) {
+	b := Parse("## Threads\n- [ ] a\n\n## Ideas\n- [ ] b\n")
+	sec := b.Section("Threads")
+
+	if !b.RenameSection(sec, "Discussion") {
+		t.Fatalf("rename returned false")
+	}
+	if b.Section("Discussion") == nil || b.Section("Threads") != nil {
+		t.Fatalf("rename did not take: %+v", b.Sections)
+	}
+	if len(b.Section("Discussion").Items) == 0 || b.Section("Discussion").Items[0].Text != "a" {
+		t.Errorf("contents lost")
+	}
+	// Duplicate name refused.
+	if b.RenameSection(b.Section("Discussion"), "Ideas") {
+		t.Errorf("rename onto existing section should be refused")
+	}
+	// Empty name refused; nil refused; not-on-board refused.
+	if b.RenameSection(sec, "  ") {
+		t.Errorf("empty name should be refused")
+	}
+	if b.RenameSection(nil, "X") {
+		t.Errorf("nil section should be refused")
+	}
+	if b.RenameSection(&Section{Title: "Ghost"}, "X") {
+		t.Errorf("section not on board should be refused")
+	}
+	// No-op rename to same title succeeds.
+	if !b.RenameSection(b.Section("Ideas"), "Ideas") {
+		t.Errorf("no-op rename should succeed")
+	}
+}

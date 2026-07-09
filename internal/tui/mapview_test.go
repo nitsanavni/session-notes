@@ -696,3 +696,161 @@ func TestMapToggleFromListView(t *testing.T) {
 		t.Errorf("m in map view did not return to the list")
 	}
 }
+
+// TestMapRenameSectionPersists renames a section via e on its node and asserts
+// the heading changes, contents survive, and it persists to disk.
+func TestMapRenameSectionPersists(t *testing.T) {
+	src := "## Threads\n- [ ] keep me\n  - user: a reply\n"
+	m := newMapModel(t, src, 80, 24)
+	focusMapSection(t, m, "Threads")
+
+	m.handleMapKey(keyPress("e"))
+	if m.mode != modeMapRename {
+		t.Fatalf("e on a section did not enter rename mode, got %v", m.mode)
+	}
+	if m.input.Value() != "Threads" {
+		t.Fatalf("rename input not pre-filled with title, got %q", m.input.Value())
+	}
+	m.input.SetValue("Discussion")
+	m.handleMapInputKey(keyPress("enter"))
+
+	if m.board.Section("Discussion") == nil {
+		t.Fatalf("section not renamed in memory: %+v", m.board.Sections)
+	}
+	if m.board.Section("Threads") != nil {
+		t.Errorf("old section title still present")
+	}
+	sec := m.board.Section("Discussion")
+	if len(sec.Items) == 0 || sec.Items[0].Text != "keep me" {
+		t.Errorf("section contents lost on rename: %+v", sec.Items)
+	}
+	data, _ := os.ReadFile(m.path)
+	if !strings.Contains(string(data), "## Discussion") || !strings.Contains(string(data), "keep me") {
+		t.Errorf("rename not persisted with contents:\n%s", data)
+	}
+}
+
+// TestMapRenameSectionMigratesCollapseState asserts the list view's per-title
+// collapse override follows a rename and does not leak onto a later section that
+// reuses the old name. Map fold state (index-keyed) stays put automatically.
+func TestMapRenameSectionMigratesCollapseState(t *testing.T) {
+	src := "## Threads\n- [ ] x\n\n## Ideas\n- [ ] y\n"
+	m := newMapModel(t, src, 80, 24)
+	m.setCollapsed("Threads", true)
+	// Fold the section node in the map (index-keyed key "s0").
+	focusMapSection(t, m, "Threads")
+
+	m.handleMapKey(keyPress("e"))
+	m.input.SetValue("Discussion")
+	m.handleMapInputKey(keyPress("enter"))
+
+	if !m.sectionCollapsed("Discussion") {
+		t.Errorf("collapse state did not migrate to the renamed section")
+	}
+	if _, ok := m.collapsed["Threads"]; ok {
+		t.Errorf("stale collapse state left under old title")
+	}
+	if m.sectionCollapsed("Threads") {
+		t.Errorf("a section reusing the old name would inherit stale collapse state")
+	}
+}
+
+// TestMapRenameSectionDuplicateRefused asserts renaming onto an existing
+// section's name is refused (no merge) and leaves both sections intact.
+func TestMapRenameSectionDuplicateRefused(t *testing.T) {
+	src := "## Threads\n- [ ] a\n\n## Ideas\n- [ ] b\n"
+	m := newMapModel(t, src, 80, 24)
+	focusMapSection(t, m, "Threads")
+
+	m.handleMapKey(keyPress("e"))
+	m.input.SetValue("Ideas")
+	m.handleMapInputKey(keyPress("enter"))
+
+	if m.board.Section("Threads") == nil {
+		t.Errorf("Threads was lost on a refused rename")
+	}
+	count := 0
+	for _, s := range m.board.Sections {
+		if s.Title == "Ideas" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one Ideas section, got %d", count)
+	}
+	if m.status == "" {
+		t.Errorf("expected a status error on refused rename")
+	}
+}
+
+// TestMapAddSectionFromCenter asserts a on the center opens the add-sections
+// overlay and a chosen section lands on the board (returning to the map).
+func TestMapAddSectionFromCenter(t *testing.T) {
+	src := "## Threads\n- [ ] x\n"
+	m := newMapModel(t, src, 80, 24)
+	// focus is the center by default.
+	if m.mp.refs[m.mp.focus].kind != refCenter {
+		m.mp.focus = m.mp.root
+		m.mapFocusKey = ""
+	}
+	m.handleMapKey(keyPress("a"))
+	if m.mode != modeAddSections {
+		t.Fatalf("a on center did not open add-sections overlay, got %v", m.mode)
+	}
+	// Select the first offered canonical section and confirm.
+	m.addSel[0] = true
+	want := m.addOpts[0]
+	m.confirmAddSections()
+
+	if m.board.Section(want) == nil {
+		t.Errorf("selected section %q not added: %+v", want, m.board.Sections)
+	}
+	if !m.mapView {
+		t.Errorf("add-sections from map should return to the map")
+	}
+	data, _ := os.ReadFile(m.path)
+	if !strings.Contains(string(data), "## "+want) {
+		t.Errorf("section not persisted:\n%s", data)
+	}
+}
+
+// TestMapArchiveSection archives a whole section from its map node.
+func TestMapArchiveSection(t *testing.T) {
+	src := "## Threads\n- [ ] a task\n"
+	m := newMapModel(t, src, 80, 24)
+	focusMapSection(t, m, "Threads")
+
+	m.handleMapKey(keyPress("d"))
+
+	if m.board.Section("Threads") != nil {
+		t.Errorf("section not archived (still present)")
+	}
+	arch := m.board.Section(board.ArchiveTitle)
+	if arch == nil {
+		t.Fatalf("no Archive section created")
+	}
+	data, _ := os.ReadFile(m.path)
+	if !strings.Contains(string(data), "## Archive") || !strings.Contains(string(data), "a task") {
+		t.Errorf("archive not persisted:\n%s", data)
+	}
+}
+
+// TestMapArchiveSectionGuard asserts the Log section refuses to be archived from
+// the map, matching the list view guard.
+func TestMapArchiveSectionGuard(t *testing.T) {
+	src := "## Threads\n- [ ] x\n\n## Log\n- 09:00 started\n"
+	m := newMapModel(t, src, 80, 24)
+	m.mapShowLog = true
+	m.mp = nil
+	m.ensureMap()
+	focusMapSection(t, m, "Log")
+
+	m.handleMapKey(keyPress("d"))
+
+	if m.board.Section("Log") == nil {
+		t.Errorf("Log was archived despite the guard")
+	}
+	if m.status == "" {
+		t.Errorf("expected a status message when refusing to archive Log")
+	}
+}

@@ -59,7 +59,7 @@ func statusMarker(s board.Status) string {
 func (m *model) View() string {
 	if m.mapView {
 		switch m.mode {
-		case modeBoard, modeMapAdd, modeMapEdit, modeMapFeedback, modeInputTitle:
+		case modeBoard, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback, modeInputTitle:
 			return m.viewMap()
 		}
 	}
@@ -522,7 +522,9 @@ func (m *model) viewHelp() string {
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
 		{"y", "copy board file path to clipboard (shown in status)"},
 		{"m", "toggle the mindmap view (hjkl move · enter fold · a/e/space/D edit)"},
-		{"e (map center)", "edit the board title (same as T in the list view)"},
+		{"e (map)", "edit item · rename section · edit board title (on the center)"},
+		{"a (map)", "add child/sibling · add a section (on the center)"},
+		{"d (map)", "archive the focused item or whole section into ## Archive"},
 		{"f / b (map)", "focus into subtree (breadcrumbs) / focus out one level (also esc)"},
 		{"o (map)", "open the focused item's [[linked note]] (chooser if several)"},
 		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},

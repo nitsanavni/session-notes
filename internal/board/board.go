@@ -603,6 +603,33 @@ func (b *Board) ArchiveSection(sec *Section) bool {
 	return b.RemoveSection(sec)
 }
 
+// RenameSection changes sec's heading text to newTitle, leaving its contents
+// untouched. It refuses (returns false) when sec is not on the board, newTitle
+// is empty, or another section already carries newTitle — merging two sections
+// under one heading is out of scope. Renaming a section to its own current name
+// is a successful no-op.
+func (b *Board) RenameSection(sec *Section, newTitle string) bool {
+	newTitle = strings.TrimSpace(newTitle)
+	if sec == nil || newTitle == "" {
+		return false
+	}
+	found := false
+	for _, s := range b.Sections {
+		if s == sec {
+			found = true
+			continue
+		}
+		if s.Title == newTitle {
+			return false // would collide with (merge into) an existing section
+		}
+	}
+	if !found {
+		return false
+	}
+	sec.Title = newTitle
+	return true
+}
+
 // RemoveSection hard-deletes sec (header + all contents) from the board.
 // Returns false if sec is not on the board.
 func (b *Board) RemoveSection(sec *Section) bool {
