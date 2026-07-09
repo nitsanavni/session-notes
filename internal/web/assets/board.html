@@ -8,11 +8,13 @@
 :root {
   --bg: #f7f7f5; --fg: #1a1a1a; --dim: #77776f; --border: #e2e2dd;
   --accent: #4a7d5f; --urgent: #b3442e; --pin: #6b7fb3; --input: #ffffff;
+  --link: #6b7fb3;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #16161a; --fg: #dcdcd4; --dim: #8a8a82; --border: #2e2e34;
     --accent: #7fbf9a; --urgent: #e07a5f; --pin: #8ea3d8; --input: #1f1f24;
+    --link: #8ea3d8;
   }
 }
 * { box-sizing: border-box; }
@@ -26,7 +28,17 @@ header a { color: var(--dim); text-decoration: none; }
 #title { font-size: 1.05rem; font-weight: 600; cursor: pointer; }
 #title:hover::after { content: " ✎"; color: var(--dim); }
 header .dim { color: var(--dim); font-size: .85em; }
-h2 { font-size: .95rem; margin: 1.25rem 0 .25rem; color: var(--accent); font-weight: 600; }
+header .tools { margin-left: auto; display: flex; gap: .1rem; }
+header .tools button {
+  background: none; border: none; color: var(--dim); cursor: pointer;
+  font: inherit; padding: 0 .3rem; border-radius: 4px;
+}
+header .tools button:hover:not(:disabled) { color: var(--fg); background: var(--border); }
+header .tools button:disabled { opacity: .3; cursor: default; }
+.sechead { display: flex; align-items: baseline; gap: .4rem; margin: 1.25rem 0 .25rem; }
+.sechead h2 { font-size: .95rem; margin: 0; color: var(--accent); font-weight: 600; cursor: default; }
+.sechead .actions { visibility: hidden; }
+.sechead:hover .actions { visibility: visible; }
 ul { margin: 0; padding: 0; list-style: none; }
 ul ul { padding-left: 1.4rem; }
 li { padding: .1rem 0; }
@@ -41,6 +53,8 @@ li { padding: .1rem 0; }
 .done > .row .text { color: var(--dim); text-decoration: line-through; }
 .urgentflag { color: var(--urgent); font-weight: 700; }
 .pinflag { color: var(--pin); }
+.wikilink { color: var(--link); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+.wikilink.path { cursor: help; text-decoration-style: dashed; }
 .actions { visibility: hidden; flex: none; display: flex; gap: .15rem; }
 .row:hover .actions, .row:focus-within .actions { visibility: visible; }
 .actions button {
@@ -52,20 +66,44 @@ pre.cont {
   margin: .1rem 0 .1rem 1.55rem; padding: .3rem .5rem; overflow-x: auto;
   border-left: 2px solid var(--border); color: var(--dim); font: inherit; font-size: .9em;
 }
-input.inline, input.add {
+input.inline, input.add, input.addsec {
   width: 100%; font: inherit; color: var(--fg); background: var(--input);
   border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
 }
-input.add { margin: .3rem 0 0; opacity: .55; }
-input.add:focus, input.inline:focus { opacity: 1; outline: none; border-color: var(--accent); }
-details.archive summary { cursor: pointer; color: var(--dim); }
+input.add, input.addsec { margin: .3rem 0 0; opacity: .55; }
+input.addsec { margin-top: 2rem; }
+input.add:focus, input.addsec:focus, input.inline:focus { opacity: 1; outline: none; border-color: var(--accent); }
+details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 .25rem; }
 #log li { color: var(--dim); font-size: .92em; }
 #err {
   position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
   background: var(--urgent); color: #fff; padding: .4rem .9rem; border-radius: 6px;
-  opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 90vw;
+  opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 90vw; z-index: 30;
 }
 #err.show { opacity: 1; }
+#err.info { background: var(--accent); }
+#notemodal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  display: none; align-items: center; justify-content: center; z-index: 20;
+}
+#notemodal.open { display: flex; }
+#notemodal .panel {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  width: min(680px, 92vw); max-height: 84vh; display: flex; flex-direction: column;
+  padding: .9rem;
+}
+#notemodal .panel .bar { display: flex; align-items: baseline; gap: .6rem; margin-bottom: .6rem; }
+#notemodal .panel .bar b { flex: 1; }
+#notemodal textarea {
+  flex: 1; min-height: 320px; resize: vertical; font: inherit; font-size: .92em;
+  color: var(--fg); background: var(--input); border: 1px solid var(--border);
+  border-radius: 6px; padding: .5rem .6rem;
+}
+#notemodal button {
+  background: none; border: 1px solid var(--border); color: var(--fg); cursor: pointer;
+  font: inherit; font-size: .85em; padding: .15rem .6rem; border-radius: 6px;
+}
+#notemodal button:hover { border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -74,15 +112,29 @@ details.archive summary { cursor: pointer; color: var(--dim); }
   <span id="title" title="click to rename"></span>
   <span class="dim" id="sid"></span>
   <span class="dim" id="cwd"></span>
+  <span class="tools">
+    <button id="undo" title="undo last web edit (u)">↶</button>
+    <button id="redo" title="redo">↷</button>
+    <button id="copypath" title="copy board file path">⧉</button>
+  </span>
 </header>
 <main id="board"></main>
 <div id="err"></div>
+<div id="notemodal"><div class="panel">
+  <div class="bar"><b id="notename"></b><button id="notesave">save</button><button id="noteclose">close</button></div>
+  <textarea id="notetext" spellcheck="false"></textarea>
+</div></div>
 <script>
 const ID = decodeURIComponent(location.pathname.split('/').pop());
 const API = `/api/board/${encodeURIComponent(ID)}`;
 const MARKERS = { open: '[ ]', wip: '[>]', done: '[x]', blocked: '[?]', none: '·' };
 const NEXT = { open: 'wip', wip: 'done', done: 'open', blocked: 'open' };
 let cur = null;
+// While the user is typing in an inline input, live re-renders are deferred
+// (the TUI defers fsnotify reloads the same way); the freshest fetch lands
+// when the input closes, so your in-progress text is never destroyed.
+let inputsOpen = 0;
+let pendingRender = false;
 
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -95,25 +147,58 @@ const el = (tag, attrs = {}, ...kids) => {
   return n;
 };
 
-function toast(msg) {
+function toast(msg, info) {
   const e = document.getElementById('err');
   e.textContent = msg;
+  e.classList.toggle('info', !!info);
   e.classList.add('show');
-  setTimeout(() => e.classList.remove('show'), 2500);
+  setTimeout(() => e.classList.remove('show'), info ? 1500 : 3500);
 }
 
-async function post(body) {
+// post sends one edit. On failure the typed text (if any) is parked in the
+// section's add box rather than lost — the web analogue of the TUI rebase's
+// "target vanished → append as a new item" rule, but with a human in the loop.
+async function post(body, lostText) {
   const r = await fetch(`${API}/edit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!r.ok) {
+  const ok = r.ok;
+  if (!ok) {
     let msg = `edit failed (${r.status})`;
     try { msg = (await r.json()).error || msg; } catch {}
     toast(msg);
   }
-  await refresh();
+  await refresh(true);
+  if (!ok && lostText && body.section) {
+    const box = [...document.querySelectorAll('input.add')]
+      .find(i => i.dataset.section === body.section);
+    if (box) { box.value = lostText; box.focus(); }
+  }
+  return ok;
+}
+
+// linkify renders [[wiki-links]] as live elements. Side notes open the note
+// modal; path links are deliberately inert (the server would otherwise become
+// a general file server) and say so on hover.
+function linkify(target, text) {
+  const re = /\[\[([^\[\]]+)\]\]/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    target.append(text.slice(last, m.index));
+    const name = m[1].trim();
+    const isPath = name.includes('/') || name.startsWith('~');
+    const span = el('span', {
+      class: 'wikilink' + (isPath ? ' path' : ''),
+      title: isPath ? `path link — resolved against the session cwd; open ${name} in your editor`
+                    : `side note — click to open`,
+    }, m[0]);
+    if (!isPath) span.addEventListener('click', ev => { ev.stopPropagation(); openNote(name); });
+    target.append(span);
+    last = m.index + m[0].length;
+  }
+  target.append(text.slice(last));
 }
 
 function itemNode(section, it) {
@@ -134,19 +219,25 @@ function itemNode(section, it) {
   const text = el('span', { class: 'text' });
   if (it.urgent) text.append(el('span', { class: 'urgentflag' }, '!! '));
   if (it.pinned) text.append(el('span', { class: 'pinflag' }, '⚲ '));
-  text.append(it.text);
+  linkify(text, it.text);
   text.addEventListener('dblclick', () => {
-    inlineInput(row, it.text, v => post({ op: 'edit', section, raw: it.raw, text: v }));
+    inlineInput(row, it.text, v => post({ op: 'edit', section, raw: it.raw, text: v }, v));
   });
   row.append(text);
 
+  const replyInput = op => {
+    const holder = el('li');
+    li.after(holder);
+    inlineInput(holder, 'user: ',
+      v => post({ op, section, raw: it.raw, text: v }, v).then(() => holder.remove()),
+      () => holder.remove());
+  };
   row.append(el('div', { class: 'actions' },
-    el('button', { title: 'reply', onclick: () => {
-      const holder = el('li');
-      li.after(holder);
-      inlineInput(holder, 'user: ', v => post({ op: 'reply', section, raw: it.raw, text: v }), () => holder.remove());
-    } }, '↩'),
+    el('button', { title: 'reply in thread (flat)', onclick: () => replyInput('reply') }, '↩'),
+    el('button', { title: 'fork a sub-thread here', onclick: () => replyInput('fork') }, '⑂'),
     el('button', { title: 'toggle urgent', onclick: () => post({ op: 'urgent', section, raw: it.raw, urgent: !it.urgent }) }, '!!'),
+    el('button', { title: it.status === 'blocked' ? 'unblock' : 'mark blocked [?]', onclick: () =>
+      post({ op: 'status', section, raw: it.raw, status: it.status === 'blocked' ? 'open' : 'blocked' }) }, '[?]'),
     el('button', { title: 'archive', onclick: () => post({ op: 'archive', section, raw: it.raw }) }, '⤓'),
     el('button', { title: 'delete', onclick: () => {
       if (confirm('Delete this item and its replies?')) post({ op: 'delete', section, raw: it.raw });
@@ -164,14 +255,20 @@ function itemNode(section, it) {
 
 function inlineInput(holder, initial, submit, cancel) {
   const prev = [...holder.childNodes];
+  const close = () => {
+    inputsOpen--;
+    if (holder.isConnected) { holder.textContent = ''; holder.append(...prev); }
+    if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
+  };
   holder.textContent = '';
   const inp = el('input', { class: 'inline', value: initial });
+  inputsOpen++;
   inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && inp.value.trim()) submit(inp.value.trim());
-    if (e.key === 'Escape') { holder.textContent = ''; holder.append(...prev); if (cancel) cancel(); }
+    if (e.key === 'Enter' && inp.value.trim()) { const v = inp.value.trim(); close(); submit(v); }
+    if (e.key === 'Escape') { close(); if (cancel) cancel(); }
   });
   inp.addEventListener('blur', () => {
-    setTimeout(() => { if (holder.contains(inp)) { holder.textContent = ''; holder.append(...prev); if (cancel) cancel(); } }, 150);
+    setTimeout(() => { if (holder.contains(inp)) { close(); if (cancel) cancel(); } }, 150);
   });
   holder.append(inp);
   inp.focus();
@@ -181,28 +278,51 @@ function inlineInput(holder, initial, submit, cancel) {
 function addInput(section, isLog) {
   const inp = el('input', {
     class: 'add',
+    'data-section': section,
     placeholder: isLog ? '+ log entry' : `+ add to ${section}`,
   });
   inp.addEventListener('keydown', e => {
     if (e.key === 'Enter' && inp.value.trim()) {
       const v = inp.value.trim();
       inp.value = '';
-      post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v });
+      post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v }, v);
     }
   });
   return inp;
 }
 
+function sectionHead(title) {
+  const head = el('div', { class: 'sechead' });
+  const h = el('h2', { title: 'double-click to rename' }, title);
+  h.addEventListener('dblclick', () => {
+    inlineInput(head, title, v => post({ op: 'rename-section', section: title, text: v }));
+  });
+  head.append(h);
+  const guarded = title === 'Log' || title === 'Archive';
+  head.append(el('div', { class: 'actions' },
+    ...(guarded ? [] : [el('button', { title: 'archive whole section', onclick: () =>
+      post({ op: 'archive-section', section: title }) }, '⤓')]),
+    el('button', { title: 'delete section and contents', onclick: () => {
+      if (confirm(`Hard-delete section "${title}" and everything in it?`)) post({ op: 'delete-section', section: title });
+    } }, '✕'),
+  ));
+  return head;
+}
+
 function render(b) {
+  if (!b) return;
+  if (inputsOpen > 0) { pendingRender = true; return; }
   document.title = (b.title || shortId(b.session || b.id)) + ' — session-notes';
   document.getElementById('title').textContent = b.title || shortId(b.session || b.id);
   document.getElementById('sid').textContent = shortId(b.session || b.id);
   document.getElementById('cwd').textContent = b.cwd || '';
+  document.getElementById('undo').disabled = !b.canUndo;
+  document.getElementById('redo').disabled = !b.canRedo;
 
   const main = document.getElementById('board');
   const focused = document.activeElement;
-  const keep = focused && focused.classList && focused.classList.contains('add')
-    ? { ph: focused.placeholder, val: focused.value } : null;
+  const keep = focused && focused.classList && (focused.classList.contains('add') || focused.classList.contains('addsec'))
+    ? { sec: focused.dataset.section, val: focused.value } : null;
 
   main.textContent = '';
   for (const sec of b.sections || []) {
@@ -213,16 +333,23 @@ function render(b) {
 
     if (isArchive) {
       const n = countItems(sec.items);
-      const det = el('details', { class: 'archive' }, el('summary', {}, `Archive (${n})`), list);
-      main.append(el('h2', {}, ''), det);
+      main.append(el('details', { class: 'archive' }, el('summary', {}, `Archive (${n})`), list));
       continue;
     }
-    main.append(el('h2', {}, sec.title), list);
-    main.append(addInput(sec.title, isLog));
+    main.append(sectionHead(sec.title), list, addInput(sec.title, isLog));
   }
+  const addSec = el('input', { class: 'addsec', 'data-section': ' new-section', placeholder: '+ add section' });
+  addSec.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && addSec.value.trim()) {
+      const v = addSec.value.trim();
+      addSec.value = '';
+      post({ op: 'add-section', text: v });
+    }
+  });
+  main.append(addSec);
 
   if (keep) {
-    const again = [...main.querySelectorAll('input.add')].find(i => i.placeholder === keep.ph);
+    const again = [...main.querySelectorAll('input.add, input.addsec')].find(i => i.dataset.section === keep.sec);
     if (again) { again.value = keep.val; again.focus(); }
   }
 }
@@ -234,17 +361,60 @@ document.getElementById('title').addEventListener('click', () => {
   const holder = document.getElementById('title');
   inlineInput(holder, cur && cur.title || '', v => post({ op: 'title', text: v }));
 });
+document.getElementById('undo').addEventListener('click', () => post({ op: 'undo' }));
+document.getElementById('redo').addEventListener('click', () => post({ op: 'redo' }));
+document.getElementById('copypath').addEventListener('click', async () => {
+  if (!cur) return;
+  try { await navigator.clipboard.writeText(cur.path); toast('copied ' + cur.path, true); }
+  catch { toast(cur.path, true); }
+});
+document.addEventListener('keydown', e => {
+  const typing = /INPUT|TEXTAREA/.test(document.activeElement && document.activeElement.tagName);
+  if (typing) return;
+  if (e.key === 'u') post({ op: 'undo' });
+  if (e.key === 'r' && e.ctrlKey) { e.preventDefault(); post({ op: 'redo' }); }
+});
 
-async function refresh() {
+// ---- side-note modal ----
+let noteOpen = null;
+async function openNote(name) {
+  const r = await fetch(`${API}/note/${encodeURIComponent(name)}`);
+  if (!r.ok) { toast(`cannot open note ${name}`); return; }
+  const n = await r.json();
+  noteOpen = name;
+  document.getElementById('notename').textContent = `[[${name}]]${n.exists ? '' : ' (new)'}`;
+  document.getElementById('notetext').value = n.content;
+  document.getElementById('notemodal').classList.add('open');
+  document.getElementById('notetext').focus();
+}
+function closeNote() {
+  noteOpen = null;
+  document.getElementById('notemodal').classList.remove('open');
+}
+document.getElementById('noteclose').addEventListener('click', closeNote);
+document.getElementById('notesave').addEventListener('click', async () => {
+  const r = await fetch(`${API}/note/${encodeURIComponent(noteOpen)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: document.getElementById('notetext').value }),
+  });
+  if (r.ok) { toast('note saved', true); closeNote(); } else toast('save failed');
+});
+document.getElementById('notemodal').addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeNote();
+});
+
+async function refresh(force) {
   try {
     cur = await (await fetch(API)).json();
-    render(cur);
+    if (force && inputsOpen === 0) { render(cur); return; }
+    render(cur); // render() itself defers when an input is open
   } catch { /* transient; SSE or next action will retry */ }
 }
 
 refresh();
 const es = new EventSource(`${API}/events`);
-es.onmessage = refresh;
+es.onmessage = () => refresh();
 </script>
 </body>
 </html>

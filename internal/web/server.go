@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
@@ -31,15 +32,34 @@ const (
 )
 
 // Server holds the web UI's state: boards registered explicitly (paths outside
-// the boards dir) and an optional home board that "/" redirects to.
+// the boards dir), an optional home board that "/" redirects to, and a
+// per-board undo history of this server's own writes.
 type Server struct {
 	extra map[string]string // board id -> explicit path
 	home  string            // board id "/" redirects to ("" = dashboard)
+
+	// mu serializes web edits and guards the history stacks. Web-originated
+	// writes are rare and human-paced; one lock keeps undo bookkeeping simple.
+	mu   sync.Mutex
+	hist map[string][]histEntry // board path -> undo stack (oldest first)
+	redo map[string][]histEntry // board path -> redo stack
 }
+
+// histEntry is one web edit: the full board content before and after. Undo
+// only applies when the board still reads exactly `after` — an intervening
+// write from Claude or the TUI refuses the undo instead of clobbering it.
+type histEntry struct{ before, after string }
+
+// histLimit bounds the per-board undo stack, mirroring the TUI's depth.
+const histLimit = 100
 
 // New returns an empty server; boards in board.BoardsDir() are always visible.
 func New() *Server {
-	return &Server{extra: map[string]string{}}
+	return &Server{
+		extra: map[string]string{},
+		hist:  map[string][]histEntry{},
+		redo:  map[string][]histEntry{},
+	}
 }
 
 // Register makes a board outside the boards directory reachable, returning the
@@ -73,6 +93,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/board/{id}", s.handleBoard)
 	mux.HandleFunc("POST /api/board/{id}/edit", s.handleEdit)
 	mux.HandleFunc("GET /api/board/{id}/events", s.handleEvents)
+	mux.HandleFunc("GET /api/board/{id}/note/{name}", s.handleNoteGet)
+	mux.HandleFunc("POST /api/board/{id}/note/{name}", s.handleNotePut)
 	return mux
 }
 
@@ -140,6 +162,9 @@ type boardJSON struct {
 	Session  string        `json:"session"`
 	Title    string        `json:"title"`
 	Cwd      string        `json:"cwd"`
+	Path     string        `json:"path"`
+	CanUndo  bool          `json:"canUndo"`
+	CanRedo  bool          `json:"canRedo"`
 	Sections []sectionJSON `json:"sections"`
 }
 
@@ -215,11 +240,17 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.mu.Lock()
+	canUndo, canRedo := len(s.hist[path]) > 0, len(s.redo[path]) > 0
+	s.mu.Unlock()
 	resp := boardJSON{
 		ID:      id,
 		Session: b.Frontmatter.Session,
 		Title:   b.Frontmatter.Title,
 		Cwd:     b.Frontmatter.Cwd,
+		Path:    path,
+		CanUndo: canUndo,
+		CanRedo: canRedo,
 	}
 	for _, sec := range b.Sections {
 		resp.Sections = append(resp.Sections, sectionJSON{Title: sec.Title, Items: itemsJSON(sec.Items)})
@@ -362,7 +393,10 @@ func classify(mtime, now time.Time) (liveness, ago string) {
 // section title + verbatim raw line (the same identity the TUI's rebase uses),
 // with a normalized-text fallback when the line drifted cosmetically.
 type editReq struct {
-	Op      string `json:"op"` // add | reply | edit | status | urgent | archive | delete | log | title
+	// Op: add | reply | fork | edit | status | urgent | archive | delete |
+	// log | title | add-section | rename-section | archive-section |
+	// delete-section | undo | redo
+	Op      string `json:"op"`
 	Section string `json:"section"`
 	Raw     string `json:"raw"`
 	Text    string `json:"text"`
@@ -374,6 +408,7 @@ type editReq struct {
 var (
 	errNotFound = errors.New("item not found (board changed?)")
 	errBadReq   = errors.New("bad request")
+	errConflict = errors.New("conflict")
 )
 
 func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
@@ -387,24 +422,74 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
 	}
-	err := board.EditUnderLock(path, "", func(content string) (string, error) {
-		b := board.Parse(content)
-		b.Path = path
-		if err := applyEdit(b, req); err != nil {
-			return "", err
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var err error
+	switch req.Op {
+	case "undo":
+		err = s.timeTravel(path, s.hist, s.redo, func(e histEntry) (string, string) { return e.after, e.before })
+	case "redo":
+		err = s.timeTravel(path, s.redo, s.hist, func(e histEntry) (string, string) { return e.before, e.after })
+	default:
+		var entry histEntry
+		err = board.EditUnderLock(path, "", func(content string) (string, error) {
+			b := board.Parse(content)
+			b.Path = path
+			if aerr := applyEdit(b, req); aerr != nil {
+				return "", aerr
+			}
+			out := b.Render()
+			entry = histEntry{before: content, after: out}
+			return out, nil
+		})
+		if err == nil && entry.before != entry.after {
+			s.hist[path] = append(s.hist[path], entry)
+			if len(s.hist[path]) > histLimit {
+				s.hist[path] = s.hist[path][1:]
+			}
+			s.redo[path] = nil // a fresh edit invalidates the redo line
 		}
-		return b.Render(), nil
-	})
+	}
+
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, errNotFound):
+	case errors.Is(err, errNotFound), errors.Is(err, errConflict):
 		httpErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, errBadReq):
 		httpErr(w, http.StatusBadRequest, err.Error())
 	default:
 		httpErr(w, http.StatusInternalServerError, err.Error())
 	}
+}
+
+// timeTravel pops the top of `from` and writes its other side, but only when
+// the board on disk still reads exactly the state this server last left it in
+// — an intervening write from Claude or the TUI refuses with a conflict
+// rather than silently discarding that write. A successful move lands the
+// entry on `to`, so undo and redo are the same walk in opposite directions.
+// Callers hold s.mu.
+func (s *Server) timeTravel(path string, from, to map[string][]histEntry, pick func(histEntry) (expect, restore string)) error {
+	stack := from[path]
+	if len(stack) == 0 {
+		return fmt.Errorf("%w: nothing to undo/redo", errBadReq)
+	}
+	entry := stack[len(stack)-1]
+	expect, restore := pick(entry)
+	err := board.EditUnderLock(path, "", func(content string) (string, error) {
+		if content != expect {
+			return "", fmt.Errorf("%w: the board changed since the last web edit; undo/redo refused", errConflict)
+		}
+		return restore, nil
+	})
+	if err != nil {
+		return err
+	}
+	from[path] = stack[:len(stack)-1]
+	to[path] = append(to[path], entry)
+	return nil
 }
 
 func applyEdit(b *board.Board, req editReq) error {
@@ -427,6 +512,16 @@ func applyEdit(b *board.Board, req editReq) error {
 		}
 		b.AddItem(req.Section, req.Text)
 	case "reply":
+		// In-thread semantics (the TUI's R): flat conversations. Fork nests.
+		it, err := locate()
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(req.Text) == "" {
+			return fmt.Errorf("%w: empty text", errBadReq)
+		}
+		b.ReplyFlat(it, req.Text)
+	case "fork":
 		it, err := locate()
 		if err != nil {
 			return err
@@ -492,10 +587,127 @@ func applyEdit(b *board.Board, req editReq) error {
 		b.AppendLog(author, req.Text)
 	case "title":
 		b.SetTitle(req.Text)
+	case "add-section":
+		title := strings.TrimSpace(req.Text)
+		if title == "" {
+			return fmt.Errorf("%w: empty section title", errBadReq)
+		}
+		if b.Section(title) != nil {
+			return fmt.Errorf("%w: section %q already exists", errBadReq, title)
+		}
+		b.AddSection(title)
+	case "rename-section":
+		sec := b.Section(req.Section)
+		if sec == nil {
+			return errNotFound
+		}
+		if !b.RenameSection(sec, strings.TrimSpace(req.Text)) {
+			return fmt.Errorf("%w: cannot rename to %q (empty or duplicate title)", errBadReq, req.Text)
+		}
+	case "archive-section":
+		sec := b.Section(req.Section)
+		if sec == nil {
+			return errNotFound
+		}
+		if !b.ArchiveSection(sec) {
+			return fmt.Errorf("%w: the %s section cannot be archived", errBadReq, req.Section)
+		}
+	case "delete-section":
+		sec := b.Section(req.Section)
+		if sec == nil {
+			return errNotFound
+		}
+		b.RemoveSection(sec)
 	default:
 		return fmt.Errorf("%w: unknown op %q", errBadReq, req.Op)
 	}
 	return nil
+}
+
+// ---- side notes ----
+
+// noteFile validates a [[name]] side-note link and returns its file path.
+// Only plain side notes are servable: path-form links ([[with/slash]], [[~/x]])
+// address arbitrary files relative to the session cwd, and exposing those over
+// HTTP would turn the board server into a general file server — the browser
+// renders them inert instead.
+func noteFile(b *board.Board, name string) (string, error) {
+	if name == "" || board.IsPathLink(name) || strings.Contains(name, "..") || strings.ContainsAny(name, "\\") {
+		return "", fmt.Errorf("%w: not a side-note name", errBadReq)
+	}
+	return board.ResolveLink(b, name), nil
+}
+
+func (s *Server) handleNoteGet(w http.ResponseWriter, r *http.Request) {
+	path := s.resolve(r.PathValue("id"))
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	b, err := board.Load(path)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	name := r.PathValue("name")
+	notePath, err := noteFile(b, name)
+	if err != nil {
+		httpErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	data, err := os.ReadFile(notePath)
+	if os.IsNotExist(err) {
+		// Same seed the TUI uses when opening a missing side note — but created
+		// lazily on first save, not on read.
+		writeJSON(w, map[string]any{"name": name, "content": "# " + name + "\n", "exists": false})
+		return
+	}
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"name": name, "content": string(data), "exists": true})
+}
+
+func (s *Server) handleNotePut(w http.ResponseWriter, r *http.Request) {
+	path := s.resolve(r.PathValue("id"))
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	b, err := board.Load(path)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	notePath, err := noteFile(b, r.PathValue("name"))
+	if err != nil {
+		httpErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(notePath), 0o755); err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Atomic replace, same discipline as board writes (notes have no lock:
+	// they are single-writer in practice, and a torn read is still prevented).
+	tmp := notePath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(req.Content), 0o644); err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := os.Rename(tmp, notePath); err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---- live updates ----

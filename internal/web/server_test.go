@@ -297,6 +297,194 @@ func TestRegisterAndHome(t *testing.T) {
 	}
 }
 
+func TestReplySemantics(t *testing.T) {
+	h, path := newTestServer(t)
+	if err := os.WriteFile(path, []byte(`---
+session: abc-123
+cwd: /tmp/proj
+started: 2026-07-09T10:00:00Z
+---
+
+## Questions
+- [ ] q? @user
+  - user: first
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// reply on a reply stays flat: sibling under the top item.
+	w := do(t, h, "POST", "/api/board/abc-123/edit",
+		`{"op":"reply","section":"Questions","raw":"  - user: first","text":"claude: second"}`)
+	if w.Code != 204 {
+		t.Fatalf("reply: %d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(boardFile(t, path), "\n  - claude: second\n") {
+		t.Fatalf("flat reply missing:\n%s", boardFile(t, path))
+	}
+
+	// fork on the same reply nests beneath it.
+	w = do(t, h, "POST", "/api/board/abc-123/edit",
+		`{"op":"fork","section":"Questions","raw":"  - user: first","text":"claude: aside"}`)
+	if w.Code != 204 {
+		t.Fatalf("fork: %d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(boardFile(t, path), "\n    - claude: aside\n") {
+		t.Fatalf("fork not nested:\n%s", boardFile(t, path))
+	}
+}
+
+func TestSectionOps(t *testing.T) {
+	h, path := newTestServer(t)
+
+	// add-section
+	w := do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"add-section","text":"Spikes"}`)
+	if w.Code != 204 {
+		t.Fatalf("add-section: %d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(boardFile(t, path), "## Spikes") {
+		t.Fatalf("section missing:\n%s", boardFile(t, path))
+	}
+	// duplicate refused
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"add-section","text":"Spikes"}`); w.Code != 400 {
+		t.Errorf("duplicate add-section: want 400, got %d", w.Code)
+	}
+
+	// rename, collision refused
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"rename-section","section":"Spikes","text":"Experiments"}`); w.Code != 204 {
+		t.Fatalf("rename-section: %d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(boardFile(t, path), "## Experiments") {
+		t.Fatalf("rename missing:\n%s", boardFile(t, path))
+	}
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"rename-section","section":"Experiments","text":"Log"}`); w.Code != 400 {
+		t.Errorf("rename collision: want 400, got %d", w.Code)
+	}
+
+	// archive-section moves contents; Log is guarded
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"add","section":"Experiments","text":"try it"}`); w.Code != 204 {
+		t.Fatal("seed item")
+	}
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"archive-section","section":"Experiments"}`); w.Code != 204 {
+		t.Fatalf("archive-section: %d %s", w.Code, w.Body)
+	}
+	content := boardFile(t, path)
+	if strings.Contains(content, "## Experiments") || !strings.Contains(content, "## Archive") {
+		t.Fatalf("archive-section wrong:\n%s", content)
+	}
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"archive-section","section":"Log"}`); w.Code != 400 {
+		t.Errorf("archiving Log: want 400, got %d", w.Code)
+	}
+
+	// delete-section
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"delete-section","section":"Parked"}`); w.Code != 204 {
+		t.Fatalf("delete-section: %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(boardFile(t, path), "## Parked") {
+		t.Error("Parked still present after delete-section")
+	}
+}
+
+func TestUndoRedo(t *testing.T) {
+	h, path := newTestServer(t)
+	orig := boardFile(t, path)
+
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"add","section":"Ideas","text":"one"}`); w.Code != 204 {
+		t.Fatal("add one")
+	}
+	afterOne := boardFile(t, path)
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"add","section":"Ideas","text":"two"}`); w.Code != 204 {
+		t.Fatal("add two")
+	}
+
+	// undo twice walks back both edits
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"undo"}`); w.Code != 204 {
+		t.Fatalf("undo 1: %d %s", w.Code, w.Body)
+	}
+	if got := boardFile(t, path); got != afterOne {
+		t.Fatalf("undo 1: got\n%s\nwant\n%s", got, afterOne)
+	}
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"undo"}`); w.Code != 204 {
+		t.Fatalf("undo 2: %d %s", w.Code, w.Body)
+	}
+	if got := boardFile(t, path); got != orig {
+		t.Fatalf("undo 2 did not restore original")
+	}
+
+	// redo replays
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"redo"}`); w.Code != 204 {
+		t.Fatalf("redo: %d %s", w.Code, w.Body)
+	}
+	if got := boardFile(t, path); got != afterOne {
+		t.Fatalf("redo did not reapply first edit")
+	}
+
+	// an external write (Claude, TUI) between edit and undo refuses with 409
+	if err := os.WriteFile(path, []byte(afterOne+"- external\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if w := do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"undo"}`); w.Code != http.StatusConflict {
+		t.Errorf("undo over external write: want 409, got %d %s", w.Code, w.Body)
+	}
+
+	// empty stack refuses politely
+	h2, _ := newTestServer(t)
+	if w := do(t, h2, "POST", "/api/board/abc-123/edit", `{"op":"undo"}`); w.Code != 400 {
+		t.Errorf("undo on empty history: want 400, got %d", w.Code)
+	}
+}
+
+func TestNotesAPI(t *testing.T) {
+	h, _ := newTestServer(t)
+
+	// missing note reads as a seeded draft, not an error, and is not created
+	w := do(t, h, "GET", "/api/board/abc-123/note/design", "")
+	if w.Code != 200 {
+		t.Fatalf("note get: %d %s", w.Code, w.Body)
+	}
+	var n struct {
+		Content string `json:"content"`
+		Exists  bool   `json:"exists"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &n); err != nil {
+		t.Fatal(err)
+	}
+	if n.Exists || !strings.HasPrefix(n.Content, "# design") {
+		t.Errorf("seed: %+v", n)
+	}
+	notePath := filepath.Join(board.BoardsDir(), "abc-123.notes", "design.md")
+	if _, err := os.Stat(notePath); !os.IsNotExist(err) {
+		t.Error("GET must not create the note")
+	}
+
+	// save creates it
+	w = do(t, h, "POST", "/api/board/abc-123/note/design", `{"content":"# design\n\nhello\n"}`)
+	if w.Code != 204 {
+		t.Fatalf("note save: %d %s", w.Code, w.Body)
+	}
+	data, err := os.ReadFile(notePath)
+	if err != nil || !strings.Contains(string(data), "hello") {
+		t.Fatalf("note content: %q err %v", data, err)
+	}
+
+	// path-form and traversal names are refused at the HTTP layer (".."
+	// alone never reaches the handler — the mux 307-normalizes it away)...
+	for _, bad := range []string{"a..b", "~x"} {
+		if w = do(t, h, "GET", "/api/board/abc-123/note/"+bad, ""); w.Code != 400 {
+			t.Errorf("bad note name %q: want 400, got %d", bad, w.Code)
+		}
+	}
+	if w = do(t, h, "GET", "/api/board/abc-123/note/with%2Fslash", ""); w.Code == 200 {
+		t.Error("path-form note name must not be served")
+	}
+	// ...and the validator itself refuses every escape shape directly.
+	bd := &board.Board{}
+	for _, bad := range []string{"", "..", "a..b", "a/b", "/abs", "~home", `a\b`} {
+		if _, err := noteFile(bd, bad); err == nil {
+			t.Errorf("noteFile(%q): expected error", bad)
+		}
+	}
+}
+
 func TestFileStamp(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.md")
