@@ -911,6 +911,16 @@ func (m *model) viewMapFooter() string {
 		label := "add"
 		if m.mode == modeMapEdit {
 			label = "edit"
+		} else {
+			parent := ""
+			if m.mapInputParent != nil {
+				parent = m.mapInputParent.Text
+			} else if m.mapInputSection != "" {
+				parent = m.mapInputSection
+			}
+			if parent != "" {
+				label = "add under " + strconv.Quote(ansi.Truncate(parent, 40, "…"))
+			}
 		}
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
