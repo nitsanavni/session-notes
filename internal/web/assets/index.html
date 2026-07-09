@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>session-notes</title>
+<style>
+:root {
+  --bg: #f7f7f5; --fg: #1a1a1a; --dim: #77776f; --card: #ffffff;
+  --border: #e2e2dd; --accent: #4a7d5f; --urgent: #b3442e;
+  --active: #3fae62; --idle: #c9a03c; --gone: #a0a09a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161a; --fg: #dcdcd4; --dim: #8a8a82; --card: #1f1f24;
+    --border: #2e2e34; --accent: #7fbf9a; --urgent: #e07a5f;
+    --active: #57c878; --idle: #d4b356; --gone: #5c5c60;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 1.5rem; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+h1 { font-size: 1.05rem; font-weight: 600; margin: 0 0 1rem; }
+h1 .dim { color: var(--dim); font-weight: 400; }
+#cards { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+a.card {
+  display: block; background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; padding: .75rem .9rem; text-decoration: none; color: var(--fg);
+}
+a.card:hover { border-color: var(--accent); }
+.card .head { display: flex; align-items: baseline; gap: .5rem; }
+.card .name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .ago { color: var(--dim); font-size: .85em; }
+.dot { display: inline-block; width: .6em; height: .6em; border-radius: 50%; flex: none; }
+.dot.active { background: var(--active); }
+.dot.idle { background: var(--idle); }
+.dot.gone { background: transparent; border: 1px solid var(--gone); }
+.card ul { margin: .4rem 0 0; padding: 0; list-style: none; }
+.card li { color: var(--dim); font-size: .9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card li.thread::before { content: "[>] "; color: var(--accent); }
+.card li.urgent { color: var(--urgent); }
+.card li.urgent::before { content: "!! "; }
+.card .cwd { margin-top: .35rem; color: var(--dim); font-size: .8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#empty { color: var(--dim); }
+</style>
+</head>
+<body>
+<h1>session dashboard <span class="dim" id="count"></span></h1>
+<div id="cards"></div>
+<p id="empty" hidden>No boards yet — start a Claude Code session with the session-notes hooks installed.</p>
+<script>
+const esc = s => { const d = document.createElement('span'); d.textContent = s; return d.innerHTML; };
+
+async function refresh() {
+  let data;
+  try { data = await (await fetch('/api/boards')).json(); } catch { return; }
+  const boards = data.boards || [];
+  document.getElementById('count').textContent = boards.length ? `· ${boards.length} boards` : '';
+  document.getElementById('empty').hidden = boards.length > 0;
+  document.getElementById('cards').innerHTML = boards.map(b => `
+    <a class="card" href="/b/${encodeURIComponent(b.id)}">
+      <div class="head">
+        <span class="dot ${b.liveness}"></span>
+        <span class="name">${esc(b.name)}</span>
+        <span class="ago">${esc(b.ago || '')}</span>
+      </div>
+      <ul>
+        ${(b.threads || []).map(t => `<li class="thread">${esc(t)}</li>`).join('')}
+        ${(b.urgent || []).map(u => `<li class="urgent">${esc(u)}</li>`).join('')}
+        ${b.lastLog ? `<li>${esc(b.lastLog)}</li>` : ''}
+      </ul>
+      <div class="cwd">${esc(b.cwd || '')}</div>
+    </a>`).join('');
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

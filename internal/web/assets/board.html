@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>session-notes</title>
+<style>
+:root {
+  --bg: #f7f7f5; --fg: #1a1a1a; --dim: #77776f; --border: #e2e2dd;
+  --accent: #4a7d5f; --urgent: #b3442e; --pin: #6b7fb3; --input: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16161a; --fg: #dcdcd4; --dim: #8a8a82; --border: #2e2e34;
+    --accent: #7fbf9a; --urgent: #e07a5f; --pin: #8ea3d8; --input: #1f1f24;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; padding: 1.5rem 1.25rem 4rem; max-width: 780px;
+  background: var(--bg); color: var(--fg);
+  font: 15px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+header { display: flex; align-items: baseline; gap: .6rem; margin-bottom: 1rem; flex-wrap: wrap; }
+header a { color: var(--dim); text-decoration: none; }
+#title { font-size: 1.05rem; font-weight: 600; cursor: pointer; }
+#title:hover::after { content: " ✎"; color: var(--dim); }
+header .dim { color: var(--dim); font-size: .85em; }
+h2 { font-size: .95rem; margin: 1.25rem 0 .25rem; color: var(--accent); font-weight: 600; }
+ul { margin: 0; padding: 0; list-style: none; }
+ul ul { padding-left: 1.4rem; }
+li { padding: .1rem 0; }
+.row { display: flex; align-items: baseline; gap: .45rem; }
+.marker {
+  cursor: pointer; user-select: none; flex: none; color: var(--dim);
+  background: none; border: none; font: inherit; padding: 0;
+}
+.marker.wip { color: var(--accent); font-weight: 600; }
+.marker.blocked { color: var(--urgent); }
+.text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.done > .row .text { color: var(--dim); text-decoration: line-through; }
+.urgentflag { color: var(--urgent); font-weight: 700; }
+.pinflag { color: var(--pin); }
+.actions { visibility: hidden; flex: none; display: flex; gap: .15rem; }
+.row:hover .actions, .row:focus-within .actions { visibility: visible; }
+.actions button {
+  background: none; border: none; color: var(--dim); cursor: pointer;
+  font: inherit; font-size: .85em; padding: 0 .2rem; border-radius: 4px;
+}
+.actions button:hover { color: var(--fg); background: var(--border); }
+pre.cont {
+  margin: .1rem 0 .1rem 1.55rem; padding: .3rem .5rem; overflow-x: auto;
+  border-left: 2px solid var(--border); color: var(--dim); font: inherit; font-size: .9em;
+}
+input.inline, input.add {
+  width: 100%; font: inherit; color: var(--fg); background: var(--input);
+  border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
+}
+input.add { margin: .3rem 0 0; opacity: .55; }
+input.add:focus, input.inline:focus { opacity: 1; outline: none; border-color: var(--accent); }
+details.archive summary { cursor: pointer; color: var(--dim); }
+#log li { color: var(--dim); font-size: .92em; }
+#err {
+  position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%);
+  background: var(--urgent); color: #fff; padding: .4rem .9rem; border-radius: 6px;
+  opacity: 0; transition: opacity .3s; pointer-events: none; max-width: 90vw;
+}
+#err.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">≣ boards</a>
+  <span id="title" title="click to rename"></span>
+  <span class="dim" id="sid"></span>
+  <span class="dim" id="cwd"></span>
+</header>
+<main id="board"></main>
+<div id="err"></div>
+<script>
+const ID = decodeURIComponent(location.pathname.split('/').pop());
+const API = `/api/board/${encodeURIComponent(ID)}`;
+const MARKERS = { open: '[ ]', wip: '[>]', done: '[x]', blocked: '[?]', none: '·' };
+const NEXT = { open: 'wip', wip: 'done', done: 'open', blocked: 'open' };
+let cur = null;
+
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  n.append(...kids);
+  return n;
+};
+
+function toast(msg) {
+  const e = document.getElementById('err');
+  e.textContent = msg;
+  e.classList.add('show');
+  setTimeout(() => e.classList.remove('show'), 2500);
+}
+
+async function post(body) {
+  const r = await fetch(`${API}/edit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let msg = `edit failed (${r.status})`;
+    try { msg = (await r.json()).error || msg; } catch {}
+    toast(msg);
+  }
+  await refresh();
+}
+
+function itemNode(section, it) {
+  if (it.continuation) return el('pre', { class: 'cont' }, it.text);
+
+  const li = el('li', { class: it.status === 'done' ? 'done' : '' });
+  const row = el('div', { class: 'row' });
+  if (it.status !== 'none') {
+    row.append(el('button', {
+      class: `marker ${it.status}`,
+      title: 'cycle status',
+      onclick: () => post({ op: 'status', section, raw: it.raw, status: NEXT[it.status] || 'open' }),
+    }, MARKERS[it.status]));
+  } else {
+    row.append(el('span', { class: 'marker' }, MARKERS.none));
+  }
+
+  const text = el('span', { class: 'text' });
+  if (it.urgent) text.append(el('span', { class: 'urgentflag' }, '!! '));
+  if (it.pinned) text.append(el('span', { class: 'pinflag' }, '⚲ '));
+  text.append(it.text);
+  text.addEventListener('dblclick', () => {
+    inlineInput(row, it.text, v => post({ op: 'edit', section, raw: it.raw, text: v }));
+  });
+  row.append(text);
+
+  row.append(el('div', { class: 'actions' },
+    el('button', { title: 'reply', onclick: () => {
+      const holder = el('li');
+      li.after(holder);
+      inlineInput(holder, 'user: ', v => post({ op: 'reply', section, raw: it.raw, text: v }), () => holder.remove());
+    } }, '↩'),
+    el('button', { title: 'toggle urgent', onclick: () => post({ op: 'urgent', section, raw: it.raw, urgent: !it.urgent }) }, '!!'),
+    el('button', { title: 'archive', onclick: () => post({ op: 'archive', section, raw: it.raw }) }, '⤓'),
+    el('button', { title: 'delete', onclick: () => {
+      if (confirm('Delete this item and its replies?')) post({ op: 'delete', section, raw: it.raw });
+    } }, '✕'),
+  ));
+  li.append(row);
+
+  if (it.children && it.children.length) {
+    const sub = el('ul');
+    for (const c of it.children) sub.append(itemNode(section, c));
+    li.append(sub);
+  }
+  return li;
+}
+
+function inlineInput(holder, initial, submit, cancel) {
+  const prev = [...holder.childNodes];
+  holder.textContent = '';
+  const inp = el('input', { class: 'inline', value: initial });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && inp.value.trim()) submit(inp.value.trim());
+    if (e.key === 'Escape') { holder.textContent = ''; holder.append(...prev); if (cancel) cancel(); }
+  });
+  inp.addEventListener('blur', () => {
+    setTimeout(() => { if (holder.contains(inp)) { holder.textContent = ''; holder.append(...prev); if (cancel) cancel(); } }, 150);
+  });
+  holder.append(inp);
+  inp.focus();
+  inp.setSelectionRange(initial.length, initial.length);
+}
+
+function addInput(section, isLog) {
+  const inp = el('input', {
+    class: 'add',
+    placeholder: isLog ? '+ log entry' : `+ add to ${section}`,
+  });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && inp.value.trim()) {
+      const v = inp.value.trim();
+      inp.value = '';
+      post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v });
+    }
+  });
+  return inp;
+}
+
+function render(b) {
+  document.title = (b.title || shortId(b.session || b.id)) + ' — session-notes';
+  document.getElementById('title').textContent = b.title || shortId(b.session || b.id);
+  document.getElementById('sid').textContent = shortId(b.session || b.id);
+  document.getElementById('cwd').textContent = b.cwd || '';
+
+  const main = document.getElementById('board');
+  const focused = document.activeElement;
+  const keep = focused && focused.classList && focused.classList.contains('add')
+    ? { ph: focused.placeholder, val: focused.value } : null;
+
+  main.textContent = '';
+  for (const sec of b.sections || []) {
+    const isLog = sec.title === 'Log';
+    const isArchive = sec.title === 'Archive';
+    const list = el('ul', isLog ? { id: 'log' } : {});
+    for (const it of sec.items || []) list.append(itemNode(sec.title, it));
+
+    if (isArchive) {
+      const n = countItems(sec.items);
+      const det = el('details', { class: 'archive' }, el('summary', {}, `Archive (${n})`), list);
+      main.append(el('h2', {}, ''), det);
+      continue;
+    }
+    main.append(el('h2', {}, sec.title), list);
+    main.append(addInput(sec.title, isLog));
+  }
+
+  if (keep) {
+    const again = [...main.querySelectorAll('input.add')].find(i => i.placeholder === keep.ph);
+    if (again) { again.value = keep.val; again.focus(); }
+  }
+}
+
+const countItems = items => (items || []).reduce((n, it) => n + (it.continuation ? 0 : 1) + countItems(it.children), 0);
+const shortId = s => (s || '').split('-')[0].slice(0, 8);
+
+document.getElementById('title').addEventListener('click', () => {
+  const holder = document.getElementById('title');
+  inlineInput(holder, cur && cur.title || '', v => post({ op: 'title', text: v }));
+});
+
+async function refresh() {
+  try {
+    cur = await (await fetch(API)).json();
+    render(cur);
+  } catch { /* transient; SSE or next action will retry */ }
+}
+
+refresh();
+const es = new EventSource(`${API}/events`);
+es.onmessage = refresh;
+</script>
+</body>
+</html>

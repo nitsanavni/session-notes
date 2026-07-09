@@ -343,6 +343,36 @@ items, and the last Log line.
   board view (`q`/`esc` there returns to the dashboard, not quit) · `r` rescans ·
   `q`/`esc` quits.
 
+## Web UI (no tmux required)
+
+The board and dashboard also come as a small local web app — the same files,
+the same lock protocol, for people (or machines) without tmux:
+
+```
+session-notes serve                  # http://127.0.0.1:7080
+session-notes serve --addr :8000     # another port / interface (see warning)
+session-notes serve --board <path>   # serve one specific board; "/" opens it
+```
+
+`/` is the dashboard — one card per board with the same liveness dot, threads,
+urgent items, and last Log line as `--dash` — and each board lives at
+`/b/<session-id>`. The page updates live (server-sent events on the board
+file's mtime), so Claude's edits appear as it works, exactly like the tmux
+popup.
+
+Editing: click a checkbox to cycle status, double-click an item to edit its
+text, hover an item for reply / urgent / archive / delete, type into a
+section's add box (the Log section's box appends a `user:` log line), and
+click the title to rename the session. Every write goes through the same
+advisory lock + atomic rename as the TUI and `session-notes edit`, so browser,
+terminal, and Claude can all edit the same board concurrently without losing
+updates.
+
+The server binds `127.0.0.1` and has **no auth** — anyone who can reach it can
+read and edit your boards (it warns when you bind a non-loopback address). To
+use it from another machine or a phone, tunnel instead of exposing it:
+`ssh -L 7080:localhost:7080 yourbox`, or a tailnet address.
+
 ## Keybindings (TUI)
 
 | Key           | Action                                  |
