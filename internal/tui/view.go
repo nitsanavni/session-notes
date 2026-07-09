@@ -84,10 +84,16 @@ func (m *model) viewBoard() string {
 	// Title text (Title -> Session -> path fallback) is held aside and rendered
 	// as a sticky header below, outside the scrollable body — see boardHeader.
 	title := m.path
+	// A path fallback carries its meaning in the tail (the filename), so it is
+	// truncated from the left; a frontmatter title leads with the name and is
+	// truncated from the right (dropping the trailing dim Cwd first).
+	titleTail := true
 	if fm := m.board.Frontmatter; fm.Title != "" {
 		title = fmt.Sprintf("%s  %s", fm.Title, styleDim.Render(fm.Cwd))
+		titleTail = false
 	} else if fm.Session != "" {
 		title = fmt.Sprintf("%s  %s", fm.Session, styleDim.Render(fm.Cwd))
+		titleTail = false
 	}
 
 	posIdx := 0
@@ -229,7 +235,7 @@ func (m *model) viewBoard() string {
 	if len(lines) > bodyH {
 		readout = scrollReadout(m.scroll, m.scroll+1, end, len(lines))
 	}
-	header := boardHeader(title, readout, m.width)
+	header := boardHeader(title, readout, m.width, titleTail)
 	if headerH == 2 {
 		header += "\n"
 	}
@@ -274,24 +280,37 @@ func scrollReadout(scroll, start, end, total int) string {
 // lipgloss.Width so the ANSI styling embedded in both strings never throws off
 // the layout. Below ~20 columns the readout is dropped and only the title (also
 // truncated) remains.
-func boardHeader(title, readout string, width int) string {
+func boardHeader(title, readout string, width int, tail bool) string {
 	if width < 1 {
 		return styleTitle.Render(title)
 	}
 	if readout == "" || width < 20 {
-		return styleTitle.Render(ansi.Truncate(title, width, ""))
+		return styleTitle.Render(truncTitle(title, width, tail))
 	}
 	rw := lipgloss.Width(readout)
 	avail := width - rw - 2
 	if avail < 1 {
 		avail = 1
 	}
-	t := styleTitle.Render(ansi.Truncate(title, avail, ""))
+	t := styleTitle.Render(truncTitle(title, avail, tail))
 	gap := width - lipgloss.Width(t) - rw
 	if gap < 1 {
 		gap = 1
 	}
 	return t + strings.Repeat(" ", gap) + readout
+}
+
+// truncTitle fits a title into w cells. When tail is true (path fallback), it
+// keeps the tail — the filename — dropping leading directories behind a leading
+// ellipsis; otherwise it keeps the leading name and drops the trailing text.
+func truncTitle(s string, w int, tail bool) string {
+	if !tail || lipgloss.Width(s) <= w {
+		return ansi.Truncate(s, w, "")
+	}
+	if w <= 1 {
+		return "…"
+	}
+	return "…" + ansi.TruncateLeft(s, lipgloss.Width(s)-(w-1), "")
 }
 
 // renderItem renders a bullet as one or more display rows: its text is
