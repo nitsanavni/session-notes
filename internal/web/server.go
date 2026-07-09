@@ -95,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/board/{id}/events", s.handleEvents)
 	mux.HandleFunc("GET /api/board/{id}/note/{name}", s.handleNoteGet)
 	mux.HandleFunc("POST /api/board/{id}/note/{name}", s.handleNotePut)
+	mux.HandleFunc("GET /api/board/{id}/raw", s.handleRaw)
 	return mux
 }
 
@@ -395,7 +396,7 @@ func classify(mtime, now time.Time) (liveness, ago string) {
 type editReq struct {
 	// Op: add | reply | fork | edit | status | urgent | archive | delete |
 	// log | title | add-section | rename-section | archive-section |
-	// delete-section | undo | redo
+	// delete-section | set-content | undo | redo
 	Op      string `json:"op"`
 	Section string `json:"section"`
 	Raw     string `json:"raw"`
@@ -403,6 +404,10 @@ type editReq struct {
 	Status  string `json:"status"`
 	Author  string `json:"author"`
 	Urgent  *bool  `json:"urgent"`
+	// Base is set-content's optimistic lock: the verbatim content the client
+	// loaded into its editor. The write applies only if the board still reads
+	// exactly Base; otherwise 409, and the user's edit stays in their editor.
+	Base string `json:"base"`
 }
 
 var (
@@ -435,12 +440,26 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 	default:
 		var entry histEntry
 		err = board.EditUnderLock(path, "", func(content string) (string, error) {
-			b := board.Parse(content)
-			b.Path = path
-			if aerr := applyEdit(b, req); aerr != nil {
-				return "", aerr
+			var out string
+			if req.Op == "set-content" {
+				// Whole-board raw replace (the TUI's E): optimistic-locked on
+				// the content the editor loaded, so a concurrent write from
+				// Claude or the TUI is never silently overwritten.
+				if content != req.Base {
+					return "", fmt.Errorf("%w: the board changed while you were editing — copy your text, reload, and re-apply", errConflict)
+				}
+				out = req.Text
+				if out != "" && !strings.HasSuffix(out, "\n") {
+					out += "\n"
+				}
+			} else {
+				b := board.Parse(content)
+				b.Path = path
+				if aerr := applyEdit(b, req); aerr != nil {
+					return "", aerr
+				}
+				out = b.Render()
 			}
-			out := b.Render()
 			entry = histEntry{before: content, after: out}
 			return out, nil
 		})
@@ -622,6 +641,22 @@ func applyEdit(b *board.Board, req editReq) error {
 		return fmt.Errorf("%w: unknown op %q", errBadReq, req.Op)
 	}
 	return nil
+}
+
+// handleRaw returns the board's verbatim markdown, the source for the web
+// UI's whole-board editor (the browser's answer to the TUI's E).
+func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
+	path := s.resolve(r.PathValue("id"))
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"content": string(data)})
 }
 
 // ---- side notes ----

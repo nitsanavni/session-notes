@@ -20,3 +20,13 @@ go test ./...
 ```
 
 Go lives at `~/.local/go/bin` (not on PATH by default).
+
+## Web UI e2e tests
+
+`./test/e2e/run.sh` drives the web UI (`session-notes serve`) in a real
+Chromium: builds the binary, seeds a fixture board in a temp dir, starts a
+fresh server per test, and asserts through the page's `window.__sn` debug
+handle and the board file itself. Run it after changing anything under
+`internal/web/`. `SN_ONLY=<substring>` filters tests; failures dump a step
+log + screenshot + board state into `test/e2e/artifacts/`. Needs node and a
+Chromium (`SN_CHROME` overrides the default `/opt/pw-browsers/chromium`).

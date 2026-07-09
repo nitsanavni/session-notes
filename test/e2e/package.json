@@ -1,0 +1,8 @@
+{
+  "name": "session-notes-e2e",
+  "private": true,
+  "description": "Browser e2e tests for the session-notes web UI. Run with ./run.sh",
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}

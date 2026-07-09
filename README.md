@@ -360,28 +360,39 @@ urgent items, and last Log line as `--dash` — and each board lives at
 file's mtime), so Claude's edits appear as it works, exactly like the tmux
 popup.
 
-Editing: click a checkbox to cycle status, double-click an item to edit its
-text, hover an item for reply (`↩`, in-thread — same flat semantics as the
-TUI's `R`) / fork (`⑂`, nests like `F`) / urgent / blocked (`[?]`) / archive /
-delete, type into a section's add box (the Log section's box appends a `user:`
-log line), and click the title to rename the session. Sections work too:
-double-click a heading to rename it (collisions refused), hover it for
-archive-whole-section (Archive/Log guarded) and hard-delete, and an add-section
-box sits at the bottom of the board. `[[side-note]]` links open in an editable
-overlay (created on first save, same seed as the TUI); path-form links render
-inert — open those in your editor. The header has undo/redo (`u` works as a
-key, 100 steps of this server's own edits; an undo that would overwrite an
-intervening write from Claude or the TUI is refused instead) and a
-copy-board-path button. Every write goes through the same advisory lock +
-atomic rename as the TUI and `session-notes edit`, so browser, terminal, and
-Claude can all edit the same board concurrently without losing updates. While
-you're typing in an inline input, live re-renders are deferred until the input
-closes (the TUI defers reloads the same way), and an edit that fails because
-the board changed parks your typed text in the section's add box rather than
-losing it.
+**Keyboard-first**, like the TUI — press `?` for the full map: `j`/`k` walk
+items and section headings (a cursor row follows, and tracks an item even as
+your own edit rewrites its line), `tab`/`1`-`9` jump sections, `a` adds to the
+cursor's section, `R` replies in-thread (same flat semantics as the TUI's `R`),
+`F` forks a nested sub-thread, `space` cycles status, `b` toggles blocked
+`[?]`, `!` urgent, `e` edits (an item's text, or a section's name on its
+heading), `d`/`D` archive/hard-delete, `o` opens the item's first `[[link]]`,
+`L` logs, `u`/`ctrl+r` undo/redo, `y` copies the board path. Everything is
+also mouse-reachable: click checkboxes, double-click to edit, hover for
+per-item and per-section actions, type into a section's add box (the Log
+section's box appends a `user:` log line).
 
-Not (yet) in the web UI: the mindmap view, multi-line/continuation authoring,
-and opening path-form `[[links]]`.
+`E` opens the whole board's markdown in an editor overlay (`ctrl+enter`
+saves) — the browser's answer to the TUI's `$EDITOR`, and the way to author
+multi-line continuation blocks. Saves are optimistically locked on the content
+you loaded: if Claude or the TUI wrote meanwhile, the save is refused and your
+text stays in the editor. `[[side-note]]` links open in the same kind of
+overlay (created on first save, seeded like the TUI); path-form links render
+inert — open those in your editor. Undo/redo covers the last 100 edits made
+through this server; an undo that would overwrite an intervening write from
+Claude or the TUI is refused instead.
+
+Every write goes through the same advisory lock + atomic rename as the TUI and
+`session-notes edit`, so browser, terminal, and Claude can all edit the same
+board concurrently without losing updates. While you're typing in an inline
+input, live re-renders are deferred until the input closes (the TUI defers
+reloads the same way), and an edit that fails because the board changed parks
+your typed text in the section's add box rather than losing it.
+
+The dashboard speaks keyboard too: `j`/`k` select a card, `enter` opens it.
+
+Not (yet) in the web UI: the mindmap view and opening path-form `[[links]]`.
+The web UI has a browser e2e suite — `./test/e2e/run.sh` (see CLAUDE.md).
 
 The server binds `127.0.0.1` and has **no auth** — anyone who can reach it can
 read and edit your boards (it warns when you bind a non-loopback address). To

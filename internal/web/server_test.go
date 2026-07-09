@@ -485,6 +485,52 @@ func TestNotesAPI(t *testing.T) {
 	}
 }
 
+func TestRawAndSetContent(t *testing.T) {
+	h, path := newTestServer(t)
+
+	// GET raw returns the verbatim file
+	w := do(t, h, "GET", "/api/board/abc-123/raw", "")
+	if w.Code != 200 {
+		t.Fatalf("raw: %d %s", w.Code, w.Body)
+	}
+	var raw struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw.Content != boardFile(t, path) {
+		t.Fatal("raw != file")
+	}
+
+	// set-content with a matching base rewrites the file (newline ensured)
+	newContent := raw.Content + "\n## Scratch\n- [ ] free-form"
+	body, _ := json.Marshal(map[string]string{"op": "set-content", "text": newContent, "base": raw.Content})
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", string(body)); w.Code != 204 {
+		t.Fatalf("set-content: %d %s", w.Code, w.Body)
+	}
+	if got := boardFile(t, path); got != newContent+"\n" {
+		t.Fatalf("set-content wrote:\n%q\nwant:\n%q", got, newContent+"\n")
+	}
+
+	// a stale base (someone wrote since the editor loaded) is refused with 409
+	body, _ = json.Marshal(map[string]string{"op": "set-content", "text": "clobber\n", "base": raw.Content})
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", string(body)); w.Code != http.StatusConflict {
+		t.Fatalf("stale set-content: want 409, got %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(boardFile(t, path), "clobber") {
+		t.Fatal("stale set-content clobbered the board")
+	}
+
+	// set-content participates in undo
+	if w = do(t, h, "POST", "/api/board/abc-123/edit", `{"op":"undo"}`); w.Code != 204 {
+		t.Fatalf("undo set-content: %d %s", w.Code, w.Body)
+	}
+	if got := boardFile(t, path); got != raw.Content {
+		t.Fatal("undo did not restore pre-set-content board")
+	}
+}
+
 func TestFileStamp(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.md")

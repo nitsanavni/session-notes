@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>session-notes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='14' height='14' rx='3' fill='%234a7d5f'/%3E%3Cpath d='M4 5h8M4 8h8M4 11h5' stroke='%23fff' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #f7f7f5; --fg: #1a1a1a; --dim: #77776f; --card: #ffffff;
@@ -29,7 +30,7 @@ a.card {
   display: block; background: var(--card); border: 1px solid var(--border);
   border-radius: 8px; padding: .75rem .9rem; text-decoration: none; color: var(--fg);
 }
-a.card:hover { border-color: var(--accent); }
+a.card:hover, a.card.sel { border-color: var(--accent); }
 .card .head { display: flex; align-items: baseline; gap: .5rem; }
 .card .name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .ago { color: var(--dim); font-size: .85em; }
@@ -75,7 +76,31 @@ async function refresh() {
     </a>`).join('');
 }
 refresh();
-setInterval(refresh, 2000);
+setInterval(() => refresh(), 2000);
+
+// j/k/enter mirror the TUI dashboard; selection is remembered by board id
+// so the 2s refresh doesn't drop it.
+let selID = null;
+function applySel() {
+  const cards = [...document.querySelectorAll('a.card')];
+  cards.forEach(c => c.classList.toggle('sel', c.href.endsWith('/b/' + encodeURIComponent(selID))));
+}
+document.addEventListener('keydown', e => {
+  const cards = [...document.querySelectorAll('a.card')];
+  if (!cards.length) return;
+  const idx = cards.findIndex(c => c.classList.contains('sel'));
+  if (e.key === 'j' || e.key === 'ArrowDown') {
+    const n = cards[Math.min(cards.length - 1, idx < 0 ? 0 : idx + 1)];
+    selID = decodeURIComponent(n.href.split('/b/').pop()); applySel(); n.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'k' || e.key === 'ArrowUp') {
+    const n = cards[Math.max(0, idx < 0 ? 0 : idx - 1)];
+    selID = decodeURIComponent(n.href.split('/b/').pop()); applySel(); n.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter' && idx >= 0) {
+    location.href = cards[idx].href;
+  }
+});
+const origRefresh = refresh;
+refresh = async () => { await origRefresh(); if (selID) applySel(); };
 </script>
 </body>
 </html>
