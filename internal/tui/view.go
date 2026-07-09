@@ -59,7 +59,7 @@ func statusMarker(s board.Status) string {
 func (m *model) View() string {
 	if m.mapView {
 		switch m.mode {
-		case modeBoard, modeMapAdd, modeMapEdit:
+		case modeBoard, modeMapAdd, modeMapEdit, modeMapFeedback:
 			return m.viewMap()
 		}
 	}
@@ -503,6 +503,7 @@ func (m *model) viewHelp() string {
 		{"E", "open board in $EDITOR"},
 		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
 		{"m", "toggle the mindmap view (hjkl move · enter fold · a/e/space/D edit)"},
+		{"! (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl"},
 		{"L", "quick log entry"},
 		{"u", "undo last change"},
 		{"ctrl+r", "redo"},

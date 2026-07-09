@@ -31,6 +31,12 @@ func main() {
 		os.Exit(runUpgrade())
 	}
 
+	// Feedback subcommand: list a board's map-nav surprise records
+	// (<board>.feedback.jsonl, written by `!` in the map view).
+	if len(args) >= 1 && args[0] == "feedback" {
+		os.Exit(runFeedback(args[1:]))
+	}
+
 	// The TUI surfaces the upgrade hint asynchronously off the UI thread; give
 	// it the installed version to compare against.
 	tui.Version = versionString()
@@ -178,6 +184,37 @@ func soleLiveBoard() (string, bool) {
 	return sole, sole != ""
 }
 
+// runFeedback parses `session-notes feedback <board.md> [--json | --gen-test]`
+// and prints the board's surprise records.
+func runFeedback(args []string) int {
+	var boardPath string
+	jsonOut := false
+	genTest := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			jsonOut = true
+		case "--gen-test":
+			genTest = true
+		default:
+			if strings.HasPrefix(a, "-") || boardPath != "" {
+				fmt.Fprintf(os.Stderr, "feedback: unknown argument: %s\n", a)
+				return 2
+			}
+			boardPath = a
+		}
+	}
+	if boardPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: session-notes feedback <board.md> [--json | --gen-test]")
+		return 2
+	}
+	if err := tui.RunFeedback(boardPath, jsonOut, genTest); err != nil {
+		fmt.Fprintln(os.Stderr, "session-notes:", err)
+		return 1
+	}
+	return 0
+}
+
 func runHook(name string) {
 	// Belt and braces: a hook must exit 0 even if something panics.
 	defer func() { _ = recover() }()
@@ -203,6 +240,8 @@ Usage:
   session-notes -l                    board picker (all boards, newest first)
   session-notes -v, --version         print version and exit
   session-notes upgrade               update to the latest release
+  session-notes feedback <board.md>   list map-nav surprise records (--json raw,
+                                      --gen-test print replayable Go test source)
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook

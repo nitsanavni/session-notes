@@ -37,6 +37,17 @@ plain Markdown file that both sides can safely edit at the same time.
 The `▸` marks the active section; the highlighted row is the cursor. Urgent
 (`!!`) items are highlighted, done (`[x]`) items are dimmed.
 
+`m` toggles the mindmap view: the board as a center-outward map, sections as
+the first ring, `hjkl` moving focus spatially. When a move surprises you (focus
+didn't land where your fingers expected), press `!`: a prompt shows what just
+happened ("you hit k · focus moved 'Log' → 'Working Agreements' — where did you
+expect it?") and your note is appended to `<board>.feedback.jsonl` along with
+the last 20 map actions, each with a replayable before-state. Browse the log
+with `session-notes feedback <board.md>` (or `--json`); `--gen-test` prints
+ready-to-paste Go test source that replays each surprising move and asserts
+where it lands today, with a TODO for what you expected — flip one line to turn
+it into a failing test.
+
 ## Install
 
 ```

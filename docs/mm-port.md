@@ -89,3 +89,15 @@ dependency. High-level in/out list for discussion; nothing here is built yet.
   fallback — a pane with no mapping resolves to the newest board matching the
   pane's current directory (via tmux `pane_current_path`) before the picker,
   instead of exiting with "no board mapped to pane".
+- Surprise recorder ported (mm's `!` feedback feature): the map keeps a ring
+  buffer of the last 20 actions, each with a replayable before-state (board
+  markdown + focus key + folds/replies/Log visibility); `!` prompts "you hit k ·
+  focus moved 'X' → 'Y' — where did you expect it?" and appends the note + trail
+  to `<board>.feedback.jsonl`. Divergences from mm, both simplifications: the
+  sidecar-spill threshold is 8 KiB (mm: 64 KiB) since board maps are smaller
+  than mm maps, and spilled records are plain JSON (no gzip/base64 — greppable,
+  trivial reader), same as mm. `session-notes feedback <board.md>` lists records
+  (`--json` raw); `--gen-test` prints paste-ready Go tests (package tui,
+  building on the `newMapModel`/`keyPress` test helpers) that replay the move
+  and assert today's landing, mm's flip-one-line-to-fail design. Navigation
+  fixes come next, driven by real recorded surprises.

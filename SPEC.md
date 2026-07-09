@@ -140,7 +140,17 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   sub-bullets) render dim and collapse by default into a `[N replies]` suffix on
   their parent; `enter` on the parent expands/collapses the thread. The
   append-only `Log` section is excluded from the map by default (a "Log hidden ·
-  M" footer hint shows when it is); `M` toggles it back on.
+  M" footer hint shows when it is); `M` toggles it back on. When a move surprises
+  you (focus didn't land where your fingers expected), `!` opens a prompt showing
+  what just happened ("you hit k · focus moved 'Log' → 'Working Agreements' —
+  where did you expect it?") and appends the note plus the last 20 map actions —
+  each with a fully replayable before-state (board markdown, focus key, folds,
+  Log visibility) — to `<board>.feedback.jsonl`. Records over 8 KiB are spilled
+  as plain JSON to a `<board>.feedback/` sidecar dir and referenced by a stub.
+  Browse with `session-notes feedback <board.md>` (`--json` raw); `--gen-test`
+  prints ready-to-paste Go test source that replays each surprising move and
+  asserts where it lands today, with a TODO noting the expectation — flip one
+  line to make it fail. Nav fixes are driven by these recorded surprises.
 - Live reload: watch the board file (fsnotify) and re-render on external change (Claude's
   edits appear live). Writes are atomic (temp file + rename) to avoid torn reads. While an
   inline input is open the reload is deferred (it must not touch the input buffer or the

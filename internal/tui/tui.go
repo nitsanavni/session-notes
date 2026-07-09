@@ -35,6 +35,7 @@ const (
 	modeDash
 	modeMapAdd
 	modeMapEdit
+	modeMapFeedback
 )
 
 // customSectionLabel is the final, always-present entry in the add-sections
@@ -133,6 +134,10 @@ type model struct {
 	mapInputParent  *board.Item // add-child target when adding under an item
 	mapInputItem    *board.Item // edit target
 	mapInputSection string      // section the add/edit acts within
+	// feedbackEvents is the surprise recorder's ring buffer: the last
+	// feedbackWindow map actions, each with a replayable before-state.
+	// In-memory only; persisted (as part of a record) when `!` saves a note.
+	feedbackEvents []feedbackEvent
 
 	watch  *watcher
 	width  int
@@ -505,7 +510,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) isInputMode() bool {
 	switch m.mode {
 	case modeInputAdd, modeInputEdit, modeInputLog, modeInputReply, modeInputCustomSection,
-		modeMapAdd, modeMapEdit:
+		modeMapAdd, modeMapEdit, modeMapFeedback:
 		return true
 	}
 	return false
@@ -521,6 +526,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInputKey(msg)
 	case modeMapAdd, modeMapEdit:
 		return m.handleMapInputKey(msg)
+	case modeMapFeedback:
+		return m.handleMapFeedbackKey(msg)
 	case modeAddSections:
 		return m.handleAddSectionsKey(msg)
 	case modeLinkPick:

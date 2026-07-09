@@ -333,7 +333,20 @@ func (m *model) mapMove(dir rune) {
 func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.ensureMap()
-	switch msg.String() {
+	key := msg.String()
+	// Surprise recorder: capture a replayable before-state for map actions so
+	// `!` can attach the recent trail to a feedback note (see feedback.go).
+	var before *feedbackState
+	if recordedMapKeys[key] {
+		st := m.captureMapState()
+		before = &st
+	}
+	defer func() {
+		if before != nil {
+			m.recordMapEvent(key, *before)
+		}
+	}()
+	switch key {
 	case "q", "esc":
 		if m.cameFromDash {
 			return m, m.enterDash()
@@ -371,6 +384,9 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.reloadExternal()
 		m.status = "reloaded"
+	case "!":
+		// A nav move surprised you: note where you expected focus to land.
+		m.startInput(modeMapFeedback, "", "where did you expect it?")
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp
@@ -747,6 +763,10 @@ func (m *model) viewMapFooter() string {
 		}
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
+	if m.mode == modeMapFeedback {
+		return styleDim.Render(ansi.Truncate(m.lastMoveSummary(), m.width, "…")) + "\n" +
+			styleStatus.Render("feedback: ") + m.input.View()
+	}
 	detail := ""
 	if m.mp != nil && m.mp.focus != nil {
 		detail = styleDim.Render(ansi.Truncate(mapFocusDetail(m.mp), m.width, "…"))
@@ -761,7 +781,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · enter fold · a add · e edit · space status · D delete · M log · m list · u undo · ? help · q quit"
+	hints := "hjkl move · enter fold · a add · e edit · space status · D delete · M log · m list · u undo · ! surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
