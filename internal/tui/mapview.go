@@ -1607,7 +1607,7 @@ func mapNodeStyle(ref mapRef, focus, search bool) lipgloss.Style {
 		base = base.Foreground(styleSearch.GetForeground())
 	}
 	if focus {
-		base = base.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
+		base = base.Foreground(selFG).Reverse(true).Bold(true)
 	}
 	return base
 }

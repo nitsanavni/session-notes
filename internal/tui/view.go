@@ -11,20 +11,31 @@ import (
 	"github.com/nitsanavni/session-notes/internal/board"
 )
 
+// Theme-adaptive accents: several of the original 256-color picks were tuned on
+// a dark background and go nearly invisible on light terminal themes (bright
+// yellow 228, light green 120/150, white 231, pale orange 215, light gray 252).
+// AdaptiveColor lets lipgloss pick per detected background: the dark values are
+// unchanged; the light values are darker, saturated equivalents.
 var (
+	// selFG is the foreground the reverse-video selection bar normalizes to
+	// before Reverse(true) swaps it into the bar's background: near-white on a
+	// dark theme (light bar), near-black on a light theme (dark bar) — a plain
+	// 252 reversed on a white terminal made a washed-out light-gray bar.
+	selFG = lipgloss.AdaptiveColor{Light: "235", Dark: "252"}
+
 	styleTitle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
 	styleSection    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("110"))
 	styleSectionSel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81")).Underline(true)
-	styleCursor     = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
+	styleCursor     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "16", Dark: "231"}).Bold(true)
 	styleDone       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	styleUrgent     = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true) // brick red, matching the web --urgent (was orange 214)
 	stylePin        = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))            // muted teal — calmer than urgent
 	styleBlocked    = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
-	styleInProg     = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
+	styleInProg     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "150"})
 	styleDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	styleHelpBar    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleStatus     = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
-	styleFresh      = lipgloss.NewStyle().Foreground(lipgloss.Color("215")).Bold(true) // out-of-band change accent
+	styleStatus     = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "94", Dark: "179"})
+	styleFresh      = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "166", Dark: "215"}).Bold(true) // out-of-band change accent
 	styleMarker     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	styleLink       = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Underline(true)
 
@@ -34,11 +45,12 @@ var (
 	// styleSearch tints a whole item/node that matches the active search — a
 	// subtle green foreground, distinct from the reverse-video cursor bar, applied
 	// only when the item is not itself the current selection/focus.
-	styleSearch = lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
+	styleSearch = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "120"})
 	// searchMatchFG is the accent foreground for the matched SUBSTRING within an
-	// item's text (stronger than the whole-line tint): a bold, underlined bright
-	// yellow span layered over whichever base style the segment already carries.
-	searchMatchFG = lipgloss.Color("228")
+	// item's text (stronger than the whole-line tint): a bold, underlined span
+	// layered over whichever base style the segment already carries — bright
+	// yellow on dark themes, magenta on light ones (228 on white is invisible).
+	searchMatchFG = lipgloss.AdaptiveColor{Light: "126", Dark: "228"}
 )
 
 // linkDisplayRe matches [[name]] spans for display-only highlighting. It
@@ -351,7 +363,7 @@ func (m *model) viewSearchPanel() string {
 		prefix := "  "
 		if selected {
 			prefix = styleCursor.Render("> ")
-			base = base.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
+			base = base.Foreground(selFG).Reverse(true).Bold(true)
 			labelStyle = base
 		}
 		textAvail := m.width - 2 - labelW - 1
@@ -521,7 +533,7 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int, folded bool
 	// the reversed bar is high-contrast on every status — a done item's dim 240
 	// would otherwise reverse into a low-contrast bar.
 	if selected {
-		style = style.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
+		style = style.Foreground(selFG).Reverse(true).Bold(true)
 	}
 	// Search highlight: a matching item that is not itself the selection gets a
 	// subtle whole-line tint (styleSearch); the matched substring is accented on

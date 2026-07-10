@@ -412,6 +412,28 @@ func TestSearchHighlightOutline(t *testing.T) {
 	}
 }
 
+// On a LIGHT terminal theme the search accents adapt: the matched-substring
+// accent renders magenta 126 (bright yellow 228 is invisible on white) and the
+// whole-line tint a dark green 28. Guards the theme-adaptive palette.
+func TestSearchHighlightAdaptsToLightTheme(t *testing.T) {
+	forceColor(t)
+	origDark := lipgloss.HasDarkBackground()
+	lipgloss.SetHasDarkBackground(false)
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(origDark) })
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha")
+	out := m.viewBoard()
+	if !strings.Contains(out, "38;5;126") {
+		t.Errorf("light theme should use the magenta match accent (38;5;126):\n%q", out)
+	}
+	if !strings.Contains(out, "38;5;28m") {
+		t.Errorf("light theme should use the dark-green line tint (38;5;28):\n%q", out)
+	}
+	if strings.Contains(out, "38;5;228") {
+		t.Errorf("light theme must not use the dark-theme yellow 228:\n%q", out)
+	}
+}
+
 // Stepping matches with n/N highlights the matched term inside the current
 // match's rendered line — the substring accent survives the recall + step path,
 // so cycling always shows WHERE the term is, not just WHICH row is current.

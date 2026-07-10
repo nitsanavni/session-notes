@@ -228,9 +228,9 @@ func (m *model) handleDashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // --- dashboard view ---
 
 var (
-	styleDot    = lipgloss.NewStyle().Foreground(lipgloss.Color("150")).Bold(true) // active
-	styleDotOff = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))            // idle/gone
-	styleName   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	styleDot    = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "28", Dark: "150"}).Bold(true) // active
+	styleDotOff = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))                                       // idle/gone
+	styleName   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "235", Dark: "252"})
 )
 
 // classify returns the liveness glyph and its style for a transcript mtime,
