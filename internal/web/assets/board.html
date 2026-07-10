@@ -270,9 +270,9 @@ body.mapmode #mapwrap { display: block; }
   <div id="mapcrumb"></div>
   <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
 </div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"></div>
-<div id="linkchooser"><div class="lbl">open link — j/k move · enter open · esc cancel</div><div class="list"></div></div>
-<div id="addsecmodal"><div class="lbl">add sections — j/k move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
-<footer id="listfoot">j/k move · tab section · enter fold · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
+<div id="linkchooser"><div class="lbl">open link — j/k/arrows move · enter open · esc cancel</div><div class="list"></div></div>
+<div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
+<footer id="listfoot">j/k/arrows move · tab section · enter fold · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 <div id="searchstatus"></div>
@@ -1417,14 +1417,25 @@ function renderMap(b) {
     minX = Math.min(minX, x); maxX = Math.max(maxX, x + width.get(n));
     minY = Math.min(minY, p.cy - ownH.get(n) / 2); maxY = Math.max(maxY, p.cy + ownH.get(n) / 2);
   });
-  const PAD = 24, ox = PAD - minX, oy = PAD - minY;
+  // Grow the canvas to at least fill the map viewport, then center the actual
+  // content inside that slack. A tree smaller than the viewport ends up
+  // centered (both axes) instead of pinned to the top-left; a larger tree keeps
+  // its natural size and scrolls, with scrollIntoView centering the focus.
+  const PAD = 24;
+  const contentW = maxX - minX + 2 * PAD;
+  const contentH = maxY - minY + 2 * PAD;
+  const view = document.getElementById('mapview');
+  const vw = view.clientWidth || contentW, vh = view.clientHeight || contentH;
+  const canvasW = Math.max(contentW, vw), canvasH = Math.max(contentH, vh);
+  const ox = PAD - minX + (canvasW - contentW) / 2;
+  const oy = PAD - minY + (canvasH - contentH) / 2;
   const canvas = document.getElementById('mapcanvas');
-  canvas.style.width = (maxX - minX + 2 * PAD) + 'px';
-  canvas.style.height = (maxY - minY + 2 * PAD) + 'px';
+  canvas.style.width = canvasW + 'px';
+  canvas.style.height = canvasH + 'px';
   for (const eln of [...canvas.querySelectorAll('.mapnode')]) eln.remove();
   const svg = document.getElementById('edges');
-  svg.setAttribute('width', maxX - minX + 2 * PAD);
-  svg.setAttribute('height', maxY - minY + 2 * PAD);
+  svg.setAttribute('width', canvasW);
+  svg.setAttribute('height', canvasH);
   svg.textContent = '';
 
   mapNodes = [];

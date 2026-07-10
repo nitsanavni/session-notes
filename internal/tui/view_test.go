@@ -73,7 +73,7 @@ func stripANSI(s string) string { return ansi.Strip(s) }
 func bodyRows(out string) []string {
 	rows := strings.Split(out, "\n")
 	for i, r := range rows {
-		if strings.Contains(r, "j/k move") {
+		if strings.Contains(r, "j/k/arrows move") {
 			return rows[:i]
 		}
 	}

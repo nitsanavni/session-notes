@@ -583,7 +583,7 @@ func (m *model) viewFooter() string {
 	if m.mode == modeSearch {
 		return styleStatus.Render("search: ") + m.input.View()
 	}
-	hints := "j/k move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
+	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -734,7 +734,7 @@ func (m *model) viewLinkPick() string {
 		}
 		b.WriteString(cursor + st.Render("[["+name+"]]") + "\n")
 	}
-	b.WriteString("\n" + styleHelpBar.Render("j/k move · enter open · esc cancel"))
+	b.WriteString("\n" + styleHelpBar.Render("j/k/arrows move · enter open · esc cancel"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 
@@ -758,6 +758,6 @@ func (m *model) viewAddSections() string {
 		}
 		b.WriteString(prefix + mark + " " + label + "\n")
 	}
-	b.WriteString("\n" + styleHelpBar.Render("j/k move · space/x toggle · enter add · esc cancel"))
+	b.WriteString("\n" + styleHelpBar.Render("j/k/arrows move · space/x toggle · enter add · esc cancel"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }

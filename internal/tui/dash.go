@@ -310,7 +310,7 @@ func (m *model) viewDash() string {
 		b.WriteString("\n")
 	}
 
-	footer := styleHelpBar.Render("j/k move · enter open · r rescan · q quit")
+	footer := styleHelpBar.Render("j/k/arrows move · enter open · r rescan · q quit")
 	if m.updateHint != "" {
 		footer += "\n" + styleDim.Render(m.updateHint)
 	}
