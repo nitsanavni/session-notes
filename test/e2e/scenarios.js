@@ -1678,6 +1678,67 @@ run({
     t.assert(!stillPainted, 'the accent is gone from the DOM');
   },
 
+  'an out-of-band status flip reads as changed, not added': async t => {
+    await t.open();
+    await t.settled();
+    // Another writer flips an existing item's checkbox (open -> done) on disk.
+    await t.editExternally({ op: 'status', section: 'Plan', raw: '- [ ] drop legacy endpoint', status: 'done' });
+    await t.waitBoardContains('- [x] drop legacy endpoint');
+    const key = 'it:Plan:- [x] drop legacy endpoint';
+    await t.page.waitForFunction(k => window.__sn.stops.some(s => s.key === k), key, { timeout: 4000 });
+    await t.settled();
+    const nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.fresh.includes(key), `the flipped item is flagged fresh (fresh=${JSON.stringify(nov.fresh)})`);
+    // The status change must NOT be mislabeled as an addition; the meta says what changed.
+    t.assert(/^→ done/.test(nov.feedMeta[0]),
+      `feed meta reads as a status change (meta=${JSON.stringify(nov.feedMeta)})`);
+    t.assert(!/added/.test(nov.feedMeta[0]),
+      `not mislabeled as added (meta=${JSON.stringify(nov.feedMeta)})`);
+    t.assert(nov.feed[0] === 'drop legacy endpoint',
+      `headline is the item text (feed=${JSON.stringify(nov.feed)})`);
+  },
+
+  'recents: dismiss clears the feed but a new change brings it back': async t => {
+    await t.open();
+    await t.settled();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'first novelty' });
+    await t.waitBoardContains('- first novelty');
+    await t.page.waitForFunction(() => window.__sn.novelty.feed.length > 0, null, { timeout: 4000 });
+    // Dismiss with x the way a user would: focus the feed (V), then x.
+    await t.key('V');
+    t.assert(await t.page.evaluate(() => window.__sn.novelty.focused), 'feed focused');
+    await t.key('x');
+    await t.settled();
+    let nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.feed.length === 0, `dismiss cleared the feed (feed=${JSON.stringify(nov.feed)})`);
+    // A NEW out-of-band change must resurface the feed (no permanent suppression).
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'second novelty' });
+    await t.waitBoardContains('- second novelty');
+    await t.page.waitForFunction(() => window.__sn.novelty.feed.length > 0, null, { timeout: 4000 });
+    nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.feed[0] === 'second novelty', `feed reappears with the new change (feed=${JSON.stringify(nov.feed)})`);
+    const shown = await t.page.evaluate(() => document.getElementById('feed').classList.contains('show'));
+    t.assert(shown, 'the feed panel is visible again');
+  },
+
+  'map: V drives the recents feed and Enter lands on the node': async t => {
+    await t.open();
+    await t.settled();
+    await t.key('m'); // map view
+    await t.settled();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'map novelty' });
+    await t.waitBoardContains('- map novelty');
+    const key = 'it:Ideas:- map novelty';
+    await t.page.waitForFunction(() => window.__sn.novelty.feed.length > 0, null, { timeout: 4000 });
+    await t.page.waitForFunction(k => window.__sn.map.nodes.includes(k), key, { timeout: 4000 });
+    await t.key('V'); // focus the feed from the MAP view (regression: V was outline-only)
+    t.assert(await t.page.evaluate(() => window.__sn.novelty.focused), 'feed focused from the map view');
+    await t.key('Enter'); // jump to the changed node, in the map
+    await t.settled();
+    t.assert((await t.sn2()).map.focus === key, `map focus landed on the changed node (got ${(await t.sn2()).map.focus})`);
+    t.assert(!(await t.page.evaluate(() => window.__sn.novelty.focused)), 'feed mode exited after the jump');
+  },
+
   'a reply headline leads with what was said, location as meta': async t => {
     await t.open();
     await t.settled();

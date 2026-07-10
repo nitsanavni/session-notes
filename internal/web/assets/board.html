@@ -502,6 +502,7 @@ const LOCAL_WINDOW = 2500;    // refreshes this soon after a local edit are "our
 const FEED_MAX = 30;
 let lastLocalEdit = 0;
 let prevKeys = null;                 // Set of item keys from the last board seen
+let prevById = null;                 // Map id -> item from the last board (status-agnostic)
 const freshItems = new Set();        // keys currently marked novel
 // freshPulse holds keys whose one-shot arrival animation hasn't played yet. A
 // render consumes the key as it applies the `.pulse` class, so the pulse plays
@@ -521,7 +522,13 @@ function flattenItems(b) {
   const out = [];
   const walk = (items, section, parentText) => {
     for (const it of items || []) {
-      if (!it.continuation) out.push({ key: `it:${section}:${it.raw}`, section, text: it.text, parentText });
+      if (!it.continuation) out.push({
+        key: `it:${section}:${it.raw}`, section, text: it.text, parentText,
+        status: it.status || 'none',
+        // Status-agnostic identity: same section + same stripped content, so a
+        // checkbox flip ([ ]→[x]) is recognised as the SAME item, not add+remove.
+        id: `${section} ${noveltyStrip(it.text)}`,
+      });
       walk(it.children, section, it.continuation ? parentText : it.text);
     }
   };
@@ -541,8 +548,14 @@ function noveltyEntry(f) {
     const where = f.parentText ? `under “${noveltyShort(noveltyStrip(f.parentText), 26)}”` : `in ${f.section}`;
     return { primary: body || `${am[2]} replied`, meta: `${am[2]} · ${where}` };
   }
+  if (f.change) {
+    const to = STATUS_LABEL[f.change.to] ?? f.change.to;
+    return { primary: noveltyStrip(f.text) || '(item)', meta: `→ ${to} · ${f.section}` };
+  }
   return { primary: noveltyStrip(f.text) || '(new item)', meta: `added · ${f.section}` };
 }
+// Human labels for the status-transition feed copy ("→ done", "→ in progress").
+const STATUS_LABEL = { open: 'to do', wip: 'in progress', done: 'done', blocked: 'blocked', none: 'cleared' };
 
 // computeNovelty diffs the incoming board against the last one seen. New item
 // keys (additions, and status/text changes that rewrite the raw line) are the
@@ -550,13 +563,28 @@ function noveltyEntry(f) {
 function computeNovelty(b) {
   const flat = flattenItems(b);
   const newKeys = new Set(flat.map(f => f.key));
+  // A status-agnostic index of the incoming board, so we can tell a checkbox
+  // flip (same id, new raw line) from a genuine addition.
+  const byId = new Map();
+  for (const f of flat) if (!byId.has(f.id)) byId.set(f.id, f);
   // Drop fresh marks whose item no longer exists (e.g. a status re-toggle).
   for (const k of [...freshItems]) if (!newKeys.has(k)) clearFresh(k);
-  if (prevKeys === null) { prevKeys = newKeys; return; } // first load: baseline only
+  if (prevKeys === null) { prevKeys = newKeys; prevById = byId; return; } // first load: baseline only
   const novel = flat.filter(f => !prevKeys.has(f.key));
+  const prevMap = prevById;
   prevKeys = newKeys;
+  prevById = byId;
   if (Date.now() - lastLocalEdit < LOCAL_WINDOW) return; // our own echo
-  for (const f of novel) markFresh(f);
+  for (const f of novel) {
+    // Same content in the same section under a NEW raw line, whose old raw line
+    // is now gone: a status change, not an addition. Flag it as "changed".
+    const before = prevMap.get(f.id);
+    if (before && before.status !== f.status && !newKeys.has(before.key)) {
+      markFresh({ ...f, change: { from: before.status, to: f.status } });
+    } else {
+      markFresh(f);
+    }
+  }
 }
 
 function markFresh(f) {
@@ -2257,7 +2285,7 @@ function handleMapKey(e) {
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
     'Enter', 'f', 'b', 'e', 'a', 'A', 'w', 'z', ' ', '!', 'p', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
-    '/', 'n', 'N']);
+    '/', 'n', 'N', 'V']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   const refocus = key => { mapState.focus = key; renderMap(cur); };
   switch (e.key) {
@@ -2348,6 +2376,7 @@ function handleMapKey(e) {
       break;
     case 'o': if (n && n.kind === 'item') act.open(n.section, n.it); break;
     case 'z': mapFocusFold(); break;
+    case 'V': enterFeedMode(); break;
     case 'M': mapState.showLog = !mapState.showLog; renderMap(cur); break;
     case 'm': case 'q': exitMap(); break;
     case 'u': post({ op: 'undo' }); break;
