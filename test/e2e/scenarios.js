@@ -203,6 +203,26 @@ run({
       'it:Plan:- [ ] drop legacy endpoint', { timeout: 3000 });
   },
 
+  'map archive of the last sibling lands on the sibling node, not its leaf': async t => {
+    // Regression for "sent to the leaf of my sibling instead of my sibling":
+    // the outline follows document order (the previous item's deepest
+    // descendant), but the map must follow the structural sibling NODE. In
+    // Threads the last top-level item is "fix flaky test"; its previous sibling
+    // "auth refactor" owns a (folded) reply child. Archiving the last item must
+    // focus the auth-refactor node — not the reply leaf beneath it.
+    await t.open();
+    await t.key('3'); // Threads head
+    await t.key('j', 3); // auth refactor -> claude reply -> fix flaky test
+    await t.key('m'); // map seeds focus from the outline cursor (fix flaky test)
+    await t.page.waitForFunction(k => window.__sn.map.in && window.__sn.map.focus === k,
+      'it:Threads:- [x] fix flaky test', { timeout: 3000 });
+    await t.key('d'); // archive the last sibling
+    await t.waitBoardContains('## Archive');
+    // Focus must land on the auth-refactor NODE, never on its reply leaf.
+    await t.page.waitForFunction(k => window.__sn.map.focus === k,
+      'it:Threads:- [>] auth refactor — extracting middleware', { timeout: 3000 });
+  },
+
   'map: one press descends into a collapsed node (expand and land)': async t => {
     await t.open();
     await t.key('3'); // Threads head
@@ -433,6 +453,28 @@ run({
     t.assert(!map.pending, 'pending cancelled by arrow');
   },
 
+  'map: arrow keeps a typed inline add (no data loss)': async t => {
+    await t.open();
+    await t.key('3');
+    await t.key('m');
+    await t.key('a');
+    await t.page.waitForSelector('.mapnode.provisional input.mapinput');
+    await t.type('half typed');
+    // Left/Right/Up/Down must NOT discard once text exists: the provisional
+    // node stays and the typed value is preserved.
+    await t.key('ArrowLeft');
+    await t.key('ArrowUp');
+    await t.settled();
+    const map = (await t.sn2()).map;
+    t.assert(map.pending, 'pending survives arrows once text is typed');
+    const val = await t.page.inputValue('.mapnode.provisional input.mapinput');
+    t.assert(val === 'half typed', `typed text preserved (got ${JSON.stringify(val)})`);
+    // Left moved the caret into the text rather than to the end.
+    const caret = await t.page.evaluate(() =>
+      document.querySelector('.mapnode.provisional input.mapinput').selectionStart);
+    t.assert(caret < 'half typed'.length, `Left moved the caret within the text (got ${caret})`);
+  },
+
   'map: e edits the focused item inline (in-place input)': async t => {
     await t.open();
     await t.key('3');
@@ -544,21 +586,40 @@ run({
     t.assert(mtint.some(a => a.txt === 'claude:' && a.cls.includes('claude')), `map claude token tinted (got ${JSON.stringify(mtint)})`);
   },
 
-  'add-mode: arrow up/down exits the add box and navigates': async t => {
+  'add-mode: arrow up/down on an empty box navigates away': async t => {
     await t.open();
     await t.key('2'); // Plan head
     await t.key('a'); // open add box
     await t.page.waitForFunction(() => document.activeElement && document.activeElement.classList.contains('add'));
-    await t.type('half-typed'); // discarded on arrow
+    // Empty box: ArrowDown means "done adding, navigate away".
     await t.page.keyboard.press('ArrowDown');
     await t.page.waitForTimeout(80);
     const active = await t.page.evaluate(() => document.activeElement.tagName);
-    t.assert(active !== 'INPUT', `add box left on ArrowDown (active=${active})`);
-    // Discarded text was not committed to the board.
-    t.assert(!t.file().includes('half-typed'), 'unsent add text discarded');
+    t.assert(active !== 'INPUT', `empty add box left on ArrowDown (active=${active})`);
     // Cursor moved onto the first Plan item.
     const key = await t.cursorKey();
     t.assert(key === 'it:Plan:- [x] extract middleware', `navigated to first item (got ${key})`);
+  },
+
+  'add-mode: arrow up/down keeps typed text (no data loss)': async t => {
+    await t.open();
+    await t.key('2'); // Plan head
+    await t.key('a'); // open add box
+    await t.page.waitForFunction(() => document.activeElement && document.activeElement.classList.contains('add'));
+    await t.type('half-typed');
+    // Once text exists, Up/Down are inert: focus stays and the text survives.
+    await t.page.keyboard.press('ArrowDown');
+    await t.page.keyboard.press('ArrowUp');
+    await t.page.waitForTimeout(80);
+    const state = await t.page.evaluate(() => ({
+      active: document.activeElement.classList.contains('add'),
+      val: document.activeElement.value,
+    }));
+    t.assert(state.active, 'add box retains focus once text is typed');
+    t.assert(state.val === 'half-typed', `typed text preserved (got ${JSON.stringify(state.val)})`);
+    // Enter still commits it.
+    await t.page.keyboard.press('Enter');
+    await t.waitBoardContains('half-typed');
   },
 
   'selected line stays clear of the fixed footer when scrolled': async t => {

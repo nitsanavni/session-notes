@@ -713,12 +713,12 @@ function addInput(section, isLog) {
       post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v }, v);
     }
     if (e.key === 'Escape') inp.blur();
-    // Up/down means "I'm done adding, navigate away": discard the (unsent)
-    // text and move the cursor, so a stray keystroke doesn't strand you in
-    // the add box. Enter is the only thing that commits an add.
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    // Up/down on an EMPTY box means "I'm done adding, navigate away": move the
+    // cursor so a stray keystroke doesn't strand you in the add box. Once text
+    // is typed, Up/Down are inert (no navigation, no data loss) — Enter is the
+    // only thing that commits an add, Esc the only thing that discards.
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && inp.value === '') {
       e.preventDefault();
-      inp.value = '';
       inp.blur();
       moveCursor(e.key === 'ArrowDown' ? 1 : -1);
     }
@@ -1470,8 +1470,10 @@ function mountMapInput(d, node) {
     } else if (ev.key === 'Escape') {
       ev.preventDefault();
       cancelMapPending();
-    } else if (p.kind === 'add' && ev.key.startsWith('Arrow')) {
-      // A fresh add is discarded the moment the user navigates away (spec).
+    } else if (p.kind === 'add' && ev.key.startsWith('Arrow') && inp.value === '') {
+      // An EMPTY fresh add is discarded the moment the user navigates away
+      // (spec). Once text is typed, arrows fall through to the native input so
+      // Left/Right move the caret (and Up/Down are inert) — no data loss.
       ev.preventDefault();
       cancelMapPending();
     }
@@ -1594,6 +1596,23 @@ function descendInto(n, side, refocus) {
   }
   if (kids.length) refocus(childMemPick(n, side, kids).key);
 }
+// mapRemovalFollow is the map-view counterpart to the outline's
+// followAfterRemoval (TUI mapRemovalFocusKey): after archiving/deleting the
+// focused node, focus should land on a structural SIBLING node — the next
+// visible sibling, else the previous, else the parent — never on a sibling's
+// descendant. The outline's document-order follow lands on the previous item's
+// deepest descendant (the "leaf of the sibling") when removing a last child,
+// which is wrong for the tree-structured map. Returns a cursorFollow object.
+function mapRemovalFollow(n) {
+  const p = n.parent;
+  if (!p) return { section: n.section };
+  const sibs = visKids(p); // visible siblings, document order (mirrors mp.Children)
+  const i = sibs.indexOf(n);
+  const pick = (i >= 0 && (sibs[i + 1] || sibs[i - 1])) || p;
+  if (pick.kind === 'item') return { section: pick.section, text: pick.it.text };
+  if (pick.kind === 'section') return { section: pick.title };
+  return { section: n.section }; // center: an item always has a section/parent
+}
 const sideSign = n => {
   // Recover a node's side from its rendered position vs its parent.
   if (!n.el || !n.parent || !n.parent.el) return 1;
@@ -1686,11 +1705,13 @@ function handleMapKey(e) {
     case 'p': if (n && n.kind === 'item') act.pin(n.section, n.it); break;
     case 'A': if (n) mapAddSibling(n); break;
     case 'd':
-      if (n && n.kind === 'item') act.archive(n.section, n.it);
+      // The map follows a structural sibling node (mapRemovalFollow), not the
+      // outline's document-order neighbour; override act's cursorFollow after.
+      if (n && n.kind === 'item') { const f = mapRemovalFollow(n); act.archive(n.section, n.it); cursorFollow = f; }
       else if (n && n.kind === 'section') { cursorFollow = { section: n.title }; post({ op: 'archive-section', section: n.title }); }
       break;
     case 'D':
-      if (n && n.kind === 'item') act.del(n.section, n.it);
+      if (n && n.kind === 'item') { const f = mapRemovalFollow(n); act.del(n.section, n.it); cursorFollow = f; }
       else if (n && n.kind === 'section' && confirm(`Hard-delete section "${n.title}" and everything in it?`)) post({ op: 'delete-section', section: n.title });
       break;
     case 'o': if (n && n.kind === 'item') act.open(n.section, n.it); break;

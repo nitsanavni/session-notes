@@ -152,3 +152,44 @@ func TestMapDeleteSelectsNextSibling(t *testing.T) {
 		t.Fatalf("map focus after delete = %q, want %q", got, "second")
 	}
 }
+
+// A board where every top-level sibling owns children, so the previous/next
+// sibling of a removed node is a subtree parent (its own last descendant is a
+// leaf several levels down). The map must land on the sibling NODE, never
+// descend into that sibling's leaf — the reported "sent to the leaf of my
+// sibling instead of my sibling" surprise.
+const siblingWithKidsSrc = "## Plan\n- [ ] alpha\n  - [ ] a1\n  - [ ] a2\n- [ ] beta\n  - [ ] b1\n    - [ ] b1a\n  - [ ] b2\n- [ ] gamma\n  - [ ] g1\n"
+
+func TestMapArchiveLastLandsOnSiblingNodeNotItsLeaf(t *testing.T) {
+	// gamma is the last top-level item; its previous sibling beta has a deep
+	// subtree ending in b1a. Archiving gamma must focus beta, not b1a.
+	m := newMapModel(t, siblingWithKidsSrc, 120, 40)
+	focusMapItem(t, m, "gamma")
+	m.handleMapKey(keyPress("d"))
+	m.ensureMap()
+	if got := mapFocusText(m); got != "beta" {
+		t.Fatalf("map focus after archiving last sibling = %q, want %q (leaf-descent bug)", got, "beta")
+	}
+}
+
+func TestMapDeleteLastLandsOnSiblingNodeNotItsLeaf(t *testing.T) {
+	m := newMapModel(t, siblingWithKidsSrc, 120, 40)
+	focusMapItem(t, m, "gamma")
+	m.handleMapKey(keyPress("D"))
+	m.ensureMap()
+	if got := mapFocusText(m); got != "beta" {
+		t.Fatalf("map focus after deleting last sibling = %q, want %q (leaf-descent bug)", got, "beta")
+	}
+}
+
+func TestMapArchiveMidLandsOnNextSiblingNodeNotItsLeaf(t *testing.T) {
+	// Archiving alpha (subtree) lands on the next sibling beta — its node, not
+	// beta's first child b1.
+	m := newMapModel(t, siblingWithKidsSrc, 120, 40)
+	focusMapItem(t, m, "alpha")
+	m.handleMapKey(keyPress("d"))
+	m.ensureMap()
+	if got := mapFocusText(m); got != "beta" {
+		t.Fatalf("map focus after archiving mid sibling = %q, want %q", got, "beta")
+	}
+}
