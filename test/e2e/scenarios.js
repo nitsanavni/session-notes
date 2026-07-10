@@ -45,16 +45,16 @@ run({
     await t.key('j'); // the !! question
     await t.key('j'); // its reply "user: leaning yes"
     await t.key('R');
-    // The reply input now starts empty (no implicit author) — text as typed.
+    // Web replies carry the user: author tag like the TUI (fa536cd).
     await t.type('shipping it');
     await t.key('Enter');
     // Flat: sibling of "leaning yes", i.e. 2-space indent under the question.
-    await t.waitBoardContains('\n  - shipping it\n');
+    await t.waitBoardContains('\n  - user: shipping it\n');
     await t.key('F');
     await t.type('forked aside');
     await t.key('Enter');
     // Fork target is the cursor item (the "leaning yes" reply): nests to 4.
-    await t.waitBoardContains('\n    - forked aside\n');
+    await t.waitBoardContains('\n    - user: forked aside\n');
   },
 
   'typed text survives an external write (deferred render)': async t => {
@@ -68,7 +68,7 @@ run({
     const val = await t.page.$eval('input.inline', i => i.value);
     t.assert(val === 'mid-typing', `input intact (got ${JSON.stringify(val)})`);
     await t.key('Enter');
-    await t.waitBoardContains('  - mid-typing');
+    await t.waitBoardContains('  - user: mid-typing');
     await t.settled();
     const body = await t.page.textContent('#board');
     t.assert(body.includes('external poke'), 'deferred external edit rendered after close');
@@ -392,7 +392,7 @@ run({
     await t.page.waitForSelector('.mapnode.editing input.mapinput');
     await t.type('from the map');
     await t.key('Enter');
-    await t.waitBoardContains('  - from the map');
+    await t.waitBoardContains('  - user: from the map');
   },
 
   'map: a opens an inline provisional node under the selection': async t => {
@@ -741,11 +741,11 @@ run({
     // Re-run, confirm with Enter, then step with n/N (document order, wrapping).
     await t.key('/');
     await t.type('legacy');
-    await t.key('Enter');
+    await t.key('Enter'); // selecting commits + closes search
     s = await t.searchState();
-    t.assert(s.active && s.matches === 3, `matches confirmed (got ${JSON.stringify(s)})`);
+    t.assert(!s.active && s.lastTerm === 'legacy', `select closed search, term remembered (got ${JSON.stringify(s)})`);
     await t.assertCursor('it:Plan:- [ ] drop legacy endpoint'); // ranked-best jump
-    await t.key('n'); // document order: next after Plan
+    await t.key('n'); // n recall re-activates + steps; document order: next after Plan
     await t.assertCursor('it:Questions:- [ ] !! drop the legacy endpoint? @user');
     await t.key('n'); // then the long Ideas item
     t.assert((await t.cursorKey()).startsWith('it:Ideas:'), 'n stepped to the Ideas match');
@@ -944,12 +944,12 @@ run({
     // No-reveal: typing must not reveal the folded reply yet.
     map = (await t.sn2()).map;
     t.assert(!map.nodes.includes(replyKey), 'match not revealed while typing (no-reveal)');
-    await t.key('Enter'); // jump reveals + focuses
+    await t.key('Enter'); // select: jump reveals + focuses, then closes search
     map = (await t.sn2()).map;
     t.assert(map.focus === replyKey, `map focus jumped to the match (got ${map.focus})`);
     t.assert(map.nodes.includes(replyKey), 'match revealed through the fold after Enter');
     const s = await t.searchState();
-    t.assert(s.active && s.matches === 1, `confirmed one match (got ${JSON.stringify(s)})`);
+    t.assert(!s.active && s.lastTerm === 'extracted', `select closed search (got ${JSON.stringify(s)})`);
   },
 
   'search box typing does not trigger hotkeys': async t => {
@@ -972,10 +972,14 @@ run({
     await t.open();
     await t.key('/');
     await t.type('legacy');
-    await t.key('Enter');
+    await t.key('Enter'); // selecting commits + closes search
     let s = await t.searchState();
-    t.assert(s.active && s.hl === 'legacy', `results mode active (got ${JSON.stringify(s)})`);
-    // A plain nav key (j) must NOT drop out of search any more.
+    t.assert(!s.active && s.hl === '', `select closed search (got ${JSON.stringify(s)})`);
+    // n recall re-activates a sticky results mode.
+    await t.key('n');
+    s = await t.searchState();
+    t.assert(s.active && s.hl === 'legacy', `n re-activated sticky results mode (got ${JSON.stringify(s)})`);
+    // A plain nav key (j) must NOT drop out of search.
     await t.key('j');
     s = await t.searchState();
     t.assert(s.active && s.hl === 'legacy', `j kept results mode alive (got ${JSON.stringify(s)})`);
@@ -1004,12 +1008,11 @@ run({
     t.assert(s.promptOpen && s.hl === 'legacy', `/ recalled prefilled term (got ${JSON.stringify(s)})`);
     const val = await t.page.$eval('#searchprompt input', i => i.value);
     t.assert(val === 'legacy', `prompt prefilled with last term (got ${JSON.stringify(val)})`);
-    // Enter reuses it as-is.
+    // Enter reuses it as-is (selects + closes; term remembered).
     await t.key('Enter');
     s = await t.searchState();
-    t.assert(s.active && s.query === 'legacy', `Enter reused recalled term (got ${JSON.stringify(s)})`);
-    // Clear, then `n` with no active search re-activates the last term.
-    await t.key('Escape');
+    t.assert(!s.active && s.lastTerm === 'legacy', `Enter committed recalled term (got ${JSON.stringify(s)})`);
+    // `n` with no active search re-activates the last term.
     s = await t.searchState();
     t.assert(!s.active, 'precondition: cleared before n-recall');
     await t.key('n');
@@ -1119,9 +1122,10 @@ run({
     let s = await t.searchState();
     t.assert(s.scopeLabel === 'working', `scope label visible in prompt (got ${JSON.stringify(s.scopeLabel)})`);
     await t.type('middleware');
-    await t.key('Enter'); // results mode, cursor on a match item
+    await t.key('Enter'); // select + close
+    await t.key('n');     // n recall re-activates results mode
     const before = await t.cursorKey();
-    t.assert(before.startsWith('it:'), 'cursor is on a match item after Enter');
+    t.assert(before.startsWith('it:'), 'cursor is on a match item in results mode');
     // Tab in results mode must toggle scope (not cycle to the next section).
     await t.key('Tab');
     s = await t.searchState();
@@ -1137,11 +1141,12 @@ run({
     await t.settled();
     await t.key('/');
     // "layout" only appears near the END of the very long Ideas item, past the
-    // map's node truncation — jumping onto it must expand the node.
+    // map's node truncation — stepping onto it must expand the node.
     await t.type('layout');
-    await t.key('Enter');
+    await t.key('Enter'); // commit + close (temp expansion restored)
+    await t.key('n');     // n recall steps onto the match with temp-unwrap
     const expanded = await t.page.evaluate(() => Object.keys(window.__sn.map.expanded || {}).length);
-    t.assert(expanded >= 1, `the long match node was temporarily expanded (got ${expanded})`);
+    t.assert(expanded >= 1, `the long current match was temporarily expanded (got ${expanded})`);
     // Leaving search restores it.
     await t.key('Escape');
     const after = await t.page.evaluate(() => Object.keys(window.__sn.map.expanded || {}).length);
@@ -1215,9 +1220,13 @@ run({
     await t.page.waitForSelector('.searchhit');
     t.assert((await t.page.locator('.searchhit').count()) >= 2, 'multiple matches highlighted while typing');
     t.assert((await t.page.locator('.searchmark').count()) >= 2, 'matched substrings tinted');
-    await t.key('Enter'); // confirm: highlights persist in results mode
+    await t.key('Enter'); // select + close: highlights clear (search done)
+    await t.page.waitForFunction(() => document.querySelectorAll('.searchhit').length === 0);
+    t.assert((await t.searchState()).hl === '', 'highlights cleared on select');
+    // n recall brings a sticky results mode back with highlights.
+    await t.key('n');
     await t.page.waitForSelector('.searchhit');
-    t.assert((await t.page.locator('.searchhit').count()) >= 2, 'matches stay highlighted after confirm');
+    t.assert((await t.page.locator('.searchhit').count()) >= 2, 'matches highlighted again in recall');
     await t.key('j'); // nav no longer clears (sticky results mode)
     t.assert((await t.page.locator('.searchhit').count()) >= 2, 'highlights survive a nav key');
     await t.key('Escape'); // only Escape clears the highlights
@@ -1243,10 +1252,13 @@ run({
     await t.key('j');
     await t.assertCursor('it:Ideas:- cache invalidation could be event-driven');
     await t.key('m');
-    await t.key(' '); await t.waitBoardContains('- [ ] cache invalidation could be event-driven');
-    await t.key(' '); await t.waitBoardContains('- [>] cache invalidation could be event-driven');
-    await t.key(' '); await t.waitBoardContains('- [x] cache invalidation could be event-driven');
-    await t.key(' '); await t.waitBoardContains('- [?] cache invalidation could be event-driven');
+    await t.settled();
+    // Settle between presses: the file gate (waitBoardContains) can pass before
+    // the page re-rendered, and a space against the stale node posts an old raw.
+    await t.key(' '); await t.waitBoardContains('- [ ] cache invalidation could be event-driven'); await t.settled();
+    await t.key(' '); await t.waitBoardContains('- [>] cache invalidation could be event-driven'); await t.settled();
+    await t.key(' '); await t.waitBoardContains('- [x] cache invalidation could be event-driven'); await t.settled();
+    await t.key(' '); await t.waitBoardContains('- [?] cache invalidation could be event-driven'); await t.settled();
     await t.key(' '); await t.waitBoardContains('- cache invalidation could be event-driven');
   },
 
@@ -1675,5 +1687,47 @@ run({
       `both long nodes rendered as multi-line boxes (heights: ${wr.map(x => x.h)})`);
     const gap = wr[1].top - wr[0].bottom;
     t.assert(gap >= 16, `wrapped paragraph siblings keep a roomy gap (got ${gap.toFixed(1)}px)`);
+  },
+
+  'header stays in view while scrolling the outline (sticky)': async t => {
+    await t.open();
+    // Bulk up the board so the outline actually overflows the viewport.
+    for (let i = 0; i < 30; i++) await t.editExternally({ op: 'add', section: 'Ideas', text: `filler idea number ${i} to force a tall outline` });
+    await t.waitBoardContains('filler idea number 29');
+    await t.settled();
+    await t.key('G'); // jump to the last stop — deep scroll
+    await t.page.waitForTimeout(200);
+    const r = await t.page.evaluate(() => {
+      const h = document.querySelector('header').getBoundingClientRect();
+      return { scrollY: window.scrollY, top: h.top, bottom: h.bottom, height: h.height };
+    });
+    t.assert(r.scrollY > 100, `page really scrolled (scrollY=${r.scrollY})`);
+    t.assert(r.top >= 0 && r.bottom > 0 && r.height > 0,
+      `header still visible after deep scroll (top=${r.top}, bottom=${r.bottom})`);
+  },
+
+  'map nodes tint the claude:/user: author token like the outline': async t => {
+    await t.open();
+    await t.key('3'); // Threads: "auth refactor" has a claude: reply
+    await t.key('m');
+    await t.settled();
+    // Reveal the reply behind the default fold.
+    await t.page.evaluate(() => {
+      const n = [...document.querySelectorAll('.mapnode')].find(e => e.textContent.includes('auth refactor'));
+      n.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await t.page.waitForTimeout(100);
+    await t.key('Enter');
+    await t.page.waitForTimeout(150);
+    const r = await t.page.evaluate(() => {
+      const node = [...document.querySelectorAll('.mapnode')].find(e => e.textContent.includes('extracted, tests green'));
+      const span = node && node.querySelector('span.author.claude');
+      const asRGB = c => { const s = document.createElement('span'); s.style.color = c; document.body.append(s); const v = getComputedStyle(s).color; s.remove(); return v; };
+      const want = asRGB(getComputedStyle(document.documentElement).getPropertyValue('--author-claude').trim());
+      return { hasNode: !!node, hasSpan: !!span, color: span ? getComputedStyle(span).color : null, want };
+    });
+    t.assert(r.hasNode, 'the claude: reply node is visible in the map');
+    t.assert(r.hasSpan, 'the reply node wraps its author token in span.author.claude');
+    t.assert(r.color === r.want, `author token takes --author-claude (got ${r.color}, want ${r.want})`);
   },
 });

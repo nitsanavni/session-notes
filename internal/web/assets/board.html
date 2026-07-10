@@ -42,7 +42,14 @@ body.mapmode { max-width: none; }
 .wgrip:hover::after, body.wdragging .wgrip::after { background: var(--accent); }
 body.wdragging { user-select: none; cursor: col-resize; }
 body.mapmode .wgrip { display: none; }
-header { display: flex; align-items: baseline; gap: .6rem; margin-bottom: 1rem; flex-wrap: wrap; }
+/* Sticky header: the title/status bar stays in view while the outline scrolls.
+   It spans only the content column (the body's max-width box), sitting above
+   rows but below modals/search (z 20+) and beside the width grips (z 15). */
+header {
+  display: flex; align-items: baseline; gap: .6rem; margin-bottom: 1rem; flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 14; background: var(--bg);
+  padding: .4rem 0; border-bottom: 1px solid var(--border);
+}
 header a { color: var(--dim); text-decoration: none; }
 #title { font-size: 1.05rem; font-weight: 600; cursor: pointer; }
 #title:hover::after { content: " ✎"; color: var(--dim); }
@@ -67,7 +74,7 @@ li { padding: .1rem 0; }
 .row { display: flex; align-items: baseline; gap: .45rem; padding: 0 .3rem; border-radius: 6px; }
 /* Keep the selected line clear of the sticky top and the fixed footer bar when
    scrollIntoView brings it to a viewport edge (else it hides behind the footer). */
-.row, .sechead { scroll-margin-top: 1.5rem; scroll-margin-bottom: 3rem; }
+.row, .sechead { scroll-margin-top: 4rem; scroll-margin-bottom: 3rem; }
 .cursor { background: var(--cursor); outline: 1px solid var(--border); }
 .marker {
   cursor: pointer; user-select: none; flex: none; color: var(--dim);
@@ -1765,7 +1772,13 @@ function renderMap(b) {
     if (n.__pending || n.__editing) {
       mountMapInput(d, n); // host the inline text input inside this node box
     } else {
-      d.append(tintAuthor(d, l.text)); // tints a leading claude:/user: token
+      // Tint the claude:/user: author token like the outline does. Map labels
+      // may carry a "[x] " status marker and/or "!! " urgent prefix ahead of
+      // the token, which the anchored AUTHOR_RE would miss — emit the prefix
+      // plain, then tint from the token onward.
+      const pm = /^((?:\[[ x>?]\] )?(?:!! )?)/.exec(l.text);
+      if (pm[1]) d.append(pm[1]);
+      d.append(tintAuthor(d, l.text.slice(pm[1].length)));
       if (l.suffix) d.append(el('span', { class: 'suffix' }, l.suffix));
       if (n.kind === 'item') markSearch(d); // tint matched substring during search
       d.addEventListener('click', () => { if (searchHL !== '') endSearch(); mapState.focus = n.key; renderMap(cur); });
