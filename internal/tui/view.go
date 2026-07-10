@@ -815,6 +815,7 @@ func (m *model) viewHelp() string {
 		{"f / b (map)", "focus into subtree (breadcrumbs) / focus out one level (also esc)"},
 		{"o (map)", "open the focused item's [[linked note]] (chooser if several)"},
 		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},
+		{"z (map)", "focus-fold (zoom): collapse everything except the path to the focus (its children shown, folded); z again restores"},
 		{"! (map)", "toggle urgent (!!) on the focused item"},
 		{"D (map)", "hard-delete the focused item or whole section"},
 		{"S (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl (dev)"},

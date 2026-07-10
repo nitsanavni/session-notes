@@ -1043,6 +1043,8 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mapMove('l')
 	case "enter":
 		m.mapToggleFold()
+	case "z":
+		m.mapFocusFoldToggle()
 	case "w":
 		m.mapToggleExpand()
 	case "a":
@@ -1082,6 +1084,13 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchNext(1)
 	case "N":
 		m.searchNext(-1)
+	case "H":
+		// Shared-journal history overlay — same as the outline's H (parity).
+		m.openHistory()
+	case "V":
+		// Recent-changes overlay — same as the outline's V (parity). Enter jumps
+		// to the changed node in the map (jumpToMatch is map-aware).
+		m.openRecents()
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp
@@ -1126,6 +1135,67 @@ func (m *model) mapToggleFold() {
 		m.mapFold[m.mapFocusKey] = next
 	}
 	m.mp = nil // re-layout with the new fold state
+}
+
+// mapFocusFoldToggle is the map view's `z` key: org-mode-style zoom onto the
+// focused node, mirroring the outline's z (and the web map's mapFocusFold).
+// Every subtree collapses except the ancestor path from the layout root down to
+// the focus; ancestors (the focus included) open fully (replies shown) so the
+// path is visible, while the focus's direct children — ordinary non-ancestors —
+// stay visible but each collapsed: exactly one level open. A second z restores
+// the exact fold snapshot taken before the zoom. Folds outside a re-rooted
+// (`f`) subtree are dropped to default, like the web's rebuild-from-the-root.
+func (m *model) mapFocusFoldToggle() {
+	if m.mapFoldPrev != nil { // toggle back: restore the pre-zoom fold state
+		m.mapFold = m.mapFoldPrev
+		m.mapFoldPrev = nil
+		m.mp = nil
+		m.ensureMap() // snaps focus to the layout root if the restored folds hide it
+		return
+	}
+	m.ensureMap()
+	focus := m.mapFocusKey
+	root := m.mapFocusRoot // "" = the whole board (center)
+	snap := make(map[string]foldState, len(m.mapFold))
+	for k, v := range m.mapFold {
+		snap[k] = v
+	}
+	m.mapFoldPrev = snap
+	// Ancestor path: the focus up to (and including) the layout root.
+	anc := map[string]bool{}
+	for k := focus; ; k = parentKeyOf(k) {
+		anc[k] = true
+		if k == root || k == "" {
+			break
+		}
+	}
+	// Rebuild the folds from scratch over the FULL board tree within the layout
+	// root: ancestors open fully, every other node with children collapses.
+	folds := map[string]foldState{}
+	var walk func(items []*board.Item, key string)
+	walk = func(items []*board.Item, key string) {
+		if countDescendantsIn(items) > 0 && (root == "" || keyWithin(key, root)) {
+			if anc[key] {
+				folds[key] = foldRepliesExpanded
+			} else {
+				folds[key] = foldCollapsed
+			}
+		}
+		idx := 0
+		for _, it := range items {
+			if !it.IsItem() {
+				continue
+			}
+			walk(it.Children, key+"/"+strconv.Itoa(idx))
+			idx++
+		}
+	}
+	for i, s := range m.board.Sections {
+		walk(s.Items, "s"+strconv.Itoa(i))
+	}
+	m.mapFold = folds
+	m.mp = nil
+	m.ensureMap() // focus is on the ancestor path, so it stays visible
 }
 
 // mapToggleExpand flips the focused node between a single truncated line and a
@@ -1822,7 +1892,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · / search · n/N next/prev · f focus · b out · enter fold · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · ! urgent · p pin · d archive (item/section) · D delete (item/section) · y copy path · M log · m outline · u undo · S surprised? · ? help · q quit"
+	hints := "hjkl move · / search · n/N next/prev · f focus · b out · enter fold · z zoom · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · ! urgent · p pin · d archive (item/section) · D delete (item/section) · y copy path · H history · V recents · M log · m outline · u undo · S surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

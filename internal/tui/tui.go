@@ -186,6 +186,10 @@ type model struct {
 	// "[+N]" suffix. `enter` cycles a node collapsed -> default ->
 	// replies-expanded -> collapsed (skipping states that render identically).
 	mapFold map[string]foldState
+	// mapFoldPrev is the fold snapshot taken by the map view's `z` focus-fold
+	// (zoom): non-nil while zoomed, restored (and nilled) by the second `z`.
+	// The map counterpart of the outline's focusFoldPrev/focusFoldPrevItems.
+	mapFoldPrev map[string]foldState
 	// mapShowLog includes the append-only Log section in the map. It is excluded
 	// by default (noise); M toggles it back on.
 	mapShowLog bool
