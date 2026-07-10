@@ -91,6 +91,12 @@ type model struct {
 	// hidden-item count, and its items are skipped by cursor navigation.
 	collapsed map[string]bool
 
+	// focusFoldPrev is the collapse-state snapshot taken by a `z` focus-fold
+	// (zoom): non-nil while zoomed, restored (and nilled) by the second `z`.
+	// The TUI outline folds at section granularity only, so z collapses every
+	// section except the cursor's (the web outline additionally folds items).
+	focusFoldPrev map[string]bool
+
 	// listExpanded holds, keyed by item raw source line, which items the user has
 	// wrapped in place (the `w` toggle in the outline view): rendered as a wrapped
 	// multi-line block instead of a single truncated line. Session-only, like
@@ -379,6 +385,36 @@ func (m *model) cursorToHeader(sec int) bool {
 		}
 	}
 	return false
+}
+
+// focusFoldToggle is the `z` key: zoom the outline onto the cursor's section
+// by collapsing every other section, or — when already zoomed — restore the
+// exact collapse state snapshotted before the zoom. The cursor stays on the
+// same item (or header) across both directions; if the restored state hides
+// the item, it falls back to its section header.
+func (m *model) focusFoldToggle() {
+	it := m.currentItem()
+	sec := m.selSec
+	if m.cursor >= 0 && m.cursor < len(m.positions) {
+		sec = m.positions[m.cursor].sec
+	}
+	if m.focusFoldPrev != nil { // restore the pre-zoom fold state
+		m.collapsed = m.focusFoldPrev
+		m.focusFoldPrev = nil
+	} else { // zoom: collapse every section except the cursor's
+		snap := make(map[string]bool, len(m.collapsed))
+		for k, v := range m.collapsed {
+			snap[k] = v
+		}
+		m.focusFoldPrev = snap
+		for si, s := range m.board.Sections {
+			m.setCollapsed(s.Title, si != sec)
+		}
+	}
+	m.rebuildPositions()
+	if it == nil || !m.cursorToItem(it) {
+		m.cursorToHeader(sec)
+	}
 }
 
 // firstChildItem returns parent's first navigable (bullet) child, or nil.
@@ -951,6 +987,13 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.cursorToHeader(m.positions[m.cursor].sec)
 			}
 		}
+	case "z":
+		// Focus-fold (zoom): collapse every section except the cursor's, so
+		// only the current context stays on screen; a second z restores the
+		// exact pre-zoom fold state. The TUI outline folds at section
+		// granularity only (no per-item folds), so the web outline's
+		// item-level part of the zoom has no equivalent here.
+		m.focusFoldToggle()
 	case "e":
 		// On a section header, e renames the heading (reusing the map view's
 		// rename machinery); on an item it edits the bullet inline.

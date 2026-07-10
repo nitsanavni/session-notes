@@ -583,7 +583,7 @@ func (m *model) viewFooter() string {
 	if m.mode == modeSearch {
 		return styleStatus.Render("search: ") + m.input.View()
 	}
-	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter collapse · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
+	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter collapse · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -612,6 +612,7 @@ func (m *model) viewHelp() string {
 		{"enter", "collapse / expand the section under the cursor (on its header)"},
 		{"l", "on a section: expand + land on first item; on an item: descend to first child"},
 		{"h", "on an item: step out to the parent (top-level item -> section header)"},
+		{"z", "focus-fold (zoom): collapse every other section; z again restores the folds"},
 		{"w", "wrap the item at the cursor (toggle single-line <-> full multi-line)"},
 		{"e", "edit item inline (the bullet line only); on a section header, rename it"},
 		{"T", "edit the board title (frontmatter title:; empty clears it)"},

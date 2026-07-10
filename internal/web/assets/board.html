@@ -346,7 +346,7 @@ body.mapmode #mapwrap { display: block; }
 <div id="searchpanel" aria-label="search results"></div>
 <div id="linkchooser"><div class="lbl">open link — j/k/arrows move · enter open · esc cancel</div><div class="list"></div></div>
 <div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
-<footer id="listfoot">j/k/arrows move · tab section · enter fold · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
+<footer id="listfoot">j/k/arrows move · tab section · enter fold · z zoom · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 <div id="searchstatus"></div>
@@ -385,6 +385,9 @@ body.mapmode #mapwrap { display: block; }
       section and lands on its first item. On an item: enter toggles its subtree fold; l unfolds then
       descends to the first child; h always steps out to the parent (top-level → section header) and
       never folds</td></tr>
+    <tr><td>z</td><td>focus-fold (zoom): collapse everything except the path to the cursor; the
+      cursor's item stays open one level (children visible, folded). z again restores the previous
+      fold state</td></tr>
     <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
@@ -732,6 +735,71 @@ function revealItemAncestors(section, target) {
   };
   find(sec.items);
   for (const anc of path) collapsedItems.delete(itemKey(section, anc));
+}
+
+// ---- focus-fold (the z key): org-mode-style zoom onto the cursor ----
+// z folds the whole board down to the cursor's context: every OTHER section
+// collapses, and inside the cursor's section every subtree collapses except
+// the ancestor path to the cursor. The cursor's own item stays open exactly
+// one level — each direct child visible but itself folded. A second z restores
+// the exact fold state (sections + items) from before the zoom.
+let focusFoldPrev = null; // non-null while zoomed: { secs, items } snapshot
+
+function focusFold() {
+  if (focusFoldPrev) { // toggle back: restore the pre-zoom fold state
+    const st = cursorStop();
+    for (const k of Object.keys(collapsedSecs)) delete collapsedSecs[k];
+    Object.assign(collapsedSecs, focusFoldPrev.secs);
+    collapsedItems.clear();
+    for (const k of focusFoldPrev.items) collapsedItems.add(k);
+    focusFoldPrev = null;
+    // If the restored state hides the cursor's stop (its section/subtree was
+    // folded before the zoom), fall back to its section head via cursorFollow.
+    if (st) cursorFollow = { section: st.type === 'section' ? st.title : st.section };
+    renderOutline(cur);
+    return;
+  }
+  const s = cursorStop();
+  if (!s || !cur) return;
+  focusFoldPrev = { secs: { ...collapsedSecs }, items: [...collapsedItems] };
+  const secTitle = s.type === 'section' ? s.title : s.section;
+  for (const sec of cur.sections || []) setCollapsed(sec.title, sec.title !== secTitle);
+  // Rebuild the item folds for the focused section from scratch: collapse every
+  // foldable item that is neither the cursor item nor one of its ancestors.
+  // The cursor's DIRECT children are ordinary non-ancestors, so they render
+  // visible-but-folded — exactly the "one level open" rule. Folds in the other
+  // (now collapsed) sections are irrelevant while hidden and come back with the
+  // snapshot on the second z.
+  collapsedItems.clear();
+  const sec = (cur.sections || []).find(x => x.title === secTitle);
+  const target = s.type === 'item' ? s.it : null; // header: fold all top-level subtrees
+  const ancestors = new Set();
+  if (target && sec) {
+    const stack = [];
+    const find = items => {
+      for (const it of items || []) {
+        if (it === target) return true;
+        stack.push(it);
+        if (find(it.children)) return true;
+        stack.pop();
+      }
+      return false;
+    };
+    find(sec.items);
+    for (const a of stack) ancestors.add(a);
+  }
+  const walk = items => {
+    for (const it of items || []) {
+      if (!it.continuation && it.children && it.children.length
+          && it !== target && !ancestors.has(it)) {
+        collapsedItems.add(itemKey(secTitle, it));
+      }
+      walk(it.children);
+    }
+  };
+  walk(sec ? sec.items : []);
+  cursorKey = s.key; // the zoom anchor keeps the selection
+  renderOutline(cur);
 }
 
 // ---- edits ----
@@ -2605,7 +2673,7 @@ document.addEventListener('keydown', e => {
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
     ' ', 'b', '!', 'p', 'e', 'w', 'W', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'T', 'B', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
-    '/', 'n', 'N']);
+    '/', 'n', 'N', 'z']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
@@ -2651,6 +2719,7 @@ document.addEventListener('keydown', e => {
     case 'B': location.href = '/'; break;
     case 'm': enterMap(); break;
     case 'W': cycleWidth(); break;
+    case 'z': focusFold(); break;
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
     case 'y': copyPath(); break;
@@ -2789,6 +2858,7 @@ window.__sn = {
   get listExpanded() { return [...listExpanded]; },
   get collapsedSecs() { return { ...collapsedSecs }; },
   get collapsedItems() { return [...collapsedItems]; },
+  get focusFolded() { return !!focusFoldPrev; },
   // Outline width state for the e2e harness: the current mode, custom px, the
   // resolved --outline-width value, and the measured content-column width.
   get width() {

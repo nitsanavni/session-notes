@@ -851,6 +851,73 @@ run({
       'child still hidden after re-render');
   },
 
+  'outline: z focus-folds to the cursor, children shown collapsed': async t => {
+    await t.open();
+    // Give the reply a child of its own, so the anchor has a grandchild that
+    // must hide behind the one-level rule.
+    await t.editExternally({ op: 'fork', section: 'Threads',
+      raw: '  - claude: extracted, tests green', text: 'claude: grandchild detail' });
+    await t.waitBoardContains('claude: grandchild detail');
+    // Wait for the PAGE (not just the file) to have re-rendered with the fork.
+    await t.page.waitForFunction(() =>
+      JSON.stringify(window.__sn.board).includes('grandchild detail'));
+    await t.settled();
+    await t.key('3'); // Threads
+    await t.key('j'); // auth item (child: reply; grandchild: detail)
+    const auth = 'it:Threads:- [>] auth refactor — extracting middleware';
+    await t.assertCursor(auth);
+    await t.key('z');
+    const st = await t.page.evaluate(() => ({
+      secs: window.__sn.collapsedSecs,
+      items: window.__sn.collapsedItems,
+      stops: window.__sn.stops.map(s => s.key),
+      cursor: window.__sn.cursorKey,
+      zoomed: window.__sn.focusFolded,
+    }));
+    t.assert(st.zoomed, 'focus-fold active');
+    t.assert(st.cursor === auth, `cursor stays on the anchor (got ${st.cursor})`);
+    for (const other of ['Waiting on User', 'Plan', 'Questions', 'Ideas', 'Log']) {
+      t.assert(st.secs[other] === true, `section ${other} collapsed (got ${JSON.stringify(st.secs)})`);
+    }
+    t.assert(st.secs['Threads'] !== true, 'the anchor section stays expanded');
+    // Direct child visible but itself folded; grandchild hidden.
+    const reply = 'it:Threads:  - claude: extracted, tests green';
+    t.assert(st.stops.includes(reply), 'direct child still visible');
+    t.assert(st.items.includes(reply), `direct child rendered folded (got ${JSON.stringify(st.items)})`);
+    t.assert(!st.stops.some(k => k.includes('grandchild detail')), 'grandchild hidden');
+  },
+
+  'outline: second z restores the pre-zoom fold state': async t => {
+    await t.open();
+    // Pre-existing manual folds: collapse the Plan section and the Questions item.
+    await t.key('2'); // Plan header
+    await t.key('h'); // collapse Plan
+    await t.key('4'); // Questions
+    await t.key('j'); // the !! question (has a reply child)
+    const q = 'it:Questions:- [ ] !! drop the legacy endpoint? @user';
+    await t.key('Enter'); // fold the question's subtree
+    // Zoom onto Threads' auth item, then zoom back out.
+    await t.key('3'); // Threads header
+    await t.key('j'); // auth item
+    await t.key('z');
+    await t.key('z');
+    const st = await t.page.evaluate(() => ({
+      secs: window.__sn.collapsedSecs,
+      items: window.__sn.collapsedItems,
+      cursor: window.__sn.cursorKey,
+      zoomed: window.__sn.focusFolded,
+    }));
+    t.assert(!st.zoomed, 'focus-fold cleared after the second z');
+    t.assert(st.secs['Plan'] === true, `manual Plan fold restored (got ${JSON.stringify(st.secs)})`);
+    for (const open of ['Waiting on User', 'Questions', 'Ideas', 'Log']) {
+      t.assert(st.secs[open] !== true, `section ${open} back expanded (got ${JSON.stringify(st.secs)})`);
+    }
+    t.assert(st.items.length === 1 && st.items[0] === q,
+      `manual item fold restored exactly (got ${JSON.stringify(st.items)})`);
+    t.assert(st.cursor === 'it:Threads:- [>] auth refactor — extracting middleware',
+      `cursor kept on the anchor (got ${st.cursor})`);
+  },
+
   'search (map): jump reveals a folded reply': async t => {
     await t.open();
     await t.key('m'); // enter map
