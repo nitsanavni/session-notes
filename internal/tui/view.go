@@ -960,7 +960,7 @@ func (m *model) viewLinkPick() string {
 		}
 		b.WriteString(cursor + st.Render("[["+name+"]]") + "\n")
 	}
-	b.WriteString("\n" + styleHelpBar.Render("j/k/arrows move · enter open · esc cancel"))
+	b.WriteString("\n" + styleHelpBar.Render("j/k/arrows move · enter open · y copy path · esc cancel"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 

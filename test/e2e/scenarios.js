@@ -134,6 +134,36 @@ run({
     t.assert(fs.readFileSync(notePath, 'utf8').includes('from e2e'), 'note content saved');
   },
 
+  'note modal copy-path button copies the absolute note path': async t => {
+    await t.open();
+    await t.key('5'); // Ideas
+    await t.key('j');
+    await t.key('j'); // the [[design-notes]] item
+    await t.key('o');
+    await t.page.waitForSelector('#notemodal.open');
+    // Clipboard writes are flaky/permission-gated in headless Chromium, so we
+    // assert the app-side handler recorded the path it copied (window.__sn hook)
+    // and the button flashed "copied!".
+    await t.page.click('#notecopypath');
+    // The handler is async (clipboard write) — wait for the flash before asserting.
+    await t.page.waitForFunction(() => document.getElementById('notecopypath').textContent === 'copied!', null, { timeout: 3000 });
+    const got = await t.page.evaluate(() => window.__sn && window.__sn.lastCopiedPath);
+    const suffix = require('path').join('e2e-fixture-0001.notes', 'design-notes.md');
+    t.assert(got && got.startsWith('/') && got.endsWith(suffix), `copied path is the absolute note path (got=${got})`);
+  },
+
+  'O copies the item\'s linked-note path without opening the modal': async t => {
+    await t.open();
+    await t.key('5'); // Ideas
+    await t.key('j');
+    await t.key('j'); // the [[design-notes]] item
+    await t.key('O');
+    const suffix = require('path').join('e2e-fixture-0001.notes', 'design-notes.md');
+    await t.page.waitForFunction(sfx => window.__sn && window.__sn.lastCopiedPath && window.__sn.lastCopiedPath.endsWith(sfx), suffix, { timeout: 3000 });
+    const open = await t.page.$eval('#notemodal', e => e.classList.contains('open'));
+    t.assert(!open, 'O does not open the note modal');
+  },
+
   'section rename and archive from the keyboard': async t => {
     await t.open();
     await t.key('5'); // Ideas head

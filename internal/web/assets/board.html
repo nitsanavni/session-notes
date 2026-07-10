@@ -381,7 +381,7 @@ body.mapmode #mapwrap { display: block; }
   <div class="fbody" role="log" aria-live="polite" aria-label="recent out-of-band changes"></div></div>
 
 <div class="modal" id="notemodal"><div class="panel">
-  <div class="bar"><b id="notename"></b><button id="notesave">save</button><button id="noteclose">close</button></div>
+  <div class="bar"><b id="notename"></b><button id="notecopypath" title="copy the note's absolute path (y)">copy path</button><button id="notesave">save</button><button id="noteclose">close</button></div>
   <textarea id="notetext" spellcheck="false"></textarea>
 </div></div>
 
@@ -1101,6 +1101,20 @@ const act = {
     if (links.length === 1) { openLink(links[0]); return; }
     linkChooser(links); // 2+ links: pick one (TUI's modeLinkPick)
   },
+  // copyPath (O): copy the item's first [[linked note]] absolute path to the
+  // clipboard so it can be opened in another editor — the TUI's O, web parity.
+  copyPath: async (s, it) => {
+    const links = extractLinks(it.text);
+    if (!links.length) { toast('no [[link]] on this item', true); return; }
+    try {
+      const r = await fetch(`${API}/note/${encodeURIComponent(links[0].name)}`);
+      if (!r.ok) { toast('cannot resolve note path', true); return; }
+      const p = (await r.json()).path || '';
+      window.__sn && (window.__sn.lastCopiedPath = p);
+      try { await navigator.clipboard.writeText(p); } catch {}
+      toast('path copied: ' + p, true);
+    } catch { toast('copy failed', true); }
+  },
 };
 
 function itemNode(section, it) {
@@ -1478,12 +1492,28 @@ async function openNote(name) {
   if (!r.ok) { toast(`cannot open note ${name}`); return; }
   const n = await r.json();
   noteOpen = name;
+  noteOpenPath = n.path || '';
   document.getElementById('notename').textContent = `[[${name}]]${n.exists ? '' : ' (new)'}`;
   document.getElementById('notetext').value = n.content;
   toggleModal('notemodal', true);
   document.getElementById('notetext').focus();
 }
 document.getElementById('noteclose').addEventListener('click', () => toggleModal('notemodal', false));
+
+// Copy the open note's absolute path (to open it in another editor). Uses the
+// path the note GET returned; flashes the button and toasts. Exposed count via
+// __sn for the e2e (clipboard perms are flaky in headless Chromium).
+let noteOpenPath = '';
+async function copyNotePath() {
+  if (!noteOpenPath) return;
+  window.__sn && (window.__sn.lastCopiedPath = noteOpenPath);
+  try { await navigator.clipboard.writeText(noteOpenPath); } catch {}
+  const btn = document.getElementById('notecopypath');
+  const was = btn.textContent; btn.textContent = 'copied!';
+  setTimeout(() => { btn.textContent = was; }, 1200);
+  toast('path copied: ' + noteOpenPath, true);
+}
+document.getElementById('notecopypath').addEventListener('click', copyNotePath);
 document.getElementById('notesave').addEventListener('click', async () => {
   const r = await fetch(`${API}/note/${encodeURIComponent(noteOpen)}`, {
     method: 'POST',
@@ -1540,6 +1570,8 @@ document.getElementById('rawtext').addEventListener('keydown', e => {
 document.getElementById('notetext').addEventListener('keydown', e => {
   e.stopPropagation();
   if (e.key === 'Escape') toggleModal('notemodal', false);
+  // ctrl+y copies the note path from within the textarea (bare y is note text).
+  if (e.key === 'y' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); copyNotePath(); }
 });
 document.getElementById('helpclose').addEventListener('click', () => toggleModal('helpmodal', false));
 
@@ -2406,6 +2438,7 @@ function handleMapKey(e) {
       else if (n && n.kind === 'section' && confirm(`Hard-delete section "${n.title}" and everything in it?`)) post({ op: 'delete-section', section: n.title });
       break;
     case 'o': if (n && n.kind === 'item') act.open(n.section, n.it); break;
+    case 'O': if (n && n.kind === 'item') act.copyPath(n.section, n.it); break;
     case 'z': mapFocusFold(); break;
     case 'V': enterFeedMode(); break;
     // Modal/global keys, same as the outline (parity): history, raw editor,
@@ -3004,6 +3037,7 @@ document.addEventListener('keydown', e => {
     case 'R': if (onItem) act.reply(s.section, s.it, s.row, s.li, 'reply'); break;
     case 'F': if (onItem) act.reply(s.section, s.it, s.row, s.li, 'fork'); break;
     case 'o': if (onItem) act.open(s.section, s.it); break;
+    case 'O': if (onItem) act.copyPath(s.section, s.it); break;
     case 'd':
       if (onItem) act.archive(s.section, s.it);
       else if (onSec) { cursorFollow = { section: s.title }; post({ op: 'archive-section', section: s.title }); }

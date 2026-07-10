@@ -1099,6 +1099,12 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mapBlocked()
 	case "o":
 		return m, m.mapOpenLink()
+	case "O":
+		if ref := m.mp.refs[m.mp.focus]; ref.kind == refItem {
+			m.yankLinkPath(ref.item)
+		} else {
+			m.status = "focus an item to copy its link path"
+		}
 	case "m":
 		m.exitMap()
 	case "M":

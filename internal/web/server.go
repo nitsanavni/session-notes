@@ -635,18 +635,22 @@ func (s *Server) handleNoteGet(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	absNote := notePath
+	if a, aerr := filepath.Abs(notePath); aerr == nil {
+		absNote = a
+	}
 	data, err := os.ReadFile(notePath)
 	if os.IsNotExist(err) {
 		// Same seed the TUI uses when opening a missing side note — but created
 		// lazily on first save, not on read.
-		writeJSON(w, map[string]any{"name": name, "content": "# " + name + "\n", "exists": false})
+		writeJSON(w, map[string]any{"name": name, "content": "# " + name + "\n", "exists": false, "path": absNote})
 		return
 	}
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, map[string]any{"name": name, "content": string(data), "exists": true})
+	writeJSON(w, map[string]any{"name": name, "content": string(data), "exists": true, "path": absNote})
 }
 
 func (s *Server) handleNotePut(w http.ResponseWriter, r *http.Request) {

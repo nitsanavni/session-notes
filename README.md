@@ -475,6 +475,7 @@ tenants of the same network.
 | `E` | open the whole board in $EDITOR / raw markdown (3-way merged on save) |
 | `T` | edit the board title (frontmatter title:; empty clears it) |
 | `o` | open the item's [[linked note]] in $EDITOR (chooser if it has several) |
+| `O` | copy the absolute path of the item's [[linked note]] to the clipboard (to open it in another editor); creates the note if missing |
 | `L` | quick log entry |
 | `y` | copy the board file path to the clipboard (shown in status) |
 | `m` | toggle the mindmap view |

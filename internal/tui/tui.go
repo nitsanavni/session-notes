@@ -818,21 +818,60 @@ func (m *model) reloadExternal() { m.doReload(true) }
 // xclip / wl-copy, best effort) and always shows it in the status line, so the
 // path is revealed even when no clipboard tool is available.
 func (m *model) yankBoardPath() {
-	path := m.board.Path
-	copied := false
+	if copyToClipboard(m.board.Path) {
+		m.status = "copied " + m.board.Path
+	} else {
+		m.status = m.board.Path
+	}
+}
+
+// copyToClipboard best-effort copies text to the system clipboard via the first
+// available tool (pbcopy / xclip / wl-copy). Returns whether a tool ran, so the
+// caller can fall back to revealing the value in the status line.
+func copyToClipboard(text string) bool {
 	for _, tool := range [][]string{{"pbcopy"}, {"xclip", "-selection", "clipboard"}, {"wl-copy"}} {
 		if _, err := exec.LookPath(tool[0]); err != nil {
 			continue
 		}
 		cmd := exec.Command(tool[0], tool[1:]...)
-		cmd.Stdin = strings.NewReader(path)
-		if cmd.Run() == nil {
-			copied = true
-		}
-		break
+		cmd.Stdin = strings.NewReader(text)
+		return cmd.Run() == nil
 	}
-	if copied {
-		m.status = "copied " + path
+	return false
+}
+
+// yankLinkPath copies the absolute path of the item's linked note to the
+// clipboard so it can be opened in another editor. With several links it copies
+// the first; the multi-link picker's own `y` copies the highlighted one. The
+// note file is created (with its "# name" heading) if missing, mirroring `o`,
+// so the copied path always points at a real file.
+func (m *model) yankLinkPath(it *board.Item) {
+	if it == nil {
+		return
+	}
+	links := board.ExtractLinks(it.DisplayText())
+	if len(links) == 0 {
+		m.status = "no [[link]] on this item"
+		return
+	}
+	m.yankNotePath(links[0])
+}
+
+// yankNotePath resolves a single link name to its absolute file path, ensures
+// the file exists (for non-path links), copies it, and reports via the status.
+func (m *model) yankNotePath(name string) {
+	path := board.ResolveLink(m.board, name)
+	if !board.IsPathLink(name) {
+		if err := ensureNoteFile(path, name); err != nil {
+			m.status = "copy path failed: " + err.Error()
+			return
+		}
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if copyToClipboard(path) {
+		m.status = "path copied: " + path
 	} else {
 		m.status = path
 	}
@@ -1353,6 +1392,8 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.openEditor()
 	case "o":
 		return m, m.openLink()
+	case "O":
+		m.yankLinkPath(m.currentItem())
 	case "L":
 		m.startInput(modeInputLog, "", "log entry")
 	case "y":
@@ -2054,6 +2095,10 @@ func (m *model) handleLinkPickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		name := m.linkOpts[m.linkCur]
 		m.mode = modeBoard
 		return m, m.openLinkByName(name)
+	case "y":
+		// Copy the highlighted note's absolute path (to open in another editor);
+		// stay in the picker so you can still open or copy another.
+		m.yankNotePath(m.linkOpts[m.linkCur])
 	}
 	return m, nil
 }
