@@ -207,6 +207,15 @@ type boardJSON struct {
 	CanUndo  bool          `json:"canUndo"`
 	CanRedo  bool          `json:"canRedo"`
 	Sections []sectionJSON `json:"sections"`
+	Status   *statusJSON   `json:"status,omitempty"`
+}
+
+// statusJSON mirrors the live session sidecar for the board footer.
+type statusJSON struct {
+	Model      string   `json:"model,omitempty"`
+	ContextPct *float64 `json:"contextPct,omitempty"`
+	CostUSD    float64  `json:"costUsd,omitempty"`
+	Activity   string   `json:"activity,omitempty"`
 }
 
 func statusString(st board.Status) string {
@@ -294,6 +303,14 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, sec := range b.Sections {
 		resp.Sections = append(resp.Sections, sectionJSON{Title: sec.Title, Items: itemsJSON(sec.Items)})
+	}
+	if st, ok := board.ReadStatus(b.Frontmatter.Session); ok && st.Fresh(time.Now()) {
+		sj := &statusJSON{Model: st.Model, CostUSD: st.CostUSD, Activity: st.Activity}
+		if st.HasContext() {
+			pct := st.ContextPct
+			sj.ContextPct = &pct
+		}
+		resp.Status = sj
 	}
 	writeJSON(w, resp)
 }
@@ -693,7 +710,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()
 
-	last := fileStamp(path)
+	// Also watch the session status sidecar so the footer (model / context /
+	// activity) refreshes live, without a separate poll endpoint.
+	statusPath := ""
+	if b, err := board.Load(path); err == nil {
+		statusPath = board.StatusPath(b.Frontmatter.Session)
+	}
+	stamp := func() string { return fileStamp(path) + "|" + fileStamp(statusPath) }
+	last := stamp()
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	ping := time.NewTicker(15 * time.Second)
@@ -706,7 +730,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, ": ping\n\n")
 			fl.Flush()
 		case <-tick.C:
-			if cur := fileStamp(path); cur != last {
+			if cur := stamp(); cur != last {
 				last = cur
 				fmt.Fprint(w, "data: changed\n\n")
 				fl.Flush()

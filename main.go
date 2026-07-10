@@ -253,6 +253,10 @@ func runHook(name string) {
 		hooks.SessionEnd(os.Stdin, os.Stdout)
 	case "prompt-submit":
 		hooks.PromptSubmit(os.Stdin, os.Stdout)
+	case "stop":
+		hooks.Stop(os.Stdin, os.Stdout)
+	case "statusline":
+		hooks.StatusLine(os.Stdin, os.Stdout)
 	}
 }
 
@@ -294,6 +298,10 @@ Usage:
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook
+  session-notes hook stop             Stop hook (marks the session idle)
+  session-notes hook statusline       statusLine command: records model /
+                                      context% / cost into the board status
+                                      sidecar and prints a compact status line
 `)
 }
 

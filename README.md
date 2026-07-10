@@ -508,8 +508,20 @@ global, see Install):
   `~/.claude/boards/.state/<session-id>.last-seen`).
 - **`hook session-end`** — appends an `end` line to the Log and cleans up the pane
   mapping if it still points at this session.
+- **`hook stop`** — runs when Claude finishes responding; records the session as
+  `idle` (waiting on you) in the status sidecar (below).
+- **`hook statusline`** — wired as Claude Code's `statusLine` command (not a hook
+  event). It reads the [statusLine JSON](https://code.claude.com/docs/en/statusline)
+  on stdin, records the live **model**, **context-window %**, and **cost** into
+  `~/.claude/boards/.state/<session-id>.status` (atomic write), and prints a compact
+  `<model> | ctx NN%` line for your terminal's status line. The board UIs read that
+  sidecar and show a footer/header segment — model, a `▰▰▰▱▱ 62%` context bar, and
+  the activity (`working`/`idle`/`ended`) — while it's fresh (hidden after 5 min of
+  no updates, i.e. the session is likely gone). The session-start / prompt-submit
+  hooks also stamp `working` into the same sidecar, so activity tracks even without
+  the statusLine wired.
 
-All three hooks are designed to be fast and never break your session: on any
+All these hooks are designed to be fast and never break your session: on any
 internal error they exit `0` silently rather than failing the hook.
 
 Beyond the hooks, Claude is expected to use the `Monitor` tool during the session

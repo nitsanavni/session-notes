@@ -150,7 +150,16 @@ Read-side helpers (not writes):
                                 board's "pin-cadence:" frontmatter) and update the
                                 same state the prompt-submit hook uses. A file-watch
                                 monitor can call "pins --due" each cycle to resurface
-                                pins even when no user prompt fires.`,
+                                pins even when no user prompt fires.
+
+Session status sidecar (not a write you make):
+  hook statusline               wired as Claude Code's statusLine command. Reads the
+                                statusLine JSON on stdin and records the live model,
+                                context-window %, and cost into
+                                <boards-dir>/.state/<session>.status, printing a
+                                compact "<model> | ctx NN%" line. The TUI footer and
+                                web header show model + a context bar + activity from
+                                that sidecar while it's fresh (hidden after 5m stale).`,
 }
 
 // runDocs implements `session-notes docs [topic]`: print a topic's recipe, or

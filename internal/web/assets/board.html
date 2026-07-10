@@ -1162,6 +1162,29 @@ function renderSessionStatus(st) {
   el.textContent = parts.join('  ·  ');
 }
 
+// contextBar renders a compact 5-cell progress bar for a 0–100 percentage.
+function contextBar(pct) {
+  const cells = 5;
+  const p = Math.max(0, Math.min(100, pct));
+  const filled = Math.round(p / 100 * cells);
+  return '▰'.repeat(filled) + '▱'.repeat(cells - filled);
+}
+
+// renderSessionStatus fills the header's live session-status segment from the
+// board's status sidecar (model · context bar · activity · cost), or clears it
+// when no fresh status is present.
+function renderSessionStatus(st) {
+  const el = document.getElementById('sessionstatus');
+  if (!el) return;
+  if (!st) { el.textContent = ''; return; }
+  const parts = [];
+  if (st.model) parts.push(st.model);
+  if (typeof st.contextPct === 'number') parts.push(contextBar(st.contextPct) + ' ' + Math.round(st.contextPct) + '%');
+  if (st.activity) parts.push(st.activity);
+  if (st.costUsd) parts.push('$' + st.costUsd.toFixed(2));
+  el.textContent = parts.join('  ·  ');
+}
+
 function renderOutline(b) {
   document.title = (b.title || shortId(b.session || b.id)) + ' — session-notes';
   document.getElementById('title').textContent = b.title || shortId(b.session || b.id);

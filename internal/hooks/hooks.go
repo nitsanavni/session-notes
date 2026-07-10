@@ -122,6 +122,8 @@ func SessionStart(stdin io.Reader, stdout io.Writer) {
 		})
 	}
 
+	RecordActivity(in.SessionID, "working")
+
 	fmt.Fprint(stdout, Blurb(path))
 
 	if prev := previousBoards(in.SessionID, in.Cwd, 3); len(prev) > 0 {
@@ -196,6 +198,7 @@ func PromptSubmit(stdin io.Reader, stdout io.Writer) {
 	if !ok {
 		return
 	}
+	RecordActivity(in.SessionID, "working")
 	path := board.BoardPath(in.SessionID)
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -345,6 +348,7 @@ func SessionEnd(stdin io.Reader, stdout io.Writer) {
 	if !ok {
 		return
 	}
+	RecordActivity(in.SessionID, "ended")
 	path := board.BoardPath(in.SessionID)
 	if b, err := board.Load(path); err == nil {
 		b.AppendLog("end", "session ended")
@@ -366,6 +370,109 @@ func SessionEnd(stdin io.Reader, stdout io.Writer) {
 			_ = os.Remove(board.PaneMappingPath(paneID))
 		}
 	}
+}
+
+// statusLineInput is the subset of Claude Code's statusLine JSON we consume.
+// The schema is documented at https://code.claude.com/docs/en/statusline —
+// every field here is optional and parsed tolerantly (pointers / a lenient
+// context struct) so schema drift never breaks the passthrough or the sidecar.
+type statusLineInput struct {
+	SessionID string `json:"session_id"`
+	Model     struct {
+		DisplayName string `json:"display_name"`
+		ID          string `json:"id"`
+	} `json:"model"`
+	Cost struct {
+		TotalCostUSD float64 `json:"total_cost_usd"`
+	} `json:"cost"`
+	// ContextWindow carries token usage. Recent Claude Code pre-computes
+	// used_percentage; older/edge cases only give raw token counts, so we fall
+	// back to computing it from total_input_tokens / context_window_size.
+	ContextWindow struct {
+		UsedPercentage    *float64 `json:"used_percentage"`
+		TotalInputTokens  *float64 `json:"total_input_tokens"`
+		ContextWindowSize *float64 `json:"context_window_size"`
+	} `json:"context_window"`
+}
+
+// contextPct returns the context-used percentage (0–100), or -1 when unknown.
+func (in *statusLineInput) contextPct() float64 {
+	if in.ContextWindow.UsedPercentage != nil {
+		return *in.ContextWindow.UsedPercentage
+	}
+	if in.ContextWindow.TotalInputTokens != nil && in.ContextWindow.ContextWindowSize != nil && *in.ContextWindow.ContextWindowSize > 0 {
+		return *in.ContextWindow.TotalInputTokens / *in.ContextWindow.ContextWindowSize * 100
+	}
+	return -1
+}
+
+// modelName returns the best available model label.
+func (in *statusLineInput) modelName() string {
+	if in.Model.DisplayName != "" {
+		return in.Model.DisplayName
+	}
+	return in.Model.ID
+}
+
+// StatusLine handles the statusLine command: it reads Claude Code's statusLine
+// JSON from stdin, records model / context% / cost into the status sidecar, and
+// prints a compact one-line status ("<model> | ctx NN%") to stdout for the
+// terminal statusline. It must always succeed silently on bad input.
+func StatusLine(stdin io.Reader, stdout io.Writer) {
+	data, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
+	if err != nil {
+		return
+	}
+	var in statusLineInput
+	if err := json.Unmarshal(data, &in); err != nil || in.SessionID == "" {
+		return
+	}
+	pct := in.contextPct()
+	cost := in.Cost.TotalCostUSD
+	name := in.modelName()
+	board.UpdateStatus(in.SessionID, func(s *board.SessionStatus) {
+		if name != "" {
+			s.Model = name
+		}
+		s.ContextPct = pct
+		if cost > 0 {
+			s.CostUSD = cost
+		}
+		// A statusline refresh means the session is alive and working; only
+		// downgrade to idle/ended via the explicit lifecycle hooks.
+		if s.Activity == "" {
+			s.Activity = "working"
+		}
+	})
+
+	// Render the terminal statusline. stdout of a statusLine command is shown
+	// verbatim as the line, so keep it short and informative.
+	line := name
+	if line == "" {
+		line = "claude"
+	}
+	if pct >= 0 {
+		line += fmt.Sprintf(" | ctx %.0f%%", pct)
+	}
+	fmt.Fprintln(stdout, line)
+}
+
+// RecordActivity stamps the session's activity kind into the status sidecar.
+// Called by the lifecycle hooks; tolerant and non-blocking.
+func RecordActivity(sessionID, kind string) {
+	board.UpdateStatus(sessionID, func(s *board.SessionStatus) {
+		s.Activity = kind
+	})
+}
+
+// Stop handles the Stop hook (Claude finished responding): the session is now
+// idle, waiting on the user. Tolerant and silent.
+func Stop(stdin io.Reader, stdout io.Writer) {
+	in, ok := readInput(stdin)
+	if !ok {
+		return
+	}
+	RecordActivity(in.SessionID, "idle")
 }
 
 func lastSeenPath(sessionID string) string {

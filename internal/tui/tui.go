@@ -704,6 +704,10 @@ func (m *model) Init() tea.Cmd {
 		// a board and back, and never spawns a second chain.
 		cmds = append(cmds, dashTick())
 	}
+	// A perpetual slow tick refreshes the board view's status footer from the
+	// session sidecar (updated by the statusline/lifecycle hooks, outside the
+	// board file watcher). Re-issued on every statusTickMsg (see Update).
+	cmds = append(cmds, statusTick())
 	cmds = append(cmds, checkUpdateCmd())
 	return tea.Batch(cmds...)
 }
@@ -735,6 +739,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rescanDash()
 		}
 		return m, dashTick()
+	case statusTickMsg:
+		// Re-render picks up a fresh sidecar; keep the chain alive.
+		return m, statusTick()
 	case editorDoneMsg:
 		// A board edit (editorBuf set) went through a temp copy and needs the
 		// 3-way merge; openLink reuses editorDoneMsg for a note file and just

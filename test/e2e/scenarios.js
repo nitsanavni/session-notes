@@ -1425,4 +1425,22 @@ run({
     await t.key('?');
     await t.page.waitForFunction(() => !document.querySelector('#helpmodal.open'), null, { timeout: 3000 });
   },
+  'session status sidecar shows model + context in the header': async t => {
+    t.seedStatus({ model: 'Opus', context_pct: 62, activity: 'working' });
+    await t.open();
+    await t.settled();
+    const txt = await t.sessionStatusText();
+    t.assert(txt.includes('Opus'), `header shows model (got ${JSON.stringify(txt)})`);
+    t.assert(txt.includes('62%'), `header shows context % (got ${JSON.stringify(txt)})`);
+    t.assert(txt.includes('working'), `header shows activity (got ${JSON.stringify(txt)})`);
+    t.assert(/[▰▱]/.test(txt), `header shows a context bar (got ${JSON.stringify(txt)})`);
+  },
+
+  'stale session status is hidden': async t => {
+    t.seedStatus({ model: 'Opus', context_pct: 62, updated: new Date(Date.now() - 30 * 60 * 1000).toISOString() });
+    await t.open();
+    await t.settled();
+    const txt = await t.sessionStatusText();
+    t.assert(txt.trim() === '', `stale status hidden (got ${JSON.stringify(txt)})`);
+  },
 });

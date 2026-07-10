@@ -132,6 +132,21 @@ class Ctx {
     await this.page.waitForTimeout(120);
   }
 
+  // seedStatus writes a fresh session-status sidecar for the fixture board, the
+  // way the statusline/lifecycle hooks would. `updated` defaults to now so the
+  // UI treats it as fresh.
+  seedStatus(obj) {
+    const stateDir = path.join(this.boardsDir, '.state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    const rec = { context_pct: -1, updated: new Date().toISOString(), ...obj };
+    fs.writeFileSync(path.join(stateDir, BOARD_ID + '.status'), JSON.stringify(rec) + '\n');
+  }
+
+  // sessionStatusText returns the visible header status segment.
+  async sessionStatusText() {
+    return this.page.evaluate(() => document.getElementById('sessionstatus').textContent);
+  }
+
   // sn exposes the page's debug handle.
   async sn() { return this.page.evaluate(() => ({
     cursorKey: window.__sn.cursorKey,

@@ -182,6 +182,15 @@ func dashTick() tea.Cmd {
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return dashTickMsg{} })
 }
 
+// statusTickMsg drives a periodic re-render of the board view so its status
+// footer (model / context / activity, read live from the session sidecar)
+// refreshes even though the sidecar changes outside the file watcher's scope.
+type statusTickMsg struct{}
+
+func statusTick() tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return statusTickMsg{} })
+}
+
 func (m *model) handleDashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	switch msg.String() {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -588,7 +589,72 @@ func (m *model) viewFooter() string {
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
 	}
+	if seg := m.statusFooter(); seg != "" {
+		line = seg + "\n" + line
+	}
 	return line
+}
+
+// statusFooter renders the live session-status segment (model · context bar ·
+// activity) from the board's status sidecar, or "" when there is no session id,
+// no sidecar, or the sidecar is stale (session likely gone). Read live on every
+// render so the statusTick refresh needs no extra plumbing.
+func (m *model) statusFooter() string {
+	if m.board == nil {
+		return ""
+	}
+	sid := m.board.Frontmatter.Session
+	if sid == "" {
+		return ""
+	}
+	st, ok := board.ReadStatus(sid)
+	if !ok || !st.Fresh(time.Now()) {
+		return ""
+	}
+	var parts []string
+	if st.Model != "" {
+		parts = append(parts, st.Model)
+	}
+	if st.HasContext() {
+		parts = append(parts, contextBar(st.ContextPct)+fmt.Sprintf(" %.0f%%", st.ContextPct))
+	}
+	if a := activityLabel(st.Activity); a != "" {
+		parts = append(parts, a)
+	}
+	if st.CostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.2f", st.CostUSD))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return styleDim.Render(strings.Join(parts, "  ·  "))
+}
+
+// contextBar renders a compact 5-cell progress bar for a 0–100 percentage.
+func contextBar(pct float64) string {
+	const cells = 5
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	filled := int(pct/100*cells + 0.5)
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", cells-filled)
+}
+
+// activityLabel maps a sidecar activity kind to a short display label.
+func activityLabel(kind string) string {
+	switch kind {
+	case "working":
+		return "working"
+	case "idle":
+		return "idle"
+	case "ended":
+		return "ended"
+	default:
+		return ""
+	}
 }
 
 func (m *model) viewHelp() string {

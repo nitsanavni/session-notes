@@ -174,3 +174,79 @@ func TestCoherenceDigest(t *testing.T) {
 		t.Errorf("digest = %q, want Board health: prefix", got)
 	}
 }
+
+// TestStatusLineFull parses a rich statusLine payload with pre-computed
+// used_percentage and writes the sidecar + passthrough line.
+func TestStatusLineFull(t *testing.T) {
+	t.Setenv("SESSION_NOTES_DIR", t.TempDir())
+	in := `{"session_id":"s1","model":{"display_name":"Opus","id":"claude-opus-4-8"},` +
+		`"cost":{"total_cost_usd":2.5},"context_window":{"used_percentage":62.4,` +
+		`"total_input_tokens":124800,"context_window_size":200000}}`
+	var out strings.Builder
+	StatusLine(strings.NewReader(in), &out)
+
+	line := strings.TrimSpace(out.String())
+	if line != "Opus | ctx 62%" {
+		t.Fatalf("passthrough = %q", line)
+	}
+	st, ok := board.ReadStatus("s1")
+	if !ok || st.Model != "Opus" || st.CostUSD != 2.5 {
+		t.Fatalf("sidecar = %+v ok=%v", st, ok)
+	}
+	if st.ContextPct < 62 || st.ContextPct > 63 {
+		t.Fatalf("context pct = %v", st.ContextPct)
+	}
+	if st.Activity != "working" {
+		t.Fatalf("activity = %q", st.Activity)
+	}
+}
+
+// TestStatusLineFallbackPct derives the percentage from token counts when
+// used_percentage is absent, and tolerates the missing display_name.
+func TestStatusLineFallbackPct(t *testing.T) {
+	t.Setenv("SESSION_NOTES_DIR", t.TempDir())
+	in := `{"session_id":"s2","model":{"id":"claude-opus-4-8"},` +
+		`"context_window":{"total_input_tokens":50000,"context_window_size":200000}}`
+	var out strings.Builder
+	StatusLine(strings.NewReader(in), &out)
+	if got := strings.TrimSpace(out.String()); got != "claude-opus-4-8 | ctx 25%" {
+		t.Fatalf("passthrough = %q", got)
+	}
+	st, _ := board.ReadStatus("s2")
+	if st.ContextPct != 25 {
+		t.Fatalf("derived pct = %v", st.ContextPct)
+	}
+}
+
+// TestStatusLineTolerant ignores junk, unknown fields, and missing session id.
+func TestStatusLineTolerant(t *testing.T) {
+	t.Setenv("SESSION_NOTES_DIR", t.TempDir())
+	var out strings.Builder
+	StatusLine(strings.NewReader(`not json`), &out)
+	StatusLine(strings.NewReader(`{"model":{"display_name":"X"}}`), &out) // no session_id
+	if out.Len() != 0 {
+		t.Fatalf("expected no output for bad input, got %q", out.String())
+	}
+	// Unknown fields + no context window: model recorded, context unknown.
+	out.Reset()
+	StatusLine(strings.NewReader(`{"session_id":"s3","model":{"display_name":"Sonnet"},"future_field":123}`), &out)
+	if got := strings.TrimSpace(out.String()); got != "Sonnet" {
+		t.Fatalf("passthrough = %q", got)
+	}
+	st, _ := board.ReadStatus("s3")
+	if st.HasContext() {
+		t.Fatalf("context should be unknown: %+v", st)
+	}
+}
+
+// TestRecordActivity stamps the activity kind without disturbing an existing
+// statusline-written sidecar.
+func TestRecordActivity(t *testing.T) {
+	t.Setenv("SESSION_NOTES_DIR", t.TempDir())
+	StatusLine(strings.NewReader(`{"session_id":"s4","model":{"display_name":"Opus"},"context_window":{"used_percentage":10}}`), &strings.Builder{})
+	RecordActivity("s4", "ended")
+	st, _ := board.ReadStatus("s4")
+	if st.Model != "Opus" || st.Activity != "ended" {
+		t.Fatalf("sidecar = %+v", st)
+	}
+}
