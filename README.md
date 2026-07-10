@@ -366,9 +366,16 @@ items and section headings (a cursor row follows, and tracks an item even as
 your own edit rewrites its line), `tab`/`1`-`9` jump sections, `a` adds to the
 cursor's section, `R` replies in-thread (same flat semantics as the TUI's `R`),
 `F` forks a nested sub-thread, `space` cycles status, `b` toggles blocked
-`[?]`, `!` urgent, `e` edits (an item's text, or a section's name on its
-heading), `d`/`D` archive/hard-delete, `o` opens the item's first `[[link]]`,
-`L` logs, `u`/`ctrl+r` undo/redo, `y` copies the board path. Everything is
+`[?]`, `!` urgent, `p` pins (`!pin`), `e` edits (an item's text, or a section's
+name on its heading), `T` edits the board title, `d`/`D` archive/hard-delete,
+`o` opens the item's first `[[link]]`, `L` logs, `u`/`ctrl+r` undo/redo, `y`
+copies the board path, `B` returns to the picker. Folding runs at the item
+level: `enter` folds/unfolds the cursor's subtree, `l`/`h` descend/ascend, and
+`z` focus-folds (zoom) onto the cursor. `/` opens the same ranked fuzzy search
+panel as the TUI (`↑`/`↓` pick, `enter` jumps, `n`/`N` step, `tab` toggles
+working-set ↔ everything scope); `w` wraps a long item; `V` opens the
+recent-changes feed; `W` cycles the outline width (narrow / wide / full, or drag
+a side grip for a custom width). Everything is
 also mouse-reachable: click checkboxes, double-click to edit, hover for
 per-item and per-section actions, type into a section's add box (the Log
 section's box appends a `user:` log line).
@@ -402,13 +409,16 @@ map (title at center, sections as the first ring, items as subtrees, sides
 balanced mm-style), with the selection carried over both ways between outline
 and map. `hjkl` move tree-structurally (`j`/`k` walk siblings on your side of
 the center, `h`/`l` cross the parent/child axis toward and away from the
-center), `enter` runs the unified fold cycle (default → replies-shown →
-collapsed `[+N]` → default, states that render identically skipped), `f`
+center; `g`/`G` jump to the first/last sibling, `tab`/`1`-`9` to sections),
+`enter` runs the unified fold cycle (default → replies-shown →
+collapsed `[+N]` → default, states that render identically skipped), `z`
+focus-folds (zoom) onto the focus, `f`
 focuses into the selected subtree with a breadcrumb trail and `b` steps back
-out, `e`/`a`/`space`/`!`/`d`/`D`/`o` edit the focused node through the same
-ops as everything else, `/` searches item text (`n`/`N` step matches, revealing
-folded subtrees, and highlighting every visible match while the search is live),
-and `M` toggles the Log ring (hidden by default). Node
+out, `e`/`a`/`space`/`b`/`p`/`!`/`d`/`D`/`o` edit the focused node and
+`H`/`E`/`L`/`T` reach history / the raw editor / a log entry / the title
+through the same ops as everything else, `/` searches item text (`n`/`N` step
+matches, revealing folded subtrees, and highlighting every visible match while
+the search is live), and `M` toggles the Log ring (hidden by default). Node
 text truncates at 40 columns with the full text in the footer; the `[+N]`
 suffix is truncation-exempt and counts only what that node hides.
 
@@ -441,7 +451,7 @@ tenants of the same network.
 | `tab` / `shift-tab` | next / previous section             |
 | `g` / `G`     | jump to first / last visible stop         |
 | `1` … `9`     | jump to the Nth section                   |
-| `/`           | incremental search item text (matches highlighted while live); `n` / `N` next / previous match |
+| `/`           | incremental search: a ranked fuzzy results panel opens as you type (the board doesn't move); `↑`/`↓` pick a row, `enter` jumps to it; `n`/`N` step matches (document order, resuming the last term); `tab` toggles scope (working set ↔ Archive+Log); matches highlighted while live |
 | `a`           | add item to current section              |
 | `A`           | add sections (multi-select overlay)      |
 | `R`           | reply in thread (flat sibling on a reply) |
@@ -449,18 +459,26 @@ tenants of the same network.
 | `space`       | cycle status `[ ] → [>] → [x]`           |
 | `b`           | toggle blocked `[?]`                     |
 | `!`           | toggle urgent (`!!`)                     |
+| `p`           | toggle pin (`!pin`) — re-injected into Claude's context on a cadence |
 | `e`           | edit item inline (the bullet line only)  |
+| `T`           | edit the board title (frontmatter `title:`; empty clears it) |
+| `w`           | wrap the item at the cursor (single truncated line ↔ full multi-line block, session-only) |
 | `H`           | history view (shared journal, read-only) |
+| `V`           | recent-changes feed — out-of-band edits newest-first; `enter` jumps to the change |
 | `E`           | open board in `$EDITOR` (suspends TUI)   |
 | `o`           | open item's first `[[link]]` in `$EDITOR` (suspends TUI) |
 | `y`           | copy board file path to clipboard (shown in status) |
 | `L`           | quick log entry                          |
 | `d`           | archive item / section (into `## Archive`)|
 | `D`           | hard-delete item / section from the file |
-| `enter` / `l` | expand / collapse Archive (on its header)|
-| `u`           | undo last change (up to 100)             |
+| `enter`       | fold toggle: on a section header collapse/expand it; on an item with children fold/unfold its subtree |
+| `l` / `h`     | `l` expands a section (landing on its first/remembered child) or descends into an item; `h` collapses a section or steps out to the parent |
+| `z`           | focus-fold (zoom): collapse everything except the path to the cursor; `z` again restores |
+| `u`           | undo last change (shared journal timeline) |
 | `ctrl+r`      | redo                                     |
 | `r`           | reload from disk                         |
+| `B`           | back to the board picker                 |
+| `m`           | toggle the mindmap view                  |
 | `q` / `esc`   | quit                                     |
 | `?`           | help                                     |
 

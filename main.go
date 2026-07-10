@@ -275,8 +275,8 @@ Usage:
   session-notes feedback <board.md>   list map-nav surprise records (--json raw,
                                       --gen-test print replayable Go test source)
   session-notes edit <sub> …          locked board write (--board <path> or
-                                      --session <id>); subs: add reply status
-                                      log title replace undo redo.
+                                      --session <id>); subs: add reply fork
+                                      status log title replace undo redo.
                                       --refresh-snapshot <p> refreshes a
                                       monitor snapshot in-lock
   session-notes history …             print a board's journaled edits as compact
@@ -293,8 +293,8 @@ Usage:
                                       $SESSION_NOTES_TOKEN; Bearer/?token=/
                                       cookie) or an explicit --insecure
   session-notes docs <topic>          print a protocol/recipe topic
-                                      (protocol|monitor|conflicts|cli); no topic
-                                      lists them
+                                      (protocol|monitor|conflicts|cli|blurb); no
+                                      topic lists them
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook

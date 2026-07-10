@@ -839,6 +839,7 @@ func (m *model) viewHelp() string {
 		{"z (map)", "focus-fold (zoom): collapse everything except the path to the focus (its children shown, folded); z again restores"},
 		{"! (map)", "toggle urgent (!!) on the focused item"},
 		{"D (map)", "hard-delete the focused item or whole section"},
+		{"M (map)", "toggle the Log column (hidden by default in the map)"},
 		{"S (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl (dev)"},
 		{"L", "quick log entry"},
 		{"H", "history: shared edit journal (who changed what), read-only"},

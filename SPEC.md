@@ -209,6 +209,15 @@ first) behind the `H` history view.
   `~/.claude/boards/.state/<session-id>.last-seen`).
 - **session-end**: append `- HH:MM end: session ended` to Log; delete the pane mapping file
   if it points at this session.
+- **stop**: runs when Claude finishes responding; records the session as `idle` (waiting on the user)
+  in the status sidecar (below).
+- **statusline** (Claude Code's `statusLine` command, not a hook event): read the statusLine JSON on
+  stdin, atomically write the live model / context-window % / cost into
+  `~/.claude/boards/.state/<session-id>.status`, and print a compact `<model> | ctx NN%` line for the
+  terminal status line. The TUI footer and web header read that sidecar and show model + a context bar
+  + activity (`working`/`idle`/`ended`) while it is fresh (hidden after 5 min stale). session-start /
+  prompt-submit also stamp `working` into the same sidecar, so activity tracks even without the
+  statusLine wired.
 
 Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 silently.
 
@@ -216,31 +225,41 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
 
 - Layout: board rendered as sections; cursor moves across items; active section highlighted. The sticky header shows the title (frontmatter `title`, else session id, else path); when a `title` is set, a shortened session id (first 8 chars) is shown dimmed next to it (outline header and map header) so the id stays visible.
 - Keys: `j/k` move · `g`/`G` jump to first/last visible stop · `tab`/`shift-tab` next/prev section · `a` add item to current section (a leading `[x]`-style status marker is parsed and stripped, matching the web/CLI add) ·
-  `space` cycle status `[ ]→[>]→[x]` · `b` toggle blocked `[?]` (the space cycle never reaches blocked; `b` sets/clears it directly, matching the web outline) · `!` toggle urgent · `d` delete item ·
+  `space` cycle status `[ ]→[>]→[x]` · `b` toggle blocked `[?]` (the space cycle never reaches blocked; `b` sets/clears it directly, matching the web outline) · `!` toggle urgent · `p` toggle pin (`!pin`) · `d` archive / `D` hard-delete item ·
   `e` edit item inline (textinput) · `T` edit the frontmatter title (empty clears it) ·
   `E` open board in `$EDITOR` (suspend TUI) ·
   `o` open item's first `[[link]]` · `y` copy board file path to clipboard ·
+  `enter` fold toggle · `l`/`h` descend-expand / ascend-collapse · `z` focus-fold (zoom) onto the cursor ·
   `w` wrap the item at the cursor (single truncated line ↔ full multi-line block, session-only) ·
-  `H` history view (read-only) · `/` incremental search (see below) · `L` quick log entry · `m` toggle map view · `r` reload · `q`/`esc` quit · `?` help.
+  `H` history view (read-only) · `V` recent-changes feed (out-of-band edits) · `/` incremental search (see below) · `L` quick log entry · `m` toggle map view · `B` board picker · `r` reload · `q`/`esc` quit · `?` help. (There is no `W` in the TUI; the web outline adds `W` width cycling.)
 - Archiving (`d`) or deleting (`D`) an item keeps the selection close to where it was, in every view (TUI outline and map, web outline and map): it lands on the next item in document order — the one that visually takes the removed item's place (the removed subtree is skipped); if the removed item was the last in its section it falls back to the previous item; only when the section is left empty does the selection rest on the section head (the parent node, in the maps).
 - Single-press expand-and-nav: descending into a collapsed parent is ONE keystroke everywhere — the same press expands the fold AND lands the selection on the child (the remembered child where child memory exists, else the first), never a first press that only expands and a second that moves. In the maps (TUI and web) an outward `h`/`l` onto a folded node steps the fold as far as needed (a closed replies-only node goes straight to replies-expanded) and focuses the revealed child; in the outlines (TUI and web) `l`/`right` on a collapsed section head expands the section and lands the cursor on its first item (`enter` stays a pure fold toggle, `h` collapses; `l` on an already expanded head is a no-op and never collapses).
 - `u`/`ctrl+r` undo/redo walk the board's SHARED on-disk journal (`board.Undo`/`board.Redo`) — the same timeline the web UI and edit CLI undo through — so "the last edit" means the same thing across every frontend and author. Only when the shared journal can't apply cleanly (an intervening non-journaling writer — a hook or a human in `$EDITOR`) does the TUI fall back to its rebase-aware in-memory history.
 - `H` opens a read-only history overlay listing the shared journal's edits newest-first (when / who / what, via `board.DiffLines`), mirroring the web's `H` history modal; `j`/`k` scroll, any other key closes it. It never mutates — undo/redo stay on `u`/`ctrl+r`.
-- Search (`/`, both views): opens an incremental prompt. As the query changes the cursor (outline) /
-  focus (map) jumps to the first case-insensitive substring match over item text — all sections and
-  replies included, in document order. `enter` confirms and closes the prompt (the status bar shows
-  `k/N matches`), leaving `n`/`N` to step to the next/previous match, wrapping. `esc` cancels and
-  restores the pre-search cursor/focus. A match hidden behind a collapsed section (outline) or a
-  folded subtree (map) is revealed on the way in, reusing the same auto-expand machinery as ordinary
-  navigation. While a search is active — the prompt open, or confirmed with `n`/`N` still live — every
-  visible matching item is highlighted in both views: a subtle green whole-line/whole-node tint
-  (distinct from the reverse-video cursor/focus bar, which wins on the current selection), and, in the
-  outline, the matched substring itself is accented (bold underlined yellow) within the item text. The
-  map layer groups cells by whole-node style, so it tints the whole node rather than the substring.
-  Highlighting clears when the search ends: `esc` (in the prompt) closes search entirely; after `enter`
-  confirms, `n`/`N` keep search-follow mode (and the highlight) alive and `/` reopens the prompt, but
-  any other action — a move, an edit, a fold, a mode switch, quit — ends follow mode and clears the
-  highlight.
+- Search (`/`, both views): opens an incremental prompt with a **ranked results panel** — the board
+  itself does NOT move or reveal anything while you type. As the query changes, a fuzzy (fzf-style
+  subsequence, case-insensitive) match set over item text — all sections and replies, document order —
+  is scored and shown best-first in the panel. `↑`/`↓` (or `ctrl+p`/`ctrl+n`) move the panel selection;
+  `enter` jumps the cursor (outline) / focus (map) to the selected match, revealing it (expanding any
+  collapsed section or folded subtree via the ordinary auto-expand machinery) and closing the prompt.
+  `esc` cancels and restores the pre-search cursor/focus. After a jump `n`/`N` step matches in document
+  order, wrapping, keeping the panel row in sync; with no active search `n`/`N` re-run the last term
+  from where you left off. `tab` (while search is active) toggles **scope** between the working set
+  (Archive and Log excluded — the default) and everything; the prompt shows a `[working]`/`[all]`
+  label and a live match tally. A jump temporarily un-truncates the landed item so a deep match stays
+  visible. While a search is active every visible matching item is highlighted: a subtle green
+  whole-line/whole-node tint (distinct from the reverse-video cursor/focus bar, which wins on the
+  current selection), and, in the outline, the matched characters themselves are accented within the
+  item text; deep-match panel rows head-trim with a leading `…` so the matched span stays on screen.
+  Highlighting clears when the search ends — any action other than `n`/`N`/`/` ends follow mode.
+- Focus-fold / zoom (`z`, both views): collapse every section and subtree off the cursor's/focus's
+  ancestor path, leaving the selected item open one level (its children visible but folded); `z` again
+  restores the previous fold state. Per-item folding in the outline: `enter` toggles the cursor
+  subtree's fold, `l` descends (expanding if folded), `h` steps out to the parent.
+- Recent-changes feed (`V`, both views): a novelty overlay listing out-of-band edits (the board
+  changing under you) newest-first, classified by kind (added / status-change / edited / …); `j`/`k`
+  move, `enter` jumps to the changed item, `v` full view, `m` minimize, `x` dismiss, `esc` leaves.
+  Fresh out-of-band items also get a transient accent in the board itself.
 - Long items render as a single line truncated with `…`; `w` toggles the item at the cursor
   to a wrapped multi-line block (continuation rows hang-indented to the text column, reply
   indent preserved) and back. The toggle is per item and lasts the session only, like the map's `w`.
