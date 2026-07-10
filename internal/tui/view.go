@@ -24,6 +24,7 @@ var (
 	styleDim        = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	styleHelpBar    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	styleStatus     = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
+	styleFresh      = lipgloss.NewStyle().Foreground(lipgloss.Color("215")).Bold(true) // out-of-band change accent
 	styleMarker     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	styleLink       = lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Underline(true)
 
@@ -446,9 +447,16 @@ func truncTitle(s string, w int, tail bool) string {
 // cursor covers the whole block. Wrapping is display-only; the stored text and
 // file content are untouched.
 func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
+	fresh := m.fresh[strings.TrimSpace(it.Raw())]
+	if selected && fresh {
+		delete(m.fresh, strings.TrimSpace(it.Raw())) // landing on a change settles it
+		fresh = false
+	}
 	prefix := "  "
 	if selected {
 		prefix = styleCursor.Render("> ")
+	} else if fresh {
+		prefix = styleFresh.Render("◆ ") // out-of-band change accent (2-col gutter)
 	}
 	// Indent children under their parent for the threaded, forum-style feel.
 	indent := strings.Repeat("  ", depth)

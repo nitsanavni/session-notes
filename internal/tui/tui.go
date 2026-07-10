@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -75,6 +76,14 @@ type model struct {
 	selSec    int       // active section (authoritative for `a` and tab)
 	scroll    int
 	status    string // transient one-line message
+
+	// fresh flags items that changed out-of-band — a writer other than this TUI
+	// (Claude via `session-notes edit`, another session, the web UI, the hooks).
+	// Keyed by the item's trimmed raw source line (the same identity DiffLines
+	// yields), so the mark survives a reparse. An item's mark clears when the
+	// cursor lands on it (renderItem) or when the local user makes any edit. The
+	// TUI counterpart of the web outline's fresh accent + event feed.
+	fresh map[string]bool
 
 	// historyScroll is the top line offset of the read-only history overlay (H).
 	historyScroll int
@@ -276,7 +285,7 @@ func newModel() *model {
 	ti := textinput.New()
 	ti.CharLimit = 500
 	ti.Prompt = "> "
-	return &model{cursor: -1, input: ti, width: 80, height: 24, hist: newHistory(100), collapsed: map[string]bool{}}
+	return &model{cursor: -1, input: ti, width: 80, height: 24, hist: newHistory(100), collapsed: map[string]bool{}, fresh: map[string]bool{}}
 }
 
 // defaultCollapsed is the collapse state a section starts in before the user
@@ -682,13 +691,78 @@ func (m *model) doReload(recordExternal bool) {
 	}
 	content := string(data)
 	if recordExternal && m.board != nil && content != m.board.Render() {
-		m.hist.record(m.board.Render())
+		old := m.board.Render()
+		m.hist.record(old)
+		// An external writer touched the board: flag what changed so the outline
+		// shows a fresh accent and the status line names the newest change.
+		if items := noveltyItems(old, content); len(items) > 0 {
+			if m.fresh == nil {
+				m.fresh = map[string]bool{}
+			}
+			for _, it := range items {
+				m.fresh[it] = true
+			}
+			m.status = noveltyNotice(items)
+		}
 	}
 	b := board.Parse(content)
 	b.Path = m.path
 	m.board = b
 	m.lastDisk = content
 	m.rebuildPositions()
+}
+
+// noveltyItemRe matches a markdown list item line, capturing any status box and
+// the text after it — used to pick real items out of an external edit's added
+// lines (section headers, blank lines, and continuations are ignored).
+var noveltyItemRe = regexp.MustCompile(`^\s*[-*]\s+(?:\[[ >x?~-]?\]\s+)?(.*\S.*)$`)
+
+// noveltyAuthorRe spots a leading claude:/user: turn tag (tolerating a log
+// "HH:MM " stamp), so a reply reads as "claude replied" in the change notice.
+var noveltyAuthorRe = regexp.MustCompile(`^(?:\d{2}:\d{2}\s+)?(claude|user):\s*(.*)$`)
+
+// noveltyItems returns the trimmed raw source lines of items that an external
+// write added (or rewrote — a status/text change removes the old line and adds
+// the new one), keyed the same way m.fresh and renderItem compare. Ordering
+// follows the diff so noveltyNotice can describe the first change.
+func noveltyItems(before, after string) []string {
+	added, _ := board.DiffLines(before, after)
+	var out []string
+	for _, l := range added {
+		if noveltyItemRe.MatchString(l) {
+			out = append(out, strings.TrimSpace(l))
+		}
+	}
+	return out
+}
+
+// noveltyNotice is the one-line status shown when an external write lands: it
+// names the newest changed item (author-aware for replies) and, when several
+// changed at once, appends a "+N more" tally.
+func noveltyNotice(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	text := items[0]
+	if m := noveltyItemRe.FindStringSubmatch(items[0]); m != nil {
+		text = strings.TrimSpace(m[1])
+	}
+	msg := text
+	if a := noveltyAuthorRe.FindStringSubmatch(text); a != nil {
+		who, rest := a[1], strings.TrimSpace(a[2])
+		msg = who + " replied"
+		if rest != "" {
+			msg = who + " replied: " + rest
+		}
+	}
+	if len(msg) > 60 {
+		msg = msg[:59] + "…"
+	}
+	notice := "◆ " + msg
+	if n := len(items) - 1; n > 0 {
+		notice += fmt.Sprintf("  (+%d more)", n)
+	}
+	return notice
 }
 
 // --- tea.Model ---

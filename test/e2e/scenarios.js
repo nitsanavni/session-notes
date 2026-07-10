@@ -1567,8 +1567,11 @@ run({
     await t.settled();
     const nov = await t.page.evaluate(() => window.__sn.novelty);
     t.assert(nov.fresh.includes(key), `changed item flagged fresh (fresh=${JSON.stringify(nov.fresh)})`);
-    t.assert(nov.feed.length >= 1 && /Ideas/.test(nov.feed[0]),
-      `event feed shows the change (feed=${JSON.stringify(nov.feed)})`);
+    // The headline leads with WHAT changed; who/where is the dim second line.
+    t.assert(nov.feed[0] === 'brand new idea',
+      `feed headline carries the change text (feed=${JSON.stringify(nov.feed)})`);
+    t.assert(/Ideas/.test(nov.feedMeta[0]),
+      `feed meta names the location (meta=${JSON.stringify(nov.feedMeta)})`);
     // The accent renders on the row, and the corner feed is visible.
     const shown = await t.page.evaluate(() => ({
       row: !!document.querySelector('.row.fresh'),
@@ -1618,6 +1621,102 @@ run({
     t.assert(!nov.fresh.includes(key), 'cursor visit cleared the fresh mark');
     const stillPainted = await t.page.evaluate(() => !!document.querySelector('.row.fresh'));
     t.assert(!stillPainted, 'the accent is gone from the DOM');
+  },
+
+  'a reply headline leads with what was said, location as meta': async t => {
+    await t.open();
+    await t.settled();
+    // Claude replies under the Threads wip item, out of band.
+    await t.editExternally({ op: 'reply', section: 'Threads',
+      raw: '- [>] auth refactor — extracting middleware', text: 'claude: rebased cleanly' });
+    await t.waitBoardContains('claude: rebased cleanly');
+    await t.page.waitForFunction(
+      () => window.__sn.novelty.feed.length > 0, null, { timeout: 4000 });
+    const nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.feed[0] === 'rebased cleanly',
+      `headline is the reply text, author stripped (feed=${JSON.stringify(nov.feed)})`);
+    t.assert(/claude/.test(nov.feedMeta[0]) && /under/.test(nov.feedMeta[0]),
+      `meta says who replied and under what (meta=${JSON.stringify(nov.feedMeta)})`);
+  },
+
+  'V drives the recents feed from the keyboard: move, jump': async t => {
+    await t.open();
+    await t.settled();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'first change' });
+    await t.waitBoardContains('- first change');
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'second change' });
+    await t.waitBoardContains('- second change');
+    await t.page.waitForFunction(() => window.__sn.novelty.feed.length >= 2, null, { timeout: 4000 });
+    // V focuses the feed with the newest entry selected.
+    await t.key('V');
+    let nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.focused && nov.sel === 0, `V focuses the feed at the top (${JSON.stringify(nov)})`);
+    // j moves the selection down through entries.
+    await t.key('j');
+    nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.sel === 1, `j moves the feed selection (sel=${nov.sel})`);
+    // Enter jumps to the selected change and leaves feed mode. Entry 1 is the
+    // older "first change" ("second change" is newest at index 0).
+    await t.key('Enter');
+    nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(!nov.focused, 'Enter leaves feed mode');
+    t.assert((await t.cursorKey()) === 'it:Ideas:- first change',
+      `Enter jumped the cursor to the selected change (got ${await t.cursorKey()})`);
+  },
+
+  'V then v opens the full recents view; Esc closes it': async t => {
+    await t.open();
+    await t.settled();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'a logged change' });
+    await t.waitBoardContains('- a logged change');
+    await t.page.waitForFunction(() => window.__sn.novelty.feed.length >= 1, null, { timeout: 4000 });
+    await t.key('V');
+    await t.key('v'); // full view
+    await t.page.waitForSelector('#recentsmodal.open');
+    const rows = await t.page.$$eval('#recentslist .rentry', els => els.map(e => e.textContent));
+    t.assert(rows.length >= 1 && /a logged change/.test(rows[0]),
+      `full recents view lists the change (rows=${JSON.stringify(rows)})`);
+    // Enter opens the selected change and closes the modal.
+    await t.key('Enter');
+    await t.page.waitForFunction(() => !document.querySelector('#recentsmodal.open'), null, { timeout: 3000 });
+    t.assert((await t.cursorKey()) === 'it:Ideas:- a logged change', 'Enter in full view jumped to the change');
+  },
+
+  'the arrival pulse plays once and navigation does not restart it': async t => {
+    await t.open();
+    await t.settled();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'blink me' });
+    await t.waitBoardContains('- blink me');
+    const key = 'it:Ideas:- blink me';
+    await t.page.waitForFunction(k => window.__sn.stops.some(s => s.key === k), key, { timeout: 4000 });
+    await t.settled();
+    // The pulse is consumed by the render that painted the fresh row: the row
+    // carries .fresh, and no key remains queued for a re-pulse.
+    let st = await t.page.evaluate(() => ({
+      pulsePending: window.__sn.novelty.pulse,
+      rowHasFresh: !!document.querySelector('.row.fresh'),
+    }));
+    t.assert(st.rowHasFresh, 'the fresh row is painted');
+    t.assert(st.pulsePending.length === 0, `pulse consumed after first render (pending=${JSON.stringify(st.pulsePending)})`);
+    // A second out-of-band change forces a full re-render. The FIRST fresh row
+    // must keep its accent but must NOT be re-tagged .pulse (that would blink).
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'other change' });
+    await t.waitBoardContains('- other change');
+    await t.page.waitForFunction(() => window.__sn.stops.some(s => s.key === 'it:Ideas:- other change'), null, { timeout: 4000 });
+    await t.settled();
+    const cls = await t.page.evaluate(() => {
+      const r = [...document.querySelectorAll('.row.fresh')].find(x => x.textContent.includes('blink me'));
+      return r ? [...r.classList] : null;
+    });
+    t.assert(cls && cls.includes('fresh') && !cls.includes('pulse'),
+      `the earlier fresh row keeps its accent without re-pulsing (classes=${JSON.stringify(cls)})`);
+    // Navigating around also must not re-pulse it.
+    await t.key('5'); await t.key('j'); await t.key('k');
+    const still = await t.page.evaluate(() => {
+      const r = [...document.querySelectorAll('.row.fresh')].find(x => x.textContent.includes('blink me'));
+      return r ? [...r.classList] : null;
+    });
+    t.assert(still && !still.includes('pulse'), `navigation does not re-add pulse (classes=${JSON.stringify(still)})`);
   },
 
   'session status sidecar shows model + context in the header': async t => {

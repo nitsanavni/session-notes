@@ -142,11 +142,14 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 /* ---- novelty: out-of-band changes ---- */
 /* A row/node another writer just changed wears a persistent accent bar (and a
    one-shot tint pulse on arrival) until the user visits it or it times out. */
-.row.fresh {
-  box-shadow: inset 3px 0 0 var(--accent); border-radius: 6px;
-  animation: freshpulse 1.4s ease-out;
-}
-.mapnode.fresh { box-shadow: 0 0 0 2px var(--accent); animation: freshpulse 1.4s ease-out; }
+/* The persistent accent bar (no animation) marks a fresh item until visited or
+   TTL; the one-shot arrival pulse lives on a separate `.pulse` class that is
+   applied ONLY on the render right after the novelty event — so navigating (and
+   the re-renders it may cause) never restarts the animation. */
+.row.fresh { box-shadow: inset 3px 0 0 var(--accent); border-radius: 6px; }
+.row.fresh.pulse { animation: freshpulse 1.4s ease-out; }
+.mapnode.fresh { box-shadow: 0 0 0 2px var(--accent); }
+.mapnode.fresh.pulse { animation: freshpulse 1.4s ease-out; }
 @keyframes freshpulse {
   from { background: color-mix(in srgb, var(--accent) 34%, transparent); }
   to { background: transparent; }
@@ -181,8 +184,20 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 }
 #feed .fentry:last-child { border-bottom: none; }
 #feed .fentry:hover, #feed .fentry:focus { background: var(--cursor); outline: none; }
-#feed .fentry.aged { opacity: .5; }
-#feed .fentry .fwhen { color: var(--dim); font-size: .85em; margin-left: .3rem; }
+/* Keyboard focus (V): the selected entry gets an accent bar + tint. */
+#feed.kbd .fentry.sel { background: var(--cursor); box-shadow: inset 3px 0 0 var(--accent); }
+#feed .fentry.aged { opacity: .55; }
+/* Copy leads with WHAT changed; the who/where is the dim second line. */
+#feed .fentry .fprimary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#feed .fentry .fmeta { color: var(--dim); font-size: .82em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#feed .fentry .fwhen { color: var(--dim); }
+/* Full recents view (V again / ⤢): the whole change log, untruncated. */
+#recentsmodal .panel { width: min(560px, 92vw); }
+#recentslist { overflow-y: auto; font-size: .9em; }
+#recentslist .rentry { padding: .35rem .1rem; border-bottom: 1px solid var(--border); cursor: pointer; border-radius: 4px; }
+#recentslist .rentry:hover, #recentslist .rentry.sel { background: var(--cursor); }
+#recentslist .rprimary { overflow-wrap: anywhere; }
+#recentslist .rmeta { color: var(--dim); font-size: .85em; }
 .modal {
   position: fixed; inset: 0; background: rgba(0,0,0,.45);
   display: none; align-items: center; justify-content: center; z-index: 20;
@@ -358,9 +373,10 @@ body.mapmode #mapwrap { display: block; }
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 <div id="searchstatus"></div>
-<div id="feed"><div class="fhead"><b>recent changes</b>
-  <button id="feedcollapse" title="collapse / expand">–</button>
-  <button id="feedclear" title="dismiss all">✕</button></div>
+<div id="feed"><div class="fhead"><b title="out-of-band changes · V to browse with the keyboard · the fresh accent on an item clears when you visit it or after 20s">recent changes</b>
+  <button id="feedexpand" title="full recents view (V, then v)">⤢</button>
+  <button id="feedcollapse" title="collapse / expand (m)">–</button>
+  <button id="feedclear" title="dismiss all (x)">✕</button></div>
   <div class="fbody" role="log" aria-live="polite" aria-label="recent out-of-band changes"></div></div>
 
 <div class="modal" id="notemodal"><div class="panel">
@@ -377,6 +393,11 @@ body.mapmode #mapwrap { display: block; }
 <div class="modal" id="histmodal"><div class="panel">
   <div class="bar"><b>history</b><span class="dim">newest first · journaled edits only</span><button id="histclose">close</button></div>
   <div id="histlist"></div>
+</div></div>
+
+<div class="modal" id="recentsmodal"><div class="panel">
+  <div class="bar"><b>recent changes</b><span class="dim">out-of-band edits · newest first · j/k move · enter jump · esc close</span><button id="recentsclose">close</button></div>
+  <div id="recentslist" tabindex="0"></div>
 </div></div>
 
 <div class="modal" id="helpmodal"><div class="panel">
@@ -413,6 +434,8 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
     <tr><td>u / ctrl+r</td><td>undo / redo (shared journal — CLI edits too)</td></tr>
     <tr><td>H</td><td>history: what changed, by whom</td></tr>
+    <tr><td>V</td><td>recent out-of-band changes feed — j/k move, enter jump to the change,
+      v full view, m minimize, x dismiss, esc leave</td></tr>
     <tr><td>y</td><td>copy board file path</td></tr>
     <tr><td>m</td><td>mindmap view (in the map: hjkl move, enter fold, w expand node,
       f focus subtree, b step out, e edit, a add child, A sibling, space cycle status,
@@ -480,9 +503,16 @@ const FEED_MAX = 30;
 let lastLocalEdit = 0;
 let prevKeys = null;                 // Set of item keys from the last board seen
 const freshItems = new Set();        // keys currently marked novel
+// freshPulse holds keys whose one-shot arrival animation hasn't played yet. A
+// render consumes the key as it applies the `.pulse` class, so the pulse plays
+// exactly once per novelty event and later re-renders (from navigation, SSE)
+// never restart it — only the persistent accent bar remains.
+const freshPulse = new Set();
 const freshTimers = new Map();       // key -> setTimeout handle
-let feed = [];                       // [{id, msg, key, ts, aged}]
+let feed = [];                       // [{id, primary, meta, key, ts}]
 let feedSeq = 0;
+let feedSel = -1;                    // selected entry while the feed has keyboard focus (V)
+let feedFocused = false;
 
 // flattenItems walks the board into one entry per non-continuation item, each
 // carrying its stop key plus the text of its nearest item ancestor (for "X
@@ -501,11 +531,17 @@ function flattenItems(b) {
 
 const noveltyStrip = t => (t || '').replace(AUTHOR_RE, '').replace(/^\s*(?:!!\s*|⚲\s*)?/, '').trim();
 const noveltyShort = (t, n = 42) => { t = (t || '').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
-function noveltyMsg(f) {
+// noveltyEntry builds a feed entry that leads with WHAT changed (the item/reply
+// text itself) and relegates who/where to a dim second line — so the headline
+// carries the substance, not the location.
+function noveltyEntry(f) {
   const am = AUTHOR_RE.exec(f.text || '');
-  if (am && f.parentText) return `${am[2]} replied under “${noveltyShort(noveltyStrip(f.parentText), 30)}”`;
-  if (am) return `${am[2]}: ${noveltyShort(noveltyStrip(f.text))}`;
-  return `${f.section}: ${noveltyShort(noveltyStrip(f.text))}`;
+  if (am) {
+    const body = noveltyStrip(f.text);
+    const where = f.parentText ? `under “${noveltyShort(noveltyStrip(f.parentText), 26)}”` : `in ${f.section}`;
+    return { primary: body || `${am[2]} replied`, meta: `${am[2]} · ${where}` };
+  }
+  return { primary: noveltyStrip(f.text) || '(new item)', meta: `added · ${f.section}` };
 }
 
 // computeNovelty diffs the incoming board against the last one seen. New item
@@ -525,38 +561,112 @@ function computeNovelty(b) {
 
 function markFresh(f) {
   freshItems.add(f.key);
+  freshPulse.add(f.key); // play the arrival pulse on the next render, once
   if (freshTimers.has(f.key)) clearTimeout(freshTimers.get(f.key));
   freshTimers.set(f.key, setTimeout(() => clearFresh(f.key), FRESH_TTL));
-  feed.unshift({ id: ++feedSeq, msg: noveltyMsg(f), key: f.key, ts: Date.now() });
+  const e = noveltyEntry(f);
+  feed.unshift({ id: ++feedSeq, primary: e.primary, meta: e.meta, key: f.key, ts: Date.now() });
   if (feed.length > FEED_MAX) feed.length = FEED_MAX;
+  if (feedFocused && feedSel >= 0) feedSel++; // keep the selection on the same entry as new ones land on top
   renderFeed();
+  if (recentsOpen()) renderRecents();
 }
 
 function clearFresh(key) {
   if (!freshItems.has(key)) return;
   freshItems.delete(key);
+  freshPulse.delete(key);
   if (freshTimers.has(key)) { clearTimeout(freshTimers.get(key)); freshTimers.delete(key); }
   // Peel the accent off the live element without a full re-render.
   const s = stops.find(x => x.key === key);
-  if (s && s.el) s.el.classList.remove('fresh');
+  if (s && s.el) s.el.classList.remove('fresh', 'pulse');
   const n = mapNodes.find(x => x.key === key);
-  if (n && n.el) n.el.classList.remove('fresh');
+  if (n && n.el) n.el.classList.remove('fresh', 'pulse');
 }
+
+const feedTime = ts => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 function renderFeed() {
   const box = document.getElementById('feed');
   const body = box.querySelector('.fbody');
   box.classList.toggle('show', feed.length > 0);
+  box.classList.toggle('kbd', feedFocused);
+  if (!feed.length && feedFocused) exitFeedMode();
   body.textContent = '';
-  for (const e of feed) {
-    const t = new Date(e.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  feed.forEach((e, i) => {
     const aged = Date.now() - e.ts > 12000;
-    const b = el('button', { class: 'fentry' + (aged ? ' aged' : ''), title: 'jump to this change' },
-      e.msg, el('span', { class: 'fwhen' }, t));
-    b.addEventListener('click', () => jumpToFresh(e.key));
+    const b = el('button', {
+      class: 'fentry' + (aged ? ' aged' : '') + (feedFocused && i === feedSel ? ' sel' : ''),
+      title: 'jump to this change (enter)',
+    },
+      el('div', { class: 'fprimary' }, e.primary),
+      el('div', { class: 'fmeta' }, e.meta + ' · ', el('span', { class: 'fwhen' }, feedTime(e.ts))));
+    b.addEventListener('click', () => { exitFeedMode(); jumpToFresh(e.key); });
     body.append(b);
-  }
+  });
+  if (feedFocused && feedSel >= 0 && body.children[feedSel]) body.children[feedSel].scrollIntoView({ block: 'nearest' });
 }
+
+// ---- feed keyboard mode (V) ----
+// V drops the keyboard into the corner feed: j/k/arrows move a selection, Enter
+// jumps to that change (and leaves), m minimizes, x dismisses all, v opens the
+// full recents view, Esc/q leaves. A capture listener owns the keys while active
+// so the outline hotkeys don't also fire, mirroring the link chooser overlay.
+function toggleFeedCollapse(force) {
+  const box = document.getElementById('feed');
+  const c = force === undefined ? !box.classList.contains('collapsed') : force;
+  box.classList.toggle('collapsed', c);
+  document.getElementById('feedcollapse').textContent = c ? '+' : '–';
+}
+function enterFeedMode() {
+  if (!feed.length) { toast('no recent changes', true); return; }
+  toggleFeedCollapse(false);
+  feedFocused = true;
+  feedSel = 0;
+  renderFeed();
+  document.addEventListener('keydown', feedKey, true);
+}
+function exitFeedMode() {
+  if (!feedFocused) return;
+  feedFocused = false;
+  feedSel = -1;
+  document.removeEventListener('keydown', feedKey, true);
+  renderFeed();
+}
+function feedKey(ev) {
+  ev.stopPropagation();
+  ev.preventDefault();
+  const k = ev.key;
+  if (k === 'j' || k === 'ArrowDown') { feedSel = Math.min(feed.length - 1, feedSel + 1); renderFeed(); }
+  else if (k === 'k' || k === 'ArrowUp') { feedSel = Math.max(0, feedSel - 1); renderFeed(); }
+  else if (k === 'g') { feedSel = 0; renderFeed(); }
+  else if (k === 'G') { feedSel = feed.length - 1; renderFeed(); }
+  else if (k === 'Enter' || k === 'o') { const e = feed[feedSel]; exitFeedMode(); if (e) jumpToFresh(e.key); }
+  else if (k === 'm') { toggleFeedCollapse(true); exitFeedMode(); }
+  else if (k === 'x') { feed = []; renderFeed(); exitFeedMode(); }
+  else if (k === 'v' || k === 'V') { exitFeedMode(); openRecents(); }
+  else if (k === 'Escape' || k === 'q') { exitFeedMode(); }
+}
+
+// ---- full recents view (modal) ----
+const recentsOpen = () => document.getElementById('recentsmodal').classList.contains('open');
+let recentsSel = 0;
+function renderRecents() {
+  const list = document.getElementById('recentslist');
+  list.textContent = '';
+  if (!feed.length) { list.append(el('div', { class: 'rmeta' }, 'no out-of-band changes yet')); return; }
+  feed.forEach((e, i) => {
+    const row = el('div', { class: 'rentry' + (i === recentsSel ? ' sel' : '') },
+      el('div', { class: 'rprimary' }, e.primary),
+      el('div', { class: 'rmeta' }, `${e.meta} · ${feedTime(e.ts)}`));
+    row.addEventListener('click', () => { closeRecents(); jumpToFresh(e.key); });
+    list.append(row);
+  });
+  const sel = list.children[recentsSel];
+  if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: 'nearest' });
+}
+function openRecents() { recentsSel = 0; renderRecents(); toggleModal('recentsmodal', true); }
+function closeRecents() { toggleModal('recentsmodal', false); }
 
 // jumpToFresh moves the cursor (outline) or focus (map) onto a fed change and
 // clears its fresh mark — the feed doubles as a navigator.
@@ -1005,7 +1115,10 @@ function itemNode(section, it) {
   const key = `it:${section}:${it.raw}`;
   const text = el('span', { class: 'text' + (listExpanded.has(it.raw) ? ' wrap' : '') });
   registerStop({ key, type: 'item', el: row, section, it, row, li, text });
-  if (freshItems.has(key)) row.classList.add('fresh'); // out-of-band change accent
+  if (freshItems.has(key)) { // out-of-band change accent (pulse once on arrival)
+    row.classList.add('fresh');
+    if (freshPulse.has(key)) { row.classList.add('pulse'); freshPulse.delete(key); }
+  }
   row.addEventListener('click', () => { if (searchHL !== '') endSearch(); setCursor(stops.find(s => s.key === key), false); });
 
   // Fold caret for an item with children (enter/l/h). Childless items get an
@@ -1766,7 +1879,10 @@ function renderMap(b) {
       if (searchHit(n.it)) cls.push('searchhit');
     }
     if (l.lines.length > 1) cls.push('wrap'); // multi-line (w) node box
-    if (freshItems.has(n.key)) cls.push('fresh'); // out-of-band change accent
+    if (freshItems.has(n.key)) { // out-of-band change accent (pulse once on arrival)
+      cls.push('fresh');
+      if (freshPulse.has(n.key)) { cls.push('pulse'); freshPulse.delete(n.key); }
+    }
     if (n.key === mapState.focus) cls.push('focus');
     const wStyle = l.lines.length > 1 ? `;width:${width.get(n)}px` : '';
     const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - ownH.get(n) / 2}px${wStyle}` });
@@ -2651,6 +2767,9 @@ function landDocMatch(matches, idx) {
 document.addEventListener('keydown', e => {
   const a = document.activeElement;
   if (a && /INPUT|TEXTAREA/.test(a.tagName)) return;
+  // While the recents feed holds keyboard focus (V), its own capture listener
+  // owns the keys — bail so outline hotkeys don't also fire on j/k/enter.
+  if (feedFocused) return;
   if (modalOpen()) {
     // The help overlay scrolls with j/k/arrows/space and closes on esc/q/?.
     const help = document.getElementById('helpmodal');
@@ -2664,6 +2783,15 @@ document.addEventListener('keydown', e => {
       if (e.key === 'g') { e.preventDefault(); body.scrollTop = 0; return; }
       if (e.key === 'G') { e.preventDefault(); body.scrollTop = body.scrollHeight; return; }
       if (e.key === '?') { e.preventDefault(); toggleModal('helpmodal', false); return; }
+    }
+    // The full recents view navigates like a list: j/k/arrows move, g/G jump to
+    // ends, enter opens the change, esc/q close.
+    if (recentsOpen()) {
+      if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); recentsSel = Math.min(feed.length - 1, recentsSel + 1); renderRecents(); return; }
+      if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); recentsSel = Math.max(0, recentsSel - 1); renderRecents(); return; }
+      if (e.key === 'g') { e.preventDefault(); recentsSel = 0; renderRecents(); return; }
+      if (e.key === 'G') { e.preventDefault(); recentsSel = feed.length - 1; renderRecents(); return; }
+      if (e.key === 'Enter') { e.preventDefault(); const en = feed[recentsSel]; closeRecents(); if (en) jumpToFresh(en.key); return; }
     }
     if (e.key === 'Escape' || e.key === 'q') document.querySelectorAll('.modal.open .bar button:last-child, #helpclose').forEach(b => b.click());
     return;
@@ -2703,7 +2831,7 @@ document.addEventListener('keydown', e => {
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
     ' ', 'b', '!', 'p', 'e', 'w', 'W', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'T', 'B', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
-    '/', 'n', 'N', 'z']);
+    '/', 'n', 'N', 'z', 'V']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
@@ -2745,6 +2873,7 @@ document.addEventListener('keydown', e => {
     case 'L': focusAdd('Log'); break;
     case 'E': openRaw(); break;
     case 'H': openHistory(); break;
+    case 'V': enterFeedMode(); break;
     case 'T': startTitleEdit(); break;
     case 'B': location.href = '/'; break;
     case 'm': enterMap(); break;
@@ -2875,10 +3004,20 @@ document.getElementById('feedcollapse').addEventListener('click', () => {
 document.getElementById('feedclear').addEventListener('click', () => {
   feed = []; renderFeed();
 });
+document.getElementById('feedexpand').addEventListener('click', openRecents);
+document.getElementById('recentsclose').addEventListener('click', closeRecents);
 window.__sn = {
   // Novelty state for the e2e harness: which items are flagged fresh, and the
   // event-feed messages (newest first).
-  get novelty() { return { fresh: [...freshItems], feed: feed.map(e => e.msg) }; },
+  get novelty() { return {
+    fresh: [...freshItems],
+    pulse: [...freshPulse],                   // keys whose one-shot arrival pulse is still pending
+    feed: feed.map(e => e.primary),          // headline (what changed), newest first
+    feedMeta: feed.map(e => e.meta),          // dim who/where line
+    freshTtlMs: FRESH_TTL,
+    focused: feedFocused, sel: feedSel,
+    recentsOpen: recentsOpen(), recentsSel,
+  }; },
   get stops() { return stops.map(s => ({ key: s.key, type: s.type, visible: s.el.offsetParent !== null })); },
   get cursorKey() { return cursorKey; },
   get inputsOpen() { return inputsOpen; },
