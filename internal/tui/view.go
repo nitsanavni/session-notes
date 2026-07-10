@@ -832,7 +832,8 @@ func (m *model) viewHelp() string {
 		{"e (map)", "edit item · rename section · edit board title (on the center)"},
 		{"a (map)", "add child/sibling · add a section (on the center)"},
 		{"d (map)", "archive the focused item or whole section into ## Archive"},
-		{"f / b (map)", "focus into subtree (breadcrumbs) / focus out one level (also esc)"},
+		{"f / esc (map)", "focus into subtree (breadcrumbs) / focus out one level"},
+		{"b (map)", "toggle blocked [?] on the focused item (same as the outline)"},
 		{"o (map)", "open the focused item's [[linked note]] (chooser if several)"},
 		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},
 		{"z (map)", "focus-fold (zoom): collapse everything except the path to the focus (its children shown, folded); z again restores"},
@@ -980,7 +981,7 @@ func (m *model) viewRecents() string {
 		b.WriteString(prefix + primaryStyle.Render(primary) + "\n")
 		b.WriteString("    " + styleDim.Render(e.meta+" · "+e.ts.Format("15:04")) + "\n")
 	}
-	b.WriteString("\n" + styleHelpBar.Render("j/k move · enter jump · g/G ends · esc close"))
+	b.WriteString("\n" + styleHelpBar.Render("j/k move · enter jump · g/G ends · x dismiss all · esc close"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 

@@ -82,22 +82,23 @@ func TestMapFocusOut(t *testing.T) {
 		t.Fatalf("focus root = %q, want %q", m.mapFocusRoot, parentKey)
 	}
 
-	m.handleMapKey(keyPress("b")) // step out one level -> the Threads section
+	// esc steps out one level (b now toggles blocked — web convention 9729cad).
+	m.handleMapKey(keyPress("esc")) // step out one level -> the Threads section
 	m.ensureMap()
 	if m.mapFocusRoot != parentKeyOf(parentKey) {
-		t.Fatalf("focus root after b = %q, want %q (one level out)", m.mapFocusRoot, parentKeyOf(parentKey))
+		t.Fatalf("focus root after esc = %q, want %q (one level out)", m.mapFocusRoot, parentKeyOf(parentKey))
 	}
 	// Cursor rests on the node we stepped out of (parent).
 	if got := m.mp.refs[m.mp.focus]; got.kind != refItem || got.item.Text != "parent" {
-		t.Errorf("focus after b = %+v, want parent", got)
+		t.Errorf("focus after esc = %+v, want parent", got)
 	}
 
-	m.handleMapKey(keyPress("b")) // out again -> whole board
+	m.handleMapKey(keyPress("esc")) // out again -> whole board
 	m.ensureMap()
 	if m.mapFocusRoot != "" {
-		t.Fatalf("focus root after 2nd b = %q, want whole board", m.mapFocusRoot)
+		t.Fatalf("focus root after 2nd esc = %q, want whole board", m.mapFocusRoot)
 	}
-	// b at the top level is a no-op with a hint.
+	// b at the top level toggles blocked, never re-roots.
 	m.handleMapKey(keyPress("b"))
 	if m.mapFocusRoot != "" {
 		t.Errorf("focus root should stay empty at top level")

@@ -1483,6 +1483,12 @@ func (m *model) handleRecentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.recents) > 0 {
 			m.recentsSel = len(m.recents) - 1
 		}
+	case "x":
+		// Dismiss all entries (web feed's x). Current entries only — a later
+		// out-of-band change starts a fresh list. The overlay closes with them.
+		m.recents = nil
+		m.recentsSel = 0
+		m.mode = m.prevMode
 	case "enter":
 		if m.recentsSel >= 0 && m.recentsSel < len(m.recents) {
 			m.jumpToRecent(m.recents[m.recentsSel].key)

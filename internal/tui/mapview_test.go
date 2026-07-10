@@ -279,8 +279,9 @@ func TestMapAddChildPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	if !strings.Contains(string(data), "  - child line") {
-		t.Errorf("child not added as a nested bullet:\n%s", data)
+	// The human's child add is stamped with the user: author tag (web parity).
+	if !strings.Contains(string(data), "  - user: child line") {
+		t.Errorf("child not added as a user:-stamped nested bullet:\n%s", data)
 	}
 }
 

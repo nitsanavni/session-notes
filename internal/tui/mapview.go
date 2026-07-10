@@ -759,6 +759,75 @@ func (m *model) setMapFocus(n *mindmap.Node) {
 	m.mapFocusKey = m.mp.keys[n]
 }
 
+// mapFocusSiblingEnd is g/G in the map: move focus to the first (last=false) or
+// last (last=true) of the focused node's same-side siblings — the map analogue
+// of the outline's jump-to-first/last stop. The center has no siblings (no-op).
+func (m *model) mapFocusSiblingEnd(last bool) {
+	ms := m.mp
+	if ms.focus == nil || ms.focus == ms.root {
+		return
+	}
+	sibs := ms.sameSideSiblings(ms.focus, ms.sideOf(ms.focus))
+	if len(sibs) == 0 {
+		return
+	}
+	if last {
+		m.setMapFocus(sibs[len(sibs)-1])
+	} else {
+		m.setMapFocus(sibs[0])
+	}
+}
+
+// mapJumpToSection is 1-9 in the map: focus the Nth (0-based) section node —
+// the outline's number-jump. A hidden (Log while filtered) or out-of-view
+// (re-rooted subtree) section is a no-op.
+func (m *model) mapJumpToSection(idx int) {
+	if idx < 0 || idx >= len(m.board.Sections) {
+		return
+	}
+	if n, ok := m.mp.nodeByKey["s"+strconv.Itoa(idx)]; ok && m.mp.placement(n) != nil {
+		m.setMapFocus(n)
+	}
+}
+
+// mapCycleSection is tab/shift-tab in the map: cycle focus through the visible
+// section nodes in board order, wrapping — the outline's section cycling.
+// Starts from the focus's own section (or the first/last when on the center).
+func (m *model) mapCycleSection(delta int) {
+	ms := m.mp
+	var secs []*mindmap.Node
+	for i := range m.board.Sections {
+		if n, ok := ms.nodeByKey["s"+strconv.Itoa(i)]; ok && ms.placement(n) != nil {
+			secs = append(secs, n)
+		}
+	}
+	if len(secs) == 0 {
+		return
+	}
+	// Index of the focus's owning section within the visible section ring.
+	cur := -1
+	if ms.focus != nil {
+		key := ms.keys[ms.focus]
+		for i, n := range secs {
+			if keyWithin(key, ms.keys[n]) {
+				cur = i
+				break
+			}
+		}
+	}
+	var next int
+	if cur < 0 {
+		if delta > 0 {
+			next = 0
+		} else {
+			next = len(secs) - 1
+		}
+	} else {
+		next = ((cur+delta)%len(secs) + len(secs)) % len(secs)
+	}
+	m.setMapFocus(secs[next])
+}
+
 // mapVertical walks same-side siblings (delta +1 down / -1 up).
 func (m *model) mapVertical(delta int) {
 	ms := m.mp
@@ -1025,7 +1094,9 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "f":
 		m.focusIn()
 	case "b":
-		m.focusOut()
+		// b toggles blocked [?] (outline muscle memory; web convention 9729cad).
+		// Stepping out of a focused subtree is esc only.
+		m.mapBlocked()
 	case "o":
 		return m, m.mapOpenLink()
 	case "m":
@@ -1041,6 +1112,16 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mapMove('k')
 	case "l", "right":
 		m.mapMove('l')
+	case "g":
+		m.mapFocusSiblingEnd(false)
+	case "G":
+		m.mapFocusSiblingEnd(true)
+	case "tab":
+		m.mapCycleSection(1)
+	case "shift+tab":
+		m.mapCycleSection(-1)
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		m.mapJumpToSection(int(key[0] - '1'))
 	case "enter":
 		m.mapToggleFold()
 	case "z":
@@ -1257,6 +1338,27 @@ func (m *model) mapPin() {
 // mapUrgent toggles the "!!" urgent marker on the focused item and saves.
 // Sections and the center are not urgent-able (beep via a status message).
 // Mirrors the list view's `!` and the web map's urgent toggle.
+// mapBlocked toggles blocked [?] on the focused item directly — outline muscle
+// memory (web convention 9729cad: map b = blocked; stepping out is esc only).
+func (m *model) mapBlocked() {
+	ref := m.mp.refs[m.mp.focus]
+	if ref.kind != refItem || ref.item.Status == board.StatusNone {
+		m.status = "nothing to block here"
+		return
+	}
+	it := ref.item
+	m.snapshot()
+	op := pendingOp{typ: opCycle, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+	if it.Status == board.StatusBlocked {
+		it.Status = board.StatusOpen
+	} else {
+		it.Status = board.StatusBlocked
+	}
+	op.newStatus = it.Status
+	m.saveWithRebase(op)
+	m.mp = nil // marker changed -> re-render
+}
+
 func (m *model) mapUrgent() {
 	ref := m.mp.refs[m.mp.focus]
 	if ref.kind != refItem {
@@ -1540,6 +1642,11 @@ func (m *model) handleMapInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch mo {
 		case modeMapAdd:
 			if m.mapInputParent != nil {
+				// A child added under an item is the human speaking in that
+				// thread: stamp the "user:" author tag, matching the outline
+				// reply and the web map. The op payload carries the stamped
+				// text so a rebase replay keeps the attribution.
+				text = "user: " + text
 				op := pendingOp{typ: opAddChild, section: m.mapInputSection, rawLine: m.mapInputParent.Raw(), payload: text}
 				m.board.AddReply(m.mapInputParent, text)
 				m.saveWithRebase(op)
@@ -1571,8 +1678,9 @@ var mapConnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
 // mapNodeStyle is the base style for a node from its board ref, with the focus
 // overlay (a bright reverse-video bar, matching the list view's selection)
-// applied after so it is uniform across every status.
-func mapNodeStyle(ref mapRef, focus, search bool) lipgloss.Style {
+// applied after so it is uniform across every status. fresh marks a node whose
+// item changed out-of-band (the map counterpart of the outline's ◆ accent).
+func mapNodeStyle(ref mapRef, focus, search, fresh bool) lipgloss.Style {
 	var base lipgloss.Style
 	switch ref.kind {
 	case refCenter:
@@ -1605,6 +1713,11 @@ func mapNodeStyle(ref mapRef, focus, search bool) lipgloss.Style {
 	// substring accent).
 	if search && !focus {
 		base = base.Foreground(styleSearch.GetForeground())
+	}
+	// Fresh (out-of-band changed) nodes get the outline's ◆ accent color; the
+	// focus bar wins on the focused node (landing there settles the mark).
+	if fresh && !focus {
+		base = base.Foreground(styleFresh.GetForeground()).Bold(true)
 	}
 	if focus {
 		base = base.Foreground(selFG).Reverse(true).Bold(true)
@@ -1677,7 +1790,17 @@ func (m *model) viewMap() string {
 		ref := ms.refs[p.Node]
 		id := len(styles)
 		matched := ref.kind == refItem && ref.item != nil && itemMatchesSearch(ref.item, query)
-		styles = append(styles, mapNodeStyle(ref, p.Node == ms.focus, matched))
+		focused := p.Node == ms.focus
+		fresh := false
+		if ref.kind == refItem && ref.item != nil {
+			fkey := strings.TrimSpace(ref.item.Raw())
+			fresh = m.fresh[fkey]
+			if fresh && focused {
+				delete(m.fresh, fkey) // landing on a change settles it (outline parity)
+				fresh = false
+			}
+		}
+		styles = append(styles, mapNodeStyle(ref, focused, matched, fresh))
 		c0 := p.Col - layout.MinCol
 		top := p.Row - (p.Height-1)/2 - minRow
 		// Style every row of the node's block across its full width, so an
@@ -1872,7 +1995,12 @@ func (m *model) viewMapFooter() string {
 		return styleStatus.Render(label+": ") + m.input.View()
 	}
 	if m.mode == modeSearch {
-		return styleStatus.Render("search: ") + m.input.View()
+		// Live tally while typing, mirroring the outline's search footer.
+		tail := ""
+		if m.status != "" {
+			tail = "  " + styleDim.Render(m.status)
+		}
+		return styleStatus.Render("search: ") + m.input.View() + tail
 	}
 	if m.mode == modeMapFeedback {
 		return styleDim.Render(ansi.Truncate(m.lastMoveSummary(), m.width, "…")) + "\n" +
@@ -1892,10 +2020,15 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · / search · n/N next/prev · f focus · b out · enter fold · z zoom · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · ! urgent · p pin · d archive (item/section) · D delete (item/section) · y copy path · H history · V recents · M log · m outline · u undo · S surprised? · ? help · q quit"
+	hints := "hjkl move · g/G ends · tab section · 1-9 jump · / search · n/N next/prev · f focus · esc out · enter fold · z zoom · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · b blocked · ! urgent · p pin · d archive (item/section) · D delete (item/section) · y copy path · H history · V recents · M log · m outline · u undo · S surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
+	}
+	// Live session-status segment (model · context bar · activity), same as the
+	// outline footer (statusFooter reads the sidecar on every render).
+	if seg := m.statusFooter(); seg != "" {
+		line = seg + "\n" + line
 	}
 	return detail + "\n" + line
 }
