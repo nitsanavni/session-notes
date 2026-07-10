@@ -43,7 +43,7 @@ func typeSearch(m *model, q string) {
 
 func TestSearchMatchesOrderingAndCase(t *testing.T) {
 	b := board.Parse(searchBoard)
-	got := searchMatches(b, "alpha")
+	got := searchMatches(b, "alpha", false)
 	// Document order: Plan "alpha task", Threads reply "alpha reply here",
 	// Ideas "ALPHA idea" (case-insensitive).
 	want := []string{"alpha task", "claude: alpha reply here", "ALPHA idea"}
@@ -59,8 +59,40 @@ func TestSearchMatchesOrderingAndCase(t *testing.T) {
 
 func TestSearchMatchesEmptyQuery(t *testing.T) {
 	b := board.Parse(searchBoard)
-	if got := searchMatches(b, "   "); got != nil {
+	if got := searchMatches(b, "   ", false); got != nil {
 		t.Errorf("whitespace query matched %d items, want none", len(got))
+	}
+}
+
+// TestSearchScopeExcludesArchiveAndLog: the default working-set scope skips the
+// Archive and Log sections; toggling to "all" includes them. ctrl+s flips it.
+func TestSearchScopeExcludesArchiveAndLog(t *testing.T) {
+	src := "---\ntitle: T\n---\n" +
+		"## Plan\n- [ ] widget in plan\n" +
+		"## Log\n- widget in the log\n" +
+		"## Archive\n- widget archived\n"
+	b := board.Parse(src)
+	def := searchMatches(b, "widget", false)
+	if len(def) != 1 || def[0].DisplayText() != "widget in plan" {
+		t.Fatalf("default scope should match only the Plan item, got %v", def)
+	}
+	all := searchMatches(b, "widget", true)
+	if len(all) != 3 {
+		t.Fatalf("all scope should match all three, got %d: %v", len(all), all)
+	}
+
+	// ctrl+s in the prompt toggles scope live and re-tallies.
+	m := newTestModel(src, 80, 40)
+	typeSearch(m, "widget")
+	if !strings.Contains(m.status, "working set") {
+		t.Errorf("status should note working-set scope: %q", m.status)
+	}
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.searchScopeAll {
+		t.Error("tab did not widen the scope")
+	}
+	if !strings.Contains(m.status, "(all)") || !strings.Contains(m.status, "/3 matches") {
+		t.Errorf("after tab expected 3 matches in (all) scope: %q", m.status)
 	}
 }
 
@@ -99,8 +131,8 @@ func TestSearchNextWrapsAndReportsCount(t *testing.T) {
 	if got := m.currentItem().DisplayText(); got != "alpha task" {
 		t.Errorf("wrap = %q, want alpha task", got)
 	}
-	if m.status != "1/3 matches" {
-		t.Errorf("status = %q, want 1/3 matches", m.status)
+	if !strings.HasPrefix(m.status, "1/3 matches") {
+		t.Errorf("status = %q, want it to start with 1/3 matches", m.status)
 	}
 	// Previous from the first wraps to the last.
 	m.searchNext(-1)
@@ -243,6 +275,33 @@ func TestSearchLastTermRecall(t *testing.T) {
 	}
 	if !m.searchActive || m.searchQuery != "alpha" {
 		t.Errorf("n recall did not re-activate alpha (active=%v q=%q)", m.searchActive, m.searchQuery)
+	}
+}
+
+// TestSearchRecallResumesFromLastMatch: after stepping into the match set and
+// leaving search, re-activating with n resumes from where it left off (the next
+// match after the last position), not the top.
+func TestSearchRecallResumesFromLastMatch(t *testing.T) {
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha") // 3 matches; idx 0 = "alpha task"
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m.searchNext(1) // idx 1 = "claude: alpha reply here"
+	if got := m.currentItem().DisplayText(); got != "claude: alpha reply here" {
+		t.Fatalf("precondition: expected to be on the reply, got %q", got)
+	}
+	// Leave results mode; the position (idx 1) is remembered.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyEsc})
+	// n re-activates and resumes: next after idx 1 is idx 2 ("ALPHA idea").
+	if !m.searchNext(1) {
+		t.Fatal("n should re-activate the last term")
+	}
+	if got := m.currentItem().DisplayText(); got != "ALPHA idea" {
+		t.Errorf("recall did not resume from last position: got %q, want ALPHA idea", got)
+	}
+	// A subsequent N from here steps back to the reply again.
+	m.searchNext(-1)
+	if got := m.currentItem().DisplayText(); got != "claude: alpha reply here" {
+		t.Errorf("N after resume = %q, want the reply", got)
 	}
 }
 

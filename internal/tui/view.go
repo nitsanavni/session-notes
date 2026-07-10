@@ -55,9 +55,9 @@ var authorRe = regexp.MustCompile(`^(?:!!\s+)?(?:\d{2}:\d{2}\s+)?(claude|user):`
 // highlighted in the current render, or "" when nothing is highlighted. While
 // the prompt is open (modeSearch) the live input text drives it so highlighting
 // tracks the query keystroke-by-keystroke; once the prompt is confirmed the
-// stored searchQuery drives it for as long as search-follow mode (n/N) stays
-// live. Esc, or any board/map action other than n/N, clears searchActive and so
-// ends highlighting (see handleBoardKey / handleMapKey).
+// stored searchQuery drives it for as long as the persistent results mode stays
+// live. Only Esc (or a new `/`) clears searchActive and so ends highlighting;
+// ordinary navigation keeps it (see clearSearchOnEsc / handleBoardKey / handleMapKey).
 func (m *model) searchHighlight() string {
 	if m.mode == modeSearch {
 		return strings.ToLower(strings.TrimSpace(m.input.Value()))
@@ -597,7 +597,7 @@ func (m *model) viewHelp() string {
 		{"j / k, up / down", "move cursor"},
 		{"tab / shift-tab", "next / previous section"},
 		{"1 - 9", "jump to the Nth section"},
-		{"/", "incremental search item text (both views); n / N next / previous match"},
+		{"/", "incremental search (both views); n/N next/prev, resuming the last term after Esc; tab toggles scope (working set vs Archive+Log)"},
 		{"a", "add item to current section"},
 		{"A", "add sections (multi-select overlay)"},
 		{"R", "reply in thread (sibling on a reply; starts the thread on an item)"},

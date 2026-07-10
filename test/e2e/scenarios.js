@@ -753,8 +753,8 @@ run({
     await t.key('j'); // the auth item (has one reply child)
     const auth = 'it:Threads:- [>] auth refactor — extracting middleware';
     await t.assertCursor(auth);
-    // h collapses the subtree; cursor stays on the folded item.
-    await t.key('h');
+    // enter collapses the subtree; cursor stays on the folded item.
+    await t.key('Enter');
     await t.assertCursor(auth);
     let sn = await t.sn();
     t.assert(sn.collapsedItems.includes(auth), `item recorded collapsed (got ${JSON.stringify(sn.collapsedItems)})`);
@@ -780,7 +780,7 @@ run({
     await t.open();
     await t.key('3'); // Threads
     await t.key('j'); // auth item
-    await t.key('h'); // fold it — hides the "claude: extracted" reply
+    await t.key('Enter'); // fold it — hides the "claude: extracted" reply
     // j now steps to the next sibling item, not the hidden reply.
     await t.key('j');
     await t.assertCursor('it:Threads:- [x] fix flaky test');
@@ -803,10 +803,10 @@ run({
     await t.open();
     await t.key('3'); // Threads
     await t.key('j'); // auth item (top-level, expanded)
-    await t.key('h'); // foldable + expanded → collapse in place first
-    await t.assertCursor('it:Threads:- [>] auth refactor — extracting middleware');
-    await t.key('h'); // now folded → step out to the section header
+    await t.key('h'); // always ascends — no fold, straight to the header
     await t.assertCursor('sec:Threads');
+    const sn = await t.sn();
+    t.assert(sn.collapsedItems.length === 0, `h never folds an item (got ${JSON.stringify(sn.collapsedItems)})`);
   },
 
   'outline: l on an expanded item descends to its first child': async t => {
@@ -822,7 +822,7 @@ run({
     await t.open();
     await t.key('3'); // Threads
     await t.key('j'); // auth item
-    await t.key('h'); // fold — hides the "claude: extracted, tests green" reply
+    await t.key('Enter'); // fold — hides the "claude: extracted, tests green" reply
     let sn = await t.sn();
     const reply = 'it:Threads:  - claude: extracted, tests green';
     t.assert(!sn.stops.some(s => s.key === reply), 'reply hidden before search');
@@ -840,7 +840,7 @@ run({
     await t.key('3'); // Threads
     await t.key('j'); // auth item
     const auth = 'it:Threads:- [>] auth refactor — extracting middleware';
-    await t.key('h'); // fold
+    await t.key('Enter'); // fold
     // An external write triggers an SSE-driven re-render.
     await t.editExternally({ op: 'add', section: 'Ideas', text: 'a fresh idea' });
     await t.waitBoardContains('- a fresh idea');
@@ -933,7 +933,22 @@ run({
     t.assert(s.active && s.query === 'legacy', `n re-activated last term (got ${JSON.stringify(s)})`);
   },
 
-  'search: default scope excludes Log; ctrl+s widens to everything': async t => {
+  'search: n after leaving resumes from the last match, not the top': async t => {
+    await t.open();
+    await t.key('/');
+    await t.type('middleware'); // 3 matches: Waiting, Plan, Threads (doc order)
+    await t.key('Enter'); // idx 0 (Waiting on User)
+    await t.assertCursor('it:Waiting on User:- [ ] review the middleware PR @user');
+    await t.key('n'); // idx 1 (Plan)
+    await t.assertCursor('it:Plan:- [x] extract middleware');
+    await t.key('Escape'); // leave results mode; position (idx 1) remembered
+    let s = await t.searchState();
+    t.assert(!s.active, 'precondition: search cleared before recall');
+    await t.key('n'); // resume: next after idx 1 -> idx 2 (Threads), not the top
+    await t.assertCursor('it:Threads:- [>] auth refactor — extracting middleware');
+  },
+
+  'search: default scope excludes Log; Tab widens to everything': async t => {
     await t.open();
     await t.key('/');
     await t.type('session'); // "wire sessions" (Plan) + "session started" (Log)
@@ -941,11 +956,11 @@ run({
     // Default working-set scope skips the Log line (status is live even before Enter).
     t.assert(!s.scopeAll && /\/1 matches \(working set\)/.test(s.status),
       `working-set scope excludes Log (got ${JSON.stringify(s)})`);
-    // ctrl+s widens to everything → the Log match appears (1/2 now).
-    await t.page.keyboard.down('Control'); await t.page.keyboard.press('s'); await t.page.keyboard.up('Control');
+    // Tab widens to everything → the Log match appears (1/2 now).
+    await t.key('Tab');
     s = await t.searchState();
     t.assert(s.scopeAll && /\/2 matches \(all\)/.test(s.status),
-      `ctrl+s widened scope to include Log (got ${JSON.stringify(s)})`);
+      `Tab widened scope to include Log (got ${JSON.stringify(s)})`);
     await t.key('Escape');
   },
 

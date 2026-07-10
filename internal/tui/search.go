@@ -15,10 +15,20 @@ import (
 // (outline) or a folded subtree (map) are revealed on the way in, reusing the
 // same auto-expand machinery as ordinary navigation.
 
+// searchScopeExcluded reports whether a section is outside the default search
+// scope (the "working set"). Archive and Log are noisy, low-signal sections the
+// user rarely means to jump into, so search skips them unless the scope is
+// toggled to "everything".
+func searchScopeExcluded(title string) bool {
+	return title == "Archive" || title == "Log"
+}
+
 // searchMatches returns every item whose display text contains query as a
 // case-insensitive substring, in document order across all sections, replies
-// included. An empty (or whitespace-only) query matches nothing.
-func searchMatches(b *board.Board, query string) []*board.Item {
+// included. An empty (or whitespace-only) query matches nothing. When all is
+// false (the default working-set scope) the Archive and Log sections are
+// skipped so a search never drags the cursor — or the Log ring — into them.
+func searchMatches(b *board.Board, query string, all bool) []*board.Item {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" || b == nil {
 		return nil
@@ -34,6 +44,9 @@ func searchMatches(b *board.Board, query string) []*board.Item {
 		}
 	}
 	for _, s := range b.Sections {
+		if !all && searchScopeExcluded(s.Title) {
+			continue
+		}
 		walk(s.Items)
 	}
 	return out
@@ -61,7 +74,7 @@ func (m *model) startSearch() {
 	if m.searchPrefilled {
 		// Live-preview the recalled term straight away so its matches highlight
 		// and the view jumps to the first hit before any keystroke.
-		matches := searchMatches(m.board, m.searchLastTerm)
+		matches := searchMatches(m.board, m.searchLastTerm, m.searchScopeAll)
 		if len(matches) > 0 {
 			m.searchIdx = 0
 			m.jumpToMatch(matches[0])
@@ -102,7 +115,7 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		q := strings.TrimSpace(m.input.Value())
 		m.searchQuery = q
-		matches := searchMatches(m.board, q)
+		matches := searchMatches(m.board, q, m.searchScopeAll)
 		if q == "" || len(matches) == 0 {
 			m.searchActive = false
 			if q != "" {
@@ -112,6 +125,19 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.searchActive = true
 		m.searchLastTerm = q
+		m.setSearchStatus(len(matches))
+		return m, nil
+	case "tab":
+		// Toggle the search scope (working set <-> everything) live, without
+		// leaving the prompt, and re-run the current query so the tally + jump
+		// update immediately. Tab has no other meaning inside the search prompt.
+		m.searchScopeAll = !m.searchScopeAll
+		q := strings.TrimSpace(m.input.Value())
+		matches := searchMatches(m.board, q, m.searchScopeAll)
+		if len(matches) > 0 {
+			m.searchIdx = 0
+			m.jumpToMatch(matches[0])
+		}
 		m.setSearchStatus(len(matches))
 		return m, nil
 	}
@@ -132,7 +158,7 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if q != "" {
 		m.searchLastTerm = q
 	}
-	matches := searchMatches(m.board, q)
+	matches := searchMatches(m.board, q, m.searchScopeAll)
 	if len(matches) > 0 {
 		m.searchIdx = 0
 		m.jumpToMatch(matches[0])
@@ -156,18 +182,21 @@ func (m *model) searchNext(dir int) bool {
 		}
 		m.searchQuery = m.searchLastTerm
 		m.searchActive = true
-		m.searchIdx = 0
-		matches := searchMatches(m.board, m.searchQuery)
+		matches := searchMatches(m.board, m.searchQuery, m.searchScopeAll)
 		if len(matches) == 0 {
 			m.searchActive = false
 			m.status = "no matches"
 			return true
 		}
-		m.jumpToMatch(matches[0])
+		// Resume from where the last search session left off: step one from the
+		// remembered index (n -> next, N -> previous), rather than jumping to the top.
+		base := ((m.searchLastIdx % len(matches)) + len(matches)) % len(matches)
+		m.searchIdx = ((base+dir)%len(matches) + len(matches)) % len(matches)
+		m.jumpToMatch(matches[m.searchIdx])
 		m.setSearchStatus(len(matches))
 		return true
 	}
-	matches := searchMatches(m.board, m.searchQuery)
+	matches := searchMatches(m.board, m.searchQuery, m.searchScopeAll)
 	if len(matches) == 0 {
 		m.searchActive = false
 		m.status = "no matches"
@@ -198,9 +227,18 @@ func (m *model) clearSearchOnEsc(key string) bool {
 	return false
 }
 
-// setSearchStatus writes the "k/N matches" tally (1-based current index).
+// setSearchStatus writes the "k/N matches" tally (1-based current index),
+// annotated with the active scope so the user can see whether Archive/Log are
+// in play (default working set stays unlabelled to keep the common case quiet).
 func (m *model) setSearchStatus(total int) {
-	m.status = fmt.Sprintf("%d/%d matches", m.searchIdx+1, total)
+	m.searchLastIdx = m.searchIdx // remember where a later n/N recall should resume
+	scope := ""
+	if m.searchScopeAll {
+		scope = " (all)"
+	} else {
+		scope = " (working set)"
+	}
+	m.status = fmt.Sprintf("%d/%d matches%s · tab scope", m.searchIdx+1, total, scope)
 }
 
 // jumpToMatch moves the active view onto item it, revealing it through any

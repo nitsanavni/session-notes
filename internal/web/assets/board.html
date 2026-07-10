@@ -307,9 +307,9 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>A</td><td>add a section</td></tr>
     <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
     <tr><td>enter / l / h</td><td>fold at the cursor. On a section: h collapses; l expands a collapsed
-      section and lands on its first item. On an item with children: enter toggles; l unfolds then
-      descends to the first child; h folds the subtree, then (leaf / folded) steps out to the parent
-      (top-level → section header)</td></tr>
+      section and lands on its first item. On an item: enter toggles its subtree fold; l unfolds then
+      descends to the first child; h always steps out to the parent (top-level → section header) and
+      never folds</td></tr>
     <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
@@ -320,7 +320,8 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>T</td><td>edit the board title (frontmatter title)</td></tr>
     <tr><td>B</td><td>back to the board picker</td></tr>
     <tr><td>o</td><td>open the item's [[link]] — chooser when it has several</td></tr>
-    <tr><td>/ · n / N</td><td>incremental search · next / previous match (wrapping)</td></tr>
+    <tr><td>/ · n / N</td><td>incremental search · next / previous match (wrapping); n/N with no active search re-runs the last term from where you left off</td></tr>
+    <tr><td>Tab (in search)</td><td>toggle search scope: working set (no Archive/Log) ↔ everything</td></tr>
     <tr><td>L</td><td>log entry</td></tr>
     <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
     <tr><td>u / ctrl+r</td><td>undo / redo (shared journal — CLI edits too)</td></tr>
@@ -508,13 +509,9 @@ function parentItemStop(stop) {
     && x.it.children && x.it.children.includes(stop.it)) || null;
 }
 
-// collapseOrGotoParent is `h`/left on an item, following the map's convention:
-// if the item has an open subtree, collapse it in place; otherwise (a leaf or
-// an already-collapsed item) step the cursor OUT to its parent — the parent
-// item, or the section header for a top-level item. Selection only, no fold.
-// expandOrGotoChild is `l`/right on an item, the mirror of collapseOrGotoParent:
-// a collapsed subtree expands in place; an already-expanded one descends the
-// cursor to its first child; a leaf is a no-op (nothing to expand or enter).
+// expandOrGotoChild is `l`/right on an item: a collapsed subtree expands in
+// place; an already-expanded one descends the cursor to its first child; a
+// leaf is a no-op (nothing to expand or enter).
 function expandOrGotoChild(stop) {
   const has = stop.it.children && stop.it.children.length;
   if (!has) return;
@@ -524,9 +521,11 @@ function expandOrGotoChild(stop) {
   if (child) setCursor(child);
 }
 
-function collapseOrGotoParent(stop) {
-  const has = stop.it.children && stop.it.children.length;
-  if (has && !itemCollapsed(stop.key)) { toggleItemCollapse(stop, true); return; }
+// gotoParentStop is `h`/left on an item: pure ascent — to the parent item, or
+// the section header for a top-level item. It never folds (folding is enter's
+// job; a folding h had a double meaning). The one stop where h still collapses
+// is a section header — the "top" stop with nowhere further left to go.
+function gotoParentStop(stop) {
   const p = parentItemStop(stop);
   if (p) { setCursor(p); return; }
   const head = stops.find(x => x.type === 'section' && x.title === stop.section);
@@ -1977,7 +1976,7 @@ function setSearchStatus(total) {
   searchLastIdx = searchIdx; // remember where a later n/N recall should resume
   const e = document.getElementById('searchstatus');
   const scope = searchScopeAll ? '(all)' : '(working set)';
-  e.textContent = `${searchIdx + 1}/${total} matches ${scope} · ^s scope`;
+  e.textContent = `${searchIdx + 1}/${total} matches ${scope} · tab scope`;
   e.classList.add('show');
 }
 function clearSearchStatus() {
@@ -2004,8 +2003,9 @@ function startSearch() {
   inp.oninput = runQuery;
   inp.onkeydown = e => {
     e.stopPropagation();
-    if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) {
-      // Toggle scope (working set <-> everything) live, without leaving the prompt.
+    if (e.key === 'Tab') {
+      // Tab toggles scope (working set <-> everything) live, without leaving the
+      // prompt (Tab has no other meaning here, and ctrl+s is often terminal-taken).
       e.preventDefault();
       searchScopeAll = !searchScopeAll;
       runQuery();
@@ -2154,9 +2154,10 @@ document.addEventListener('keydown', e => {
     // On an item, l/right expands a collapsed subtree, else descends to the
     // first child (leaf: no-op) — the map's expand-or-descend convention.
     case 'l': case 'ArrowRight': if (onSec) expandIntoSection(s.title); else if (onItem) expandOrGotoChild(s); break;
-    // On an item, h/left collapses an open subtree, else steps out to the
-    // parent item / section header (the map's collapse-or-ascend convention).
-    case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); else if (onItem) collapseOrGotoParent(s); break;
+    // On an item, h/left always ascends to the parent item / section header
+    // (never folds — enter is the fold key); on a section header, the top of
+    // the tree, h collapses the section.
+    case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); else if (onItem) gotoParentStop(s); break;
     case 'Tab': moveSection(e.shiftKey ? -1 : 1); break;
     case 'g': { const v = visibleStops(); if (v.length) setCursor(v[0]); break; }
     case 'G': { const v = visibleStops(); if (v.length) setCursor(v[v.length - 1]); break; }
