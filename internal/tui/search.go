@@ -493,9 +493,23 @@ func (m *model) jumpToMatch(it *board.Item) {
 		m.ensureMap()
 		return
 	}
-	// Outline: reveal a collapsed owning section, then land the cursor.
-	if title := m.board.SectionTitleOf(it); title != "" && m.sectionCollapsed(title) {
+	// Outline: reveal a collapsed owning section and un-fold any collapsed
+	// ancestor items on the path to the match, then land the cursor.
+	title := m.board.SectionTitleOf(it)
+	changed := false
+	if title != "" && m.sectionCollapsed(title) {
 		m.setCollapsed(title, false)
+		changed = true
+	}
+	if title != "" {
+		for p := m.board.ParentOf(it); p != nil; p = m.board.ParentOf(p) {
+			if m.itemFolded(title, p) {
+				m.setItemFolded(title, p, false)
+				changed = true
+			}
+		}
+	}
+	if changed {
 		m.rebuildPositions()
 	}
 	m.setCursorToItem(it)

@@ -100,11 +100,23 @@ type model struct {
 	// hidden-item count, and its items are skipped by cursor navigation.
 	collapsed map[string]bool
 
-	// focusFoldPrev is the collapse-state snapshot taken by a `z` focus-fold
-	// (zoom): non-nil while zoomed, restored (and nilled) by the second `z`.
-	// The TUI outline folds at section granularity only, so z collapses every
-	// section except the cursor's (the web outline additionally folds items).
-	focusFoldPrev map[string]bool
+	// collapsedItems holds per-ITEM fold state (the `enter`/`l`/`h` keys on an
+	// item that has child items), keyed by section title + the item's raw source
+	// line — the same drift-tolerant identity fresh/listExpanded use, so a fold
+	// survives a reparse (reload, rebase, undo). A collapsed item hides its whole
+	// subtree (its descendants build no nav stops) and renders a dim "▸ N"
+	// hidden-descendant tally. The TUI outline's analogue of the web outline's
+	// item-level folds (see internal/web/assets/board.html collapsedItems).
+	collapsedItems map[string]bool
+
+	// focusFoldPrev / focusFoldPrevItems are the collapse-state snapshots taken by
+	// a `z` focus-fold (zoom): non-nil while zoomed, restored (and nilled) by the
+	// second `z`. focusFoldPrev covers the per-section state, focusFoldPrevItems
+	// the per-item state — z zooms at ITEM granularity (collapse every section
+	// except the cursor's, and within it collapse every subtree off the cursor's
+	// ancestor path), mirroring the web outline's focusFold.
+	focusFoldPrev      map[string]bool
+	focusFoldPrevItems map[string]bool
 
 	// listExpanded holds, keyed by item raw source line, which items the user has
 	// wrapped in place (the `w` toggle in the outline view): rendered as a wrapped
@@ -314,6 +326,66 @@ func (m *model) setCollapsed(title string, c bool) {
 	m.collapsed[title] = c
 }
 
+// itemFoldKey is the stable identity of an item's fold state: its owning section
+// title plus its raw source line. Matches the web outline's `it:<section>:<raw>`.
+func itemFoldKey(section string, it *board.Item) string {
+	return section + "\x00" + it.Raw()
+}
+
+// hasChildItems reports whether it has at least one navigable (bullet) child —
+// the precondition for it being foldable (a leaf has nothing to hide).
+func hasChildItems(it *board.Item) bool { return firstChildItem(it) != nil }
+
+// itemFolded reports whether the item in the given section currently renders
+// collapsed (its subtree hidden, a "▸ N" tally shown).
+func (m *model) itemFolded(section string, it *board.Item) bool {
+	return m.collapsedItems[itemFoldKey(section, it)]
+}
+
+// setItemFolded records an item's fold state, keeping the map minimal (an
+// expanded item — the default — carries no key).
+func (m *model) setItemFolded(section string, it *board.Item, c bool) {
+	key := itemFoldKey(section, it)
+	if c {
+		if m.collapsedItems == nil {
+			m.collapsedItems = map[string]bool{}
+		}
+		m.collapsedItems[key] = true
+	} else {
+		delete(m.collapsedItems, key)
+	}
+}
+
+// currentSectionTitle returns the title of the section the cursor sits in, or "".
+func (m *model) currentSectionTitle() string {
+	if m.cursor < 0 || m.cursor >= len(m.positions) {
+		return ""
+	}
+	sec := m.positions[m.cursor].sec
+	if sec < 0 || sec >= len(m.board.Sections) {
+		return ""
+	}
+	return m.board.Sections[sec].Title
+}
+
+// toggleItemFold flips the cursor item's fold state and keeps the cursor on it
+// (a collapse pulls the selection up out of the now-hidden subtree).
+func (m *model) toggleItemFold(it *board.Item) {
+	sec := m.currentSectionTitle()
+	m.setItemFolded(sec, it, !m.itemFolded(sec, it))
+	m.rebuildPositions()
+	m.cursorToItem(it)
+}
+
+// copyBoolMap returns a shallow copy of a string->bool map (nil-safe).
+func copyBoolMap(src map[string]bool) map[string]bool {
+	dst := make(map[string]bool, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
 func (m *model) openBoard(path string) error {
 	b, err := board.Load(path)
 	if err != nil {
@@ -353,6 +425,11 @@ func (m *model) rebuildPositions() {
 			for _, it := range items {
 				if it.IsItem() {
 					m.positions = append(m.positions, navItem{sec: si, item: it, depth: depth})
+					// A collapsed item hides its whole subtree: its descendants
+					// build no nav stops (cursor navigation skips them).
+					if m.itemFolded(s.Title, it) {
+						continue
+					}
 				}
 				walk(it.Children, depth+1)
 			}
@@ -409,11 +486,14 @@ func (m *model) cursorToHeader(sec int) bool {
 	return false
 }
 
-// focusFoldToggle is the `z` key: zoom the outline onto the cursor's section
-// by collapsing every other section, or — when already zoomed — restore the
-// exact collapse state snapshotted before the zoom. The cursor stays on the
-// same item (or header) across both directions; if the restored state hides
-// the item, it falls back to its section header.
+// focusFoldToggle is the `z` key: org-mode-style zoom onto the cursor. It folds
+// the whole board down to the cursor's context — every OTHER section collapses,
+// and inside the cursor's section every subtree collapses except the ancestor
+// path to the cursor, so the cursor's item stays open exactly one level (its
+// direct children visible but themselves folded). A second z restores the exact
+// pre-zoom fold state (sections + items). The cursor stays on the same item (or
+// header); if the restored state hides it, it falls back to the section header.
+// Mirrors the web outline's focusFold (internal/web/assets/board.html).
 func (m *model) focusFoldToggle() {
 	it := m.currentItem()
 	sec := m.selSec
@@ -422,16 +502,43 @@ func (m *model) focusFoldToggle() {
 	}
 	if m.focusFoldPrev != nil { // restore the pre-zoom fold state
 		m.collapsed = m.focusFoldPrev
+		m.collapsedItems = m.focusFoldPrevItems
 		m.focusFoldPrev = nil
-	} else { // zoom: collapse every section except the cursor's
-		snap := make(map[string]bool, len(m.collapsed))
-		for k, v := range m.collapsed {
-			snap[k] = v
+		m.focusFoldPrevItems = nil
+		m.rebuildPositions()
+		if it == nil || !m.cursorToItem(it) {
+			m.cursorToHeader(sec)
 		}
-		m.focusFoldPrev = snap
-		for si, s := range m.board.Sections {
-			m.setCollapsed(s.Title, si != sec)
+		return
+	}
+	// Zoom: snapshot both fold layers, then rebuild them for the focus.
+	m.focusFoldPrev = copyBoolMap(m.collapsed)
+	m.focusFoldPrevItems = copyBoolMap(m.collapsedItems)
+	for si, s := range m.board.Sections {
+		m.setCollapsed(s.Title, si != sec)
+	}
+	// Rebuild the item folds for the focused section from scratch: collapse every
+	// foldable item that is neither the cursor item nor one of its ancestors. The
+	// cursor's DIRECT children are ordinary non-ancestors, so they render
+	// visible-but-folded — the "one level open" rule. (it == nil on a header ->
+	// every top-level subtree folds.)
+	m.collapsedItems = map[string]bool{}
+	if sec >= 0 && sec < len(m.board.Sections) {
+		s := m.board.Sections[sec]
+		ancestors := map[*board.Item]bool{}
+		for p := m.board.ParentOf(it); p != nil; p = m.board.ParentOf(p) {
+			ancestors[p] = true
 		}
+		var walk func(items []*board.Item)
+		walk = func(items []*board.Item) {
+			for _, c := range items {
+				if c.IsItem() && hasChildItems(c) && c != it && !ancestors[c] {
+					m.setItemFolded(s.Title, c, true)
+				}
+				walk(c.Children)
+			}
+		}
+		walk(s.Items)
 	}
 	m.rebuildPositions()
 	if it == nil || !m.cursorToItem(it) {
@@ -1043,17 +1150,21 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.saveWithRebase(op)
 		}
 	case "enter":
-		// Toggle the section under the cursor between collapsed and expanded.
-		// Only header stops toggle; on items enter stays a no-op.
+		// enter is the per-fold toggle. On a section header it collapses/expands
+		// the section; on an item WITH child items it folds/unfolds that item's
+		// subtree (a leaf is a no-op). Mirrors the web outline: enter is the only
+		// per-item fold key (h never folds an item).
 		if sec, ok := m.onHeader(); ok {
 			m.setCollapsed(sec.Title, !m.sectionCollapsed(sec.Title))
 			m.rebuildPositions()
+		} else if it := m.currentItem(); it != nil && hasChildItems(it) {
+			m.toggleItemFold(it)
 		}
 	case "l", "right":
 		// Single-press descend: on a collapsed header one keystroke expands the
 		// section AND lands the cursor on its first item — no second press to
-		// actually move. Expanded headers and items are a no-op (matching the
-		// web outline, where l never collapses).
+		// actually move. Expanded headers are a no-op (matching the web outline,
+		// where l never collapses).
 		if sec, ok := m.onHeader(); ok && m.sectionCollapsed(sec.Title) {
 			m.setCollapsed(sec.Title, false)
 			m.rebuildPositions()
@@ -1065,10 +1176,15 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if it := m.currentItem(); it != nil {
-			// On an item, l/right descends to its first child (the map's
-			// expand-or-descend convention; a leaf is a no-op). The outline has
-			// no per-item fold, so there is nothing to expand first.
-			if c := firstChildItem(it); c != nil {
+			// On an item, l/right expands a folded subtree in place; an already
+			// expanded item descends to its first child (a leaf is a no-op) — the
+			// map's expand-or-descend convention.
+			sec := m.currentSectionTitle()
+			if hasChildItems(it) && m.itemFolded(sec, it) {
+				m.setItemFolded(sec, it, false)
+				m.rebuildPositions()
+				m.cursorToItem(it)
+			} else if c := firstChildItem(it); c != nil {
 				m.cursorToItem(c)
 			}
 		}
@@ -1088,11 +1204,10 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "z":
-		// Focus-fold (zoom): collapse every section except the cursor's, so
-		// only the current context stays on screen; a second z restores the
-		// exact pre-zoom fold state. The TUI outline folds at section
-		// granularity only (no per-item folds), so the web outline's
-		// item-level part of the zoom has no equivalent here.
+		// Focus-fold (zoom): fold the board down to the cursor's context —
+		// collapse every other section, and within the cursor's section collapse
+		// every subtree off the cursor's ancestor path (its direct children stay
+		// visible but folded). A second z restores the exact pre-zoom fold state.
 		m.focusFoldToggle()
 	case "e":
 		// On a section header, e renames the heading (reusing the map view's

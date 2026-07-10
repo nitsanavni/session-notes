@@ -178,6 +178,32 @@ func TestSearchRevealsCollapsedSection(t *testing.T) {
 	}
 }
 
+// A search jump into a folded subtree un-folds the ancestor items so the match
+// becomes a nav stop and the cursor lands on it.
+func TestSearchRevealsThroughItemFold(t *testing.T) {
+	src := "## Threads\n- [ ] parent\n  - [ ] child\n    - claude: BURIED treasure\n"
+	m := newTestModel(src, 80, 40)
+	parent := m.board.Sections[0].Items[0]
+	m.setItemFolded("Threads", parent, true)
+	m.rebuildPositions()
+	for _, p := range m.positions {
+		if p.item != nil && p.item.DisplayText() == "claude: BURIED treasure" {
+			t.Fatal("precondition: buried match should be hidden while parent folded")
+		}
+	}
+	typeSearch(m, "BURIED")
+	if !m.itemFolded("Threads", parent) {
+		t.Error("typing revealed the fold; no-reveal violated")
+	}
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.itemFolded("Threads", parent) {
+		t.Error("jump should un-fold the ancestor item")
+	}
+	if it := m.currentItem(); it == nil || it.DisplayText() != "claude: BURIED treasure" {
+		t.Fatalf("cursor did not reveal+land on the folded match; on %v", it)
+	}
+}
+
 func TestSearchEscRestoresCursor(t *testing.T) {
 	m := newTestModel(searchBoard, 80, 40)
 	m.cursor = 1 // some deliberate starting stop

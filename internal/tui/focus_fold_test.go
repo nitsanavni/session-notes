@@ -1,6 +1,11 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/nitsanavni/session-notes/internal/board"
+)
 
 // z (focus-fold / zoom) in the TUI outline: collapse every section except the
 // cursor's; a second z restores the exact pre-zoom collapse state; the cursor
@@ -92,6 +97,139 @@ func TestUpdateDispatchesFoldAndZoomKeys(t *testing.T) {
 	m.Update(keyPress("z"))
 	if m.sectionCollapsed("Threads") || m.sectionCollapsed("Ideas") {
 		t.Fatal("second z via Update should restore the folds")
+	}
+}
+
+// --- item-level folding (enter / l / h on items) ---
+
+const foldSrc = "## Threads\n- [ ] parent\n  - [ ] child a\n    - claude: deep\n  - [ ] child b\n## Ideas\n- spark\n"
+
+// enter on an item with children folds its subtree: the descendants stop being
+// nav stops; a second enter unfolds them.
+func TestEnterFoldsItemSubtree(t *testing.T) {
+	m := newTestModel(foldSrc, 100, 40)
+	m.handleBoardKey(keyPress("j")) // onto "parent"
+	if it := m.currentItem(); it == nil || it.Text != "parent" {
+		t.Fatalf("expected cursor on parent, got %v", m.currentItem())
+	}
+	m.handleBoardKey(keyPress("enter")) // fold parent
+	if !m.itemFolded("Threads", m.currentItem()) {
+		t.Fatal("enter should fold the item's subtree")
+	}
+	// The children must no longer be nav stops.
+	for _, p := range m.positions {
+		if p.item != nil && (p.item.Text == "child a" || p.item.Text == "child b" || p.item.Text == "claude: deep") {
+			t.Fatalf("folded subtree item %q should not be a nav stop", p.item.Text)
+		}
+	}
+	// Cursor stays on parent.
+	if it := m.currentItem(); it == nil || it.Text != "parent" {
+		t.Fatalf("cursor should stay on parent after folding, got %v", m.currentItem())
+	}
+	m.handleBoardKey(keyPress("enter")) // unfold
+	if m.itemFolded("Threads", m.currentItem()) {
+		t.Fatal("second enter should unfold the subtree")
+	}
+	found := false
+	for _, p := range m.positions {
+		if p.item != nil && p.item.Text == "child a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("unfolding should restore the child nav stops")
+	}
+}
+
+// enter on a leaf item is a no-op (no children to fold).
+func TestEnterOnLeafItemIsNoOp(t *testing.T) {
+	m := newTestModel("## Plan\n- [ ] only\n", 100, 40)
+	m.handleBoardKey(keyPress("j"))
+	m.handleBoardKey(keyPress("enter"))
+	if m.itemFolded("Plan", m.currentItem()) {
+		t.Fatal("a leaf item cannot fold")
+	}
+}
+
+// l on a folded item unfolds it in place (keeping the cursor); a second l then
+// descends to the first child.
+func TestLUnfoldsThenDescends(t *testing.T) {
+	m := newTestModel(foldSrc, 100, 40)
+	m.handleBoardKey(keyPress("j"))     // parent
+	m.handleBoardKey(keyPress("enter")) // fold
+	m.handleBoardKey(keyPress("l"))     // unfold in place
+	if m.itemFolded("Threads", m.currentItem()) {
+		t.Fatal("l should unfold a folded item")
+	}
+	if it := m.currentItem(); it == nil || it.Text != "parent" {
+		t.Fatalf("l unfolding should keep the cursor on parent, got %v", m.currentItem())
+	}
+	m.handleBoardKey(keyPress("l")) // now descend
+	if it := m.currentItem(); it == nil || it.Text != "child a" {
+		t.Fatalf("second l should descend to the first child, got %v", m.currentItem())
+	}
+}
+
+// h never folds an item — it ascends to the parent even when the item has an
+// expanded subtree.
+func TestHNeverFoldsItem(t *testing.T) {
+	m := newTestModel(foldSrc, 100, 40)
+	m.handleBoardKey(keyPress("j")) // parent
+	m.handleBoardKey(keyPress("h")) // ascend to header, does not fold
+	if m.itemFolded("Threads", m.board.Sections[0].Items[0]) {
+		t.Fatal("h must not fold the item")
+	}
+	if _, ok := m.onHeader(); !ok {
+		t.Fatal("h on a top-level item should land on the section header")
+	}
+}
+
+// z item-level zoom: on an item, collapse other sections AND fold sibling
+// subtrees, keeping the cursor's direct children visible-but-folded; a second z
+// restores the exact prior item folds.
+func TestFocusFoldItemLevelZoomAndRestore(t *testing.T) {
+	src := "## Threads\n- [ ] parent\n  - [ ] child a\n    - claude: deep\n  - [ ] child b\n- [ ] sibling\n  - [ ] s1\n## Ideas\n- spark\n"
+	m := newTestModel(src, 100, 40)
+	m.handleBoardKey(keyPress("j")) // parent
+	m.handleBoardKey(keyPress("j")) // child a
+	if it := m.currentItem(); it == nil || it.Text != "child a" {
+		t.Fatalf("expected cursor on child a, got %v", m.currentItem())
+	}
+	m.handleBoardKey(keyPress("z")) // zoom onto child a
+	if !m.sectionCollapsed("Ideas") {
+		t.Fatal("zoom should collapse other sections")
+	}
+	// "sibling" is a non-ancestor subtree in the focused section -> folded.
+	var sibling *board.Item
+	for _, it := range m.board.Sections[0].Items {
+		if it.Text == "sibling" {
+			sibling = it
+		}
+	}
+	if sibling == nil || !m.itemFolded("Threads", sibling) {
+		t.Fatal("zoom should fold non-ancestor sibling subtrees")
+	}
+	// child a stays open (it's the cursor); its child "deep" is visible.
+	if it := m.currentItem(); it == nil || it.Text != "child a" || m.itemFolded("Threads", it) {
+		t.Fatalf("cursor's item must stay open, got %v", m.currentItem())
+	}
+	m.handleBoardKey(keyPress("z")) // restore
+	if m.focusFoldPrev != nil || m.focusFoldPrevItems != nil {
+		t.Fatal("snapshots should be cleared after restore")
+	}
+	if m.sectionCollapsed("Ideas") || m.itemFolded("Threads", sibling) {
+		t.Fatal("restore should undo the zoom's section + item folds")
+	}
+}
+
+// A folded item renders a "▸ N" hidden-descendant tally.
+func TestFoldedItemRendersHiddenCount(t *testing.T) {
+	m := newTestModel(foldSrc, 100, 40)
+	m.handleBoardKey(keyPress("j"))     // parent
+	m.handleBoardKey(keyPress("enter")) // fold (3 hidden: child a, deep, child b)
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "▸ 3") {
+		t.Fatalf("folded item should show a '▸ 3' tally, got:\n%s", out)
 	}
 }
 

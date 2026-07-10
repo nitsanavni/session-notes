@@ -210,11 +210,19 @@ func (m *model) viewBoard() string {
 				if selected {
 					cursorLine = len(lines)
 				}
+				// A folded item hides its subtree and shows a "▸ N" tally instead.
+				folded := hasChildItems(it) && m.itemFolded(s.Title, it)
+				hidden := 0
+				if folded {
+					hidden = countChildItems(it)
+				}
 				// A wrapped item spans several rows; the cursor line points at the
 				// first so scrolling keeps the whole block anchored.
-				lines = append(lines, m.renderItem(it, selected, depth)...)
+				lines = append(lines, m.renderItem(it, selected, depth, folded, hidden)...)
 				posIdx++
-				walk(it.Children, depth+1)
+				if !folded {
+					walk(it.Children, depth+1)
+				}
 				if selected {
 					// Exclusive end: past the item's rows + its whole subtree.
 					cursorEnd = len(lines)
@@ -377,6 +385,24 @@ func sectionItemCount(s *board.Section) int {
 	return count(s.Items)
 }
 
+// countChildItems counts the navigable items in it's whole subtree (replies
+// included) — the number of nav stops a folded item hides, shown in its "▸ N"
+// tally.
+func countChildItems(it *board.Item) int {
+	n := 0
+	var walk func(items []*board.Item)
+	walk = func(items []*board.Item) {
+		for _, c := range items {
+			if c.IsItem() {
+				n++
+			}
+			walk(c.Children)
+		}
+	}
+	walk(it.Children)
+	return n
+}
+
 // scrollReadout renders the "▲ 12–28/96 ▼" position indicator embedded, flush
 // right, in the sticky title row. The up chevron shows only when scrolled down
 // from the top; the down chevron only when rows remain below the window. Both
@@ -447,7 +473,7 @@ func truncTitle(s string, w int, tail bool) string {
 // including the selection highlight — is applied to every wrapped row, so the
 // cursor covers the whole block. Wrapping is display-only; the stored text and
 // file content are untouched.
-func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
+func (m *model) renderItem(it *board.Item, selected bool, depth int, folded bool, hiddenCount int) []string {
 	fresh := m.fresh[strings.TrimSpace(it.Raw())]
 	if selected && fresh {
 		delete(m.fresh, strings.TrimSpace(it.Raw())) // landing on a change settles it
@@ -507,7 +533,21 @@ func (m *model) renderItem(it *board.Item, selected bool, depth int) []string {
 	if matched {
 		hlQuery = query
 	}
-	return wrapRows(head, text, hang, m.width, style, m.listExpanded[it.Raw()], hlQuery)
+	// A folded item leaves room for a dim "▸ N" hidden-descendant tally appended
+	// after its text (the outline's analogue of the map's "[+N]" summary and the
+	// web outline's foldcount badge). The marker is rendered outside wrapRows so
+	// its own styling never interferes with the text's wrap/highlight.
+	marker := ""
+	markerW := 0
+	if folded {
+		marker = "  " + styleDim.Render(fmt.Sprintf("▸ %d", hiddenCount))
+		markerW = lipgloss.Width(marker)
+	}
+	rows := wrapRows(head, text, hang, m.width-markerW, style, m.listExpanded[it.Raw()], hlQuery)
+	if marker != "" && len(rows) > 0 {
+		rows[len(rows)-1] += marker
+	}
+	return rows
 }
 
 // wrapRows renders an item's text as display rows. By default the text is a
@@ -665,7 +705,7 @@ func (m *model) viewFooter() string {
 		}
 		return styleStatus.Render("search: ") + m.input.View() + "  " + styleDim.Render(scope+" tab scope")
 	}
-	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter collapse · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
+	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter fold · l expand/descend · h ascend · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -756,10 +796,10 @@ func (m *model) viewHelp() string {
 		{"p", "toggle pin (!pin) — re-injected into Claude's context on a cadence"},
 		{"d", "archive item (or whole section) into ## Archive"},
 		{"D", "hard-delete item (or whole section) from the file"},
-		{"enter", "collapse / expand the section under the cursor (on its header)"},
-		{"l", "on a section: expand + land on first item; on an item: descend to first child"},
-		{"h", "on an item: step out to the parent (top-level item -> section header)"},
-		{"z", "focus-fold (zoom): collapse every other section; z again restores the folds"},
+		{"enter", "fold toggle: on a section header collapse/expand it; on an item with children fold/unfold its subtree"},
+		{"l", "on a section: expand + land on first item; on an item: unfold if folded, else descend to first child"},
+		{"h", "on an item: step out to the parent (top-level item -> section header); never folds"},
+		{"z", "focus-fold (zoom): collapse everything except the path to the cursor (its children shown, folded); z again restores"},
 		{"w", "wrap the item at the cursor (toggle single-line <-> full multi-line)"},
 		{"e", "edit item inline (the bullet line only); on a section header, rename it"},
 		{"T", "edit the board title (frontmatter title:; empty clears it)"},
