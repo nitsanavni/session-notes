@@ -64,3 +64,52 @@ func TestFocusFoldOnHeaderKeepsHeaderSelected(t *testing.T) {
 			m.sectionCollapsed("Plan"), m.sectionCollapsed("Threads"))
 	}
 }
+
+// Regression guards for the FULL key dispatch path (Update -> handleKey ->
+// handleBoardKey), not handleBoardKey directly: a mode-gating change (e.g. a
+// sticky-search consume, an input-mode misclassification) could swallow the
+// fold keys while every handler-level test stays green. Prompted by a live
+// report of "collapse/expand and z do nothing" that turned out to be a stale
+// binary — this pins the dispatch so a real recurrence is caught here.
+
+func TestUpdateDispatchesFoldAndZoomKeys(t *testing.T) {
+	m := newTestModel(zoomSrc, 100, 40)
+	// Cursor on the Plan header. enter through Update() must collapse.
+	m.Update(keyPress("enter"))
+	if !m.sectionCollapsed("Plan") {
+		t.Fatal("enter via Update should collapse the section")
+	}
+	m.Update(keyPress("enter"))
+	if m.sectionCollapsed("Plan") {
+		t.Fatal("second enter via Update should expand it again")
+	}
+	// z through Update() must zoom and toggle back.
+	m.Update(keyPress("z"))
+	if !m.sectionCollapsed("Threads") || !m.sectionCollapsed("Ideas") || m.sectionCollapsed("Plan") {
+		t.Fatalf("z via Update should zoom onto Plan: Plan=%v Threads=%v Ideas=%v",
+			m.sectionCollapsed("Plan"), m.sectionCollapsed("Threads"), m.sectionCollapsed("Ideas"))
+	}
+	m.Update(keyPress("z"))
+	if m.sectionCollapsed("Threads") || m.sectionCollapsed("Ideas") {
+		t.Fatal("second z via Update should restore the folds")
+	}
+}
+
+func TestUpdateDispatchesFoldKeysDuringStickySearch(t *testing.T) {
+	m := newTestModel(zoomSrc, 100, 40)
+	// Simulate a confirmed search (persistent results mode): fold keys must
+	// still reach the board handler — only Esc consumes.
+	m.searchActive = true
+	m.searchQuery = "talk"
+	m.Update(keyPress("enter"))
+	if !m.sectionCollapsed("Plan") {
+		t.Fatal("enter must fold the section while search results are sticky")
+	}
+	m.Update(keyPress("z"))
+	if !m.sectionCollapsed("Threads") {
+		t.Fatal("z must zoom while search results are sticky")
+	}
+	if !m.searchActive {
+		t.Fatal("fold keys must not drop the sticky search")
+	}
+}
