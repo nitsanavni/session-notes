@@ -28,6 +28,10 @@ func main() {
 
 	// Upgrade subcommand: fetch and swap in the latest release.
 	if len(args) >= 1 && args[0] == "upgrade" {
+		if len(args) >= 2 && (args[1] == "-h" || args[1] == "--help") {
+			fmt.Println("usage: session-notes upgrade")
+			os.Exit(0)
+		}
 		os.Exit(runUpgrade())
 	}
 
@@ -58,6 +62,12 @@ func main() {
 	// Docs subcommand: print an on-demand protocol/recipe topic. See docs.go.
 	if len(args) >= 1 && args[0] == "docs" {
 		os.Exit(runDocs(args[1:]))
+	}
+
+	// Watch subcommand: block and emit the board's live edits as a diff, the
+	// first-class replacement for a hand-rolled file-watcher loop. See watch.go.
+	if len(args) >= 1 && args[0] == "watch" {
+		os.Exit(runWatch(args[1:]))
 	}
 
 	// Serve subcommand: the web UI for non-tmux use. See serve.go.
@@ -220,6 +230,9 @@ func runFeedback(args []string) int {
 	genTest := false
 	for _, a := range args {
 		switch a {
+		case "-h", "--help":
+			fmt.Println("usage: session-notes feedback <board.md> [--json | --gen-test]")
+			return 0
 		case "--json":
 			jsonOut = true
 		case "--gen-test":
@@ -292,6 +305,12 @@ Usage:
                                       Non-loopback binds need --token <t> (or
                                       $SESSION_NOTES_TOKEN; Bearer/?token=/
                                       cookie) or an explicit --insecure
+  session-notes watch …               block and print the board's live edits as
+                                      a unified item diff (--board <path> or
+                                      --session <id>; --once exits after the
+                                      first change; --snapshot <p> shares the
+                                      edit --refresh-snapshot file; --interval
+                                      <dur> default 2s; watches .notes/ too)
   session-notes docs <topic>          print a protocol/recipe topic
                                       (protocol|monitor|conflicts|cli|blurb); no
                                       topic lists them

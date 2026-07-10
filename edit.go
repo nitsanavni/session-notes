@@ -29,6 +29,9 @@ func runEdit(args []string) int {
 			return "", false
 		}
 		switch a {
+		case "-h", "--help":
+			fmt.Println("usage: session-notes edit <add|reply|fork|status|log|title|replace|undo|redo> [--board <path> | --session <id>] [--refresh-snapshot <path>] [--as <author>] args…")
+			return 0
 		case "--board":
 			if v, ok := takeVal(); ok {
 				boardPath = v

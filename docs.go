@@ -61,10 +61,30 @@ Preserve any content you don't understand; edit surgically.`,
 
 	"monitor": `Monitor — react to the user's live board edits
 
-The user edits the board in a TUI while you work. Watch the file with the Monitor
-tool so you react at edit time (a dropped "!!" question, a reprioritized thread),
-not just at the next prompt boundary. Have the watch emit the diff itself so the
-event carries the change and you needn't re-read the file:
+The user edits the board in a TUI while you work. Watch the file so you react at
+edit time (a dropped "!!" question, a reprioritized thread), not just at the next
+prompt boundary. Use the first-class watch command instead of a hand-rolled loop
+— it takes the board lock around its compare-and-snapshot cycle, emits the change
+as a unified item diff, and also watches the board's .notes/ sibling:
+
+  session-notes watch --board BOARD --snapshot snap --once
+
+Run that in a background task / Monitor tool. It blocks until the user changes the
+board, prints the changed items (removed "-", added "+") to stdout, then exits 0.
+React to the diff, then run it again to re-arm. It polls (default every 2s;
+--interval to change); pass --no-notes to skip the .notes/ dir. Omit --once to
+stream every change from one long-running process instead.
+
+Self-edit suppression: to keep the watch from firing on YOUR OWN edits, pass the
+SAME snapshot path to every "session-notes edit" call as "--refresh-snapshot snap".
+It copies the new content over the snapshot INSIDE THE SAME LOCK, right after the
+atomic replace, so the watcher (which reads board+snapshot under that same lock)
+only ever emits the user's edits, never yours.
+
+  session-notes edit reply "frobnicator" "claude: rewired it" \
+    --board BOARD --refresh-snapshot snap
+
+Appendix — the old manual loop (equivalent, if you can't use the binary):
 
   cp BOARD snap
   while true; do
@@ -72,16 +92,7 @@ event carries the change and you needn't re-read the file:
     cmp -s BOARD snap && continue
     diff -U0 snap BOARD | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) '
     cp BOARD snap
-  done
-
-Self-edit suppression: to keep the watch from firing on YOUR OWN edits, pass
-"--refresh-snapshot snap" to every "session-notes edit" call. It copies the new
-content over the snapshot INSIDE THE SAME LOCK, right after the atomic replace, so
-a watcher that also takes the lock around its compare-and-snapshot cycle only ever
-emits the user's edits, never yours.
-
-  session-notes edit reply "frobnicator" "claude: rewired it" \
-    --board BOARD --refresh-snapshot snap`,
+  done`,
 
 	"conflicts": `Conflicts — reconciling merge markers under the lock
 
@@ -166,6 +177,11 @@ Session status sidecar (not a write you make):
 // list the available topics when the topic is missing or unknown.
 func runDocs(args []string) int {
 	if len(args) >= 1 {
+		if args[0] == "-h" || args[0] == "--help" {
+			fmt.Println("usage: session-notes docs <topic>")
+			fmt.Println("topics: " + strings.Join(docTopicNames(), " "))
+			return 0
+		}
 		// blurb is dynamic: it is the session-start injection text with the board
 		// path substituted. docs has no session context, so use a placeholder path
 		// to keep the injected text and the on-demand doc a single source.

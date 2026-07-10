@@ -20,6 +20,9 @@ func runHistory(args []string) int {
 	limit := 20
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "-h", "--help":
+			fmt.Println("usage: session-notes history [--board <path> | --session <id>] [-n N]")
+			return 0
 		case "--board":
 			if i+1 >= len(args) {
 				return editErr("--board needs a path")

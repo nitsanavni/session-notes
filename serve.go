@@ -27,6 +27,9 @@ func runServe(args []string) int {
 	var boardPath string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "-h", "--help":
+			fmt.Println("usage: session-notes serve [--addr host:port] [--board <path>] [--token <t>] [--insecure]")
+			return 0
 		case "--addr":
 			if i+1 >= len(args) {
 				return serveErr("--addr needs host:port")

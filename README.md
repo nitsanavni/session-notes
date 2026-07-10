@@ -542,12 +542,25 @@ global, see Install):
 All these hooks are designed to be fast and never break your session: on any
 internal error they exit `0` silently rather than failing the hook.
 
-Beyond the hooks, Claude is expected to use the `Monitor` tool during the session
-to react promptly when you edit the board live (e.g. you drop a `!!` question or
-reprioritize a thread) — not just at the next prompt boundary. To avoid the watch
-echoing Claude's own edits back at it, the recommended setup has Claude refresh
-the watch's snapshot inside the same locked write it uses to edit the board, with
-the watcher diffing under the same lock — then only your edits emit events.
+Beyond the hooks, Claude is expected to watch the board during the session to
+react promptly when you edit it live (e.g. you drop a `!!` question or
+reprioritize a thread) — not just at the next prompt boundary. The first-class
+`session-notes watch` command replaces the hand-rolled `cp`/`diff` loop agents
+used to write (and get wrong):
+
+```sh
+session-notes watch --board ~/.claude/boards/<id>.md --snapshot /tmp/snap --once
+```
+
+Run inside a background / `Monitor` task, it blocks until you change the board,
+prints the changed items as a unified diff (removed `-`, added `+`), then exits
+`0` so the agent reacts and re-arms. It polls the file (default every 2s,
+`--interval` to change) plus the board's `.notes/` sibling dir (`--no-notes` to
+skip), and compares under the board lock. Omit `--once` to stream every change
+from one long-running process. To avoid the watch echoing Claude's own edits back
+at it, Claude refreshes the watch's snapshot inside the same locked write it uses
+to edit the board (pass the same path to `edit --refresh-snapshot`) — then only
+your edits emit events.
 
 ### Claude write CLI
 
@@ -613,7 +626,7 @@ from actual behavior). Topics:
 | Topic | Covers |
 | --- | --- |
 | `docs protocol` | Board conventions: sections, statuses, replies/threading, `[[links]]` (both forms), `!!`/`!pin`. |
-| `docs monitor` | The `Monitor` watcher recipe with self-edit suppression via `edit --refresh-snapshot`. |
+| `docs monitor` | The `session-notes watch` recipe with self-edit suppression via `edit --refresh-snapshot` (plus the old manual loop as an appendix). |
 | `docs conflicts` | Reconciling `<<<<<<<`/`=======`/`>>>>>>>` markers under the lock with `edit replace`. |
 | `docs cli` | The `session-notes edit` subcommand reference. |
 | `docs blurb` | The session-start blurb itself (with a placeholder board path) — the single source shared with the `session-start` hook injection. |

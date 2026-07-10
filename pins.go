@@ -27,6 +27,9 @@ func runPins(args []string) int {
 	due := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "-h", "--help":
+			fmt.Println("usage: session-notes pins [--due] --board <path> | --session <id>")
+			return 0
 		case "--board":
 			if i+1 < len(args) {
 				i++
