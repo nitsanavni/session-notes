@@ -249,6 +249,29 @@ run({
     t.assert((await t.sn2()).map.nodes.includes(replyKey), 'reply node visible after one press');
   },
 
+  'map: z focus-folds to the ancestor path, second z restores': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('j'); // auth refactor (owns a reply child)
+    await t.key('m'); // map seeds focus from the outline cursor
+    const focus = 'it:Threads:- [>] auth refactor — extracting middleware';
+    const reply = 'it:Threads:  - claude: extracted, tests green';
+    const planItem = 'it:Plan:- [x] extract middleware';
+    await t.page.waitForFunction(k => window.__sn.map.in && window.__sn.map.focus === k, focus, { timeout: 3000 });
+    let m = (await t.sn2()).map;
+    t.assert(m.nodes.includes(planItem), 'an unrelated branch is visible before the zoom');
+    await t.key('z'); // focus-fold onto the auth-refactor node
+    m = (await t.sn2()).map;
+    t.assert(m.focusFolded, 'map reports focus-folded after z');
+    t.assert(m.nodes.includes('sec:Threads') && m.nodes.includes(focus), 'the ancestor path stays visible');
+    t.assert(!m.nodes.includes(planItem), 'unrelated branches collapse under the zoom');
+    t.assert(m.nodes.includes(reply), "the focus node's direct child stays visible (one level open)");
+    await t.key('z'); // toggle back
+    m = (await t.sn2()).map;
+    t.assert(!m.focusFolded, 'second z clears the zoom');
+    t.assert(m.nodes.includes(planItem), 'the prior fold state is restored');
+  },
+
   'undo and redo walk this browser\'s edits': async t => {
     await t.open();
     await t.key('2'); // Plan

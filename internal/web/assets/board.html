@@ -414,9 +414,9 @@ body.mapmode #mapwrap { display: block; }
       section and lands on the child you last came from (else the first). On an item: enter toggles its
       subtree fold; l unfolds then descends to the child you last came from (else the first); h always
       steps out to the parent (top-level → section header) and never folds</td></tr>
-    <tr><td>z</td><td>focus-fold (zoom): collapse everything except the path to the cursor; the
-      cursor's item stays open one level (children visible, folded). z again restores the previous
-      fold state</td></tr>
+    <tr><td>z</td><td>focus-fold (zoom), in the outline and the map: collapse everything except the path
+      to the cursor; the cursor's item stays open one level (children visible, folded). z again restores
+      the previous fold state</td></tr>
     <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
@@ -1631,6 +1631,44 @@ function reveal(node) {
   }
 }
 
+// ---- map focus-fold (z): the mind-map counterpart of the outline's z zoom ----
+// z collapses every subtree except the ancestor path from the layout root down
+// to the focused node; the focus node's direct children stay visible but each
+// collapsed (one level open), exactly like the outline. A second z restores the
+// exact fold snapshot taken before the zoom. The focus and root are untouched,
+// and the layout re-centers on the focus.
+let mapFoldPrev = null; // { folds } snapshot while zoomed
+function mapFocusFold() {
+  if (mapFoldPrev) { // toggle back: restore the pre-zoom fold state
+    mapState.folds = mapFoldPrev.folds;
+    mapFoldPrev = null;
+    mapRecenter = true;
+    renderMap(cur);
+    return;
+  }
+  const n = mapFocused();
+  if (!n) return;
+  mapFoldPrev = { folds: { ...mapState.folds } };
+  // Ancestor path: the focus up to (and including) the layout root.
+  const anc = new Set();
+  let rootNode = n;
+  for (let p = n; p; p = p.parent) { anc.add(p); rootNode = p; if (p.key === mapState.root) break; }
+  // Rebuild folds from the layout root down over the FULL tree (node.children
+  // holds every child regardless of fold): reveal the ancestor path, collapse
+  // everything else. The focus's own children are non-ancestors, so they render
+  // visible-but-collapsed — the "one level open" rule.
+  const folds = {};
+  const walk = node => {
+    const kids = node.children || [];
+    if (kids.length) folds[node.key] = anc.has(node) ? 'all' : 'closed';
+    kids.forEach(walk);
+  };
+  walk(rootNode);
+  mapState.folds = folds;
+  mapRecenter = true;
+  renderMap(cur);
+}
+
 const findNode = (root, key) => {
   if (root.key === key) return root;
   for (const c of root.children) { const f = findNode(c, key); if (f) return f; }
@@ -1950,7 +1988,7 @@ function renderMap(b) {
   document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (b steps out)';
   const logHidden = !mapState.showLog && (b.sections || []).some(s => s.title === 'Log');
   document.getElementById('mapfoot').textContent =
-    `${focus.text}  ·  hjkl move · enter fold · w expand · f focus · b out · e edit · a add · A sibling · space status · p pin · / search · M log · m/q back` +
+    `${focus.text}  ·  hjkl move · enter fold · z zoom · w expand · f focus · b out · e edit · a add · A sibling · space status · p pin · / search · M log · m/q back` +
     (logHidden ? '  ·  Log hidden · M' : '');
   // On first entry / after f/b, center the focused node in the viewport (the
   // map opens centered, not with the node pinned to an edge); otherwise scroll
@@ -2218,7 +2256,7 @@ function handleMapKey(e) {
   // highlights alive (persistent results mode).
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
-    'Enter', 'f', 'b', 'e', 'a', 'A', 'w', ' ', '!', 'p', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
+    'Enter', 'f', 'b', 'e', 'a', 'A', 'w', 'z', ' ', '!', 'p', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
     '/', 'n', 'N']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   const refocus = key => { mapState.focus = key; renderMap(cur); };
@@ -2309,6 +2347,7 @@ function handleMapKey(e) {
       else if (n && n.kind === 'section' && confirm(`Hard-delete section "${n.title}" and everything in it?`)) post({ op: 'delete-section', section: n.title });
       break;
     case 'o': if (n && n.kind === 'item') act.open(n.section, n.it); break;
+    case 'z': mapFocusFold(); break;
     case 'M': mapState.showLog = !mapState.showLog; renderMap(cur); break;
     case 'm': case 'q': exitMap(); break;
     case 'u': post({ op: 'undo' }); break;
@@ -3052,7 +3091,7 @@ window.__sn = {
   get cursorKey() { return cursorKey; },
   get inputsOpen() { return inputsOpen; },
   get board() { return cur; },
-  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded },
+  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded }, folds: { ...mapState.folds }, focusFolded: !!mapFoldPrev,
     pending: mapState.pending ? { kind: mapState.pending.kind, parentKey: mapState.pending.parentKey || null, targetKey: mapState.pending.targetKey || null, text: mapState.pending.text } : null }; },
   get listExpanded() { return [...listExpanded]; },
   get collapsedSecs() { return { ...collapsedSecs }; },
