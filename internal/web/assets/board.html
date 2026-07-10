@@ -194,6 +194,7 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
   color: var(--fg); background: var(--input); border: 1px solid var(--border);
   border-radius: 6px; padding: .5rem .6rem; white-space: pre; overflow-x: auto;
 }
+#notetext { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }
 .modal button {
   background: none; border: 1px solid var(--border); color: var(--fg); cursor: pointer;
   font: inherit; font-size: .85em; padding: .15rem .6rem; border-radius: 6px;
@@ -2563,12 +2564,17 @@ function confirmSearch(q) {
     if (mapState.in) renderMap(cur); else renderOutline(cur);
     return;
   }
-  searchActive = true;
-  searchHL = searchQuery; // keep matches highlighted while n/N steps
   searchLastTerm = searchQuery; // remember for `/` recall + n/N re-activation
-  // Jump to the selected panel row (revealing it) and stay in results mode.
+  // Select: jump to the highlighted panel row (revealing it), record the landing
+  // position for n/N recall, then CLOSE search — picking from the dropdown is a
+  // commit, back to normal navigation. Highlights clear; the tally stays visible.
+  searchActive = true; searchHL = searchQuery; // briefly, so jumpToPanel highlights
   jumpToPanel(searchPanelIdx);
   setPanelStatus();
+  searchLastIdx = searchIdx;
+  searchActive = false; searchQuery = ''; searchHL = '';
+  searchResults = []; closeSearchPanel(); clearTempUnwrap();
+  if (mapState.in) renderMap(cur); else renderOutline(cur); // clear-on-select
 }
 
 function cancelSearch() {
