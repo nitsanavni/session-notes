@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
+	"github.com/nitsanavni/session-notes/internal/keymap"
 )
 
 //go:embed assets/index.html assets/board.html
@@ -136,6 +137,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/board/{id}/note/{name}", s.handleNotePut)
 	mux.HandleFunc("GET /api/board/{id}/raw", s.handleRaw)
 	mux.HandleFunc("GET /api/board/{id}/history", s.handleHistory)
+	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
 	return mux
 }
 
@@ -747,6 +749,13 @@ func fileStamp(path string) string {
 		return ""
 	}
 	return fmt.Sprintf("%d-%d", fi.ModTime().UnixNano(), fi.Size())
+}
+
+// handleKeymap serves the keybindings help table from the single source of
+// truth (internal/keymap); the web help overlay builds its DOM from this so the
+// keymap is never hand-copied into board.html.
+func (s *Server) handleKeymap(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, keymap.Web())
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

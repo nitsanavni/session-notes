@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nitsanavni/session-notes/internal/board"
+	"github.com/nitsanavni/session-notes/internal/keymap"
 )
 
 // Theme-adaptive accents: several of the original 256-color picks were tuned on
@@ -727,8 +728,7 @@ func (m *model) viewFooter() string {
 		}
 		return styleStatus.Render("search: ") + m.input.View() + "  " + tail
 	}
-	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter fold · l expand/descend · h ascend · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · V recents · r reload · B boards · ? help · q quit"
-	line := styleHelpBar.Render(hints)
+	line := styleHelpBar.Render(keymap.FooterHints(true))
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
 	}
@@ -802,59 +802,17 @@ func activityLabel(kind string) string {
 
 func (m *model) viewHelp() string {
 	styleKey := lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
-	keys := [][2]string{
-		{"j / k, up / down", "move cursor"},
-		{"tab / shift-tab", "next / previous section"},
-		{"1 - 9", "jump to the Nth section"},
-		{"/", "incremental search (both views): a ranked results panel opens as you type (the board doesn't move); ↑/↓ (ctrl+p/ctrl+n) pick a row, enter jumps to it and closes search; n/N step matches (document order), resuming the last term after Esc; tab toggles scope (working set vs Archive+Log)"},
-		{"a", "add item to current section"},
-		{"A", "add sections (multi-select overlay)"},
-		{"R", "reply in thread (sibling on a reply; starts the thread on an item)"},
-		{"F", "fork a sub-thread under the message at the cursor"},
-		{"space", "cycle status [ ] -> [>] -> [x]"},
-		{"b", "toggle blocked [?]"},
-		{"g / G", "jump to first / last visible stop"},
-		{"!", "toggle urgent (!!)"},
-		{"p", "toggle pin (!pin) — re-injected into Claude's context on a cadence"},
-		{"d", "archive item (or whole section) into ## Archive"},
-		{"D", "hard-delete item (or whole section) from the file"},
-		{"enter", "fold toggle: on a section header collapse/expand it; on an item with children fold/unfold its subtree"},
-		{"l", "on a section: expand + land on first item; on an item: unfold if folded, else descend to first child"},
-		{"h", "on an item: step out to the parent (top-level item -> section header); never folds"},
-		{"z", "focus-fold (zoom): collapse everything except the path to the cursor (its children shown, folded); z again restores"},
-		{"w", "wrap the item at the cursor (toggle single-line <-> full multi-line)"},
-		{"e", "edit item inline (the bullet line only); on a section header, rename it"},
-		{"T", "edit the board title (frontmatter title:; empty clears it)"},
-		{"E", "open board in $EDITOR"},
-		{"o", "open item's [[linked note]] in $EDITOR (chooser if several)"},
-		{"y", "copy board file path to clipboard (shown in status)"},
-		{"m", "toggle the mindmap view (hjkl move · enter fold · a/e/space/D edit)"},
-		{"e (map)", "edit item · rename section · edit board title (on the center)"},
-		{"a (map)", "add child/sibling · add a section (on the center)"},
-		{"d (map)", "archive the focused item or whole section into ## Archive"},
-		{"f / esc (map)", "focus into subtree (breadcrumbs) / focus out one level"},
-		{"b (map)", "toggle blocked [?] on the focused item (same as the outline)"},
-		{"o (map)", "open the focused item's [[linked note]] (chooser if several)"},
-		{"enter (map)", "cycle fold: collapsed -> default -> replies-shown -> collapsed"},
-		{"z (map)", "focus-fold (zoom): collapse everything except the path to the focus (its children shown, folded); z again restores"},
-		{"! (map)", "toggle urgent (!!) on the focused item"},
-		{"D (map)", "hard-delete the focused item or whole section"},
-		{"M (map)", "toggle the Log column (hidden by default in the map)"},
-		{"S (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl (dev)"},
-		{"L", "quick log entry"},
-		{"H", "history: shared edit journal (who changed what), read-only"},
-		{"V", "recent changes: out-of-band edits newest-first; enter jumps to the change"},
-		{"u", "undo last change (shared journal timeline)"},
-		{"ctrl+r", "redo"},
-		{"r", "reload from disk"},
-		{"B", "back to board picker"},
-		{"q / esc", "quit"},
-		{"?", "close help"},
-	}
+	// Key list generated from the single-source-of-truth table (internal/keymap).
+	keys := keymap.TUIRows()
 	var lines []string
 	lines = append(lines, styleTitle.Render("session-notes — keys"), "")
 	for _, k := range keys {
-		lines = append(lines, fmt.Sprintf("  %s%s", styleKey.Render(fmt.Sprintf("%-20s", k[0])), k[1]))
+		if k[0] == "" {
+			// Section separator (e.g. "Map view").
+			lines = append(lines, "", styleSection.Render(k[1]), "")
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  %s%s", styleKey.Render(fmt.Sprintf("%-24s", k[0])), k[1]))
 	}
 	lines = append(lines, "", styleSection.Render("Statuses")+": "+
 		styleMarker.Render("[ ]")+" open · "+styleInProg.Render("[>]")+" in progress · "+

@@ -445,42 +445,49 @@ tenants of the same network.
 
 ## Keybindings (TUI)
 
-| Key           | Action                                  |
-|---------------|------------------------------------------|
-| `j` / `k`     | move cursor down / up                    |
-| `tab` / `shift-tab` | next / previous section             |
-| `g` / `G`     | jump to first / last visible stop         |
-| `1` … `9`     | jump to the Nth section                   |
-| `/`           | incremental search: a ranked fuzzy results panel opens as you type (the board doesn't move); `↑`/`↓` pick a row, `enter` jumps to it; `n`/`N` step matches (document order, resuming the last term); `tab` toggles scope (working set ↔ Archive+Log); matches highlighted while live |
-| `a`           | add item to current section              |
-| `A`           | add sections (multi-select overlay)      |
-| `R`           | reply in thread (flat sibling on a reply) |
-| `F`           | fork a sub-thread under the cursor        |
-| `space`       | cycle status `[ ] → [>] → [x]`           |
-| `b`           | toggle blocked `[?]`                     |
-| `!`           | toggle urgent (`!!`)                     |
-| `p`           | toggle pin (`!pin`) — re-injected into Claude's context on a cadence |
-| `e`           | edit item inline (the bullet line only)  |
-| `T`           | edit the board title (frontmatter `title:`; empty clears it) |
-| `w`           | wrap the item at the cursor (single truncated line ↔ full multi-line block, session-only) |
-| `H`           | history view (shared journal, read-only) |
-| `V`           | recent-changes feed — out-of-band edits newest-first; `enter` jumps to the change |
-| `E`           | open board in `$EDITOR` (suspends TUI)   |
-| `o`           | open item's first `[[link]]` in `$EDITOR` (suspends TUI) |
-| `y`           | copy board file path to clipboard (shown in status) |
-| `L`           | quick log entry                          |
-| `d`           | archive item / section (into `## Archive`)|
-| `D`           | hard-delete item / section from the file |
-| `enter`       | fold toggle: on a section header collapse/expand it; on an item with children fold/unfold its subtree |
-| `l` / `h`     | `l` expands a section (landing on its first/remembered child) or descends into an item; `h` collapses a section or steps out to the parent |
-| `z`           | focus-fold (zoom): collapse everything except the path to the cursor; `z` again restores |
-| `u`           | undo last change (shared journal timeline) |
-| `ctrl+r`      | redo                                     |
-| `r`           | reload from disk                         |
-| `B`           | back to the board picker                 |
-| `m`           | toggle the mindmap view                  |
-| `q` / `esc`   | quit                                     |
-| `?`           | help                                     |
+<!-- BEGIN GENERATED KEYS: edit internal/keymap, run go generate -->
+
+| Key | Action |
+|-----|--------|
+| `j` / `k`, `↓` / `↑` | move cursor |
+| `tab` / `shift-tab` | next / previous section |
+| `1 … 9` | jump to the Nth section |
+| `g` / `G` | jump to first / last visible stop |
+| `/` | incremental search: a ranked fuzzy results panel opens as you type (the board doesn't move); ↑/↓ (ctrl+p/ctrl+n) pick a row, enter jumps to it and closes search; matches highlighted while live |
+| `n` / `N` | next / previous match (document order, wrapping); with no active search, re-runs the last term from where you left off |
+| `tab (in search)` | toggle search scope: working set (no Archive/Log) ↔ everything |
+| `a` | add item to the current section |
+| `A` | add sections (multi-select overlay) |
+| `R` | reply in thread (sibling on a reply; starts the thread on an item) |
+| `F` | fork a sub-thread under the message at the cursor |
+| `space` | cycle status [ ] → [>] → [x] |
+| `b` | toggle blocked [?] |
+| `!` | toggle urgent (!!) |
+| `p` | toggle pin (!pin) — re-injected into Claude's context on a cadence |
+| `d` | archive item (or whole section) into ## Archive |
+| `D` | hard-delete item (or whole section) from the file |
+| `enter` | fold toggle: on a section header collapse/expand it; on an item with children fold/unfold its subtree |
+| `l` / `→` | on a section: expand and land on the first (or last-visited) item; on an item: unfold if folded, else descend to the first child |
+| `h` / `←` | on a section: collapse it; on an item: step out to the parent (top-level item → section header) — never folds |
+| `z` | focus-fold (zoom): collapse everything except the path to the cursor; z again restores |
+| `w` | wrap the item at the cursor (toggle single truncated line ↔ full multi-line block, session-only) |
+| `e` | edit item inline (the bullet line only); on a section header, rename it |
+| `E` | open the whole board in $EDITOR / raw markdown (3-way merged on save) |
+| `T` | edit the board title (frontmatter title:; empty clears it) |
+| `o` | open the item's [[linked note]] in $EDITOR (chooser if it has several) |
+| `L` | quick log entry |
+| `y` | copy the board file path to the clipboard (shown in status) |
+| `m` | toggle the mindmap view |
+| `u` | undo last change (shared journal timeline — CLI edits too) |
+| `ctrl+r` | redo |
+| `H` | history: shared edit journal (who changed what), read-only |
+| `V` | recent changes: out-of-band edits newest-first; enter jumps to the change |
+| `r` | reload from disk (TUI only; the web view live-updates) |
+| `B` | back to the board picker |
+| `?` | toggle this help |
+| `q` / `esc` | quit (esc; ctrl+c always quits) |
+
+<!-- END GENERATED KEYS -->
 
 Section headers are cursor stops too: pressing `d` on a header archives the whole
 section (its items move to `## Archive` and the empty section is removed); `D`

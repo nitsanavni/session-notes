@@ -235,6 +235,7 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 #helpmodal table { border-collapse: collapse; font-size: .9em; }
 #helpmodal td { padding: .1rem .7rem .1rem 0; vertical-align: top; }
 #helpmodal td:first-child { color: var(--accent); white-space: nowrap; }
+#helpmodal .helpsec { font-weight: bold; margin: .8rem 0 .2rem; color: var(--dim); }
 footer {
   position: fixed; bottom: 0; left: 0; right: 0; text-align: center;
   padding: .25rem; color: var(--dim); font-size: .78em; background: var(--bg);
@@ -402,50 +403,7 @@ body.mapmode #mapwrap { display: block; }
 
 <div class="modal" id="helpmodal"><div class="panel">
   <div class="bar"><b>keys</b><span class="dim">j/k/arrows scroll · esc / ? close</span><button id="helpclose">close</button></div>
-  <div id="helpbody" tabindex="0"><table>
-    <tr><td>j / k (or ↓ / ↑)</td><td>move cursor down / up</td></tr>
-    <tr><td>tab / shift-tab</td><td>next / previous section</td></tr>
-    <tr><td>1 … 9</td><td>jump to the Nth section</td></tr>
-    <tr><td>g / G</td><td>first / last stop</td></tr>
-    <tr><td>a</td><td>add to the cursor's section</td></tr>
-    <tr><td>A</td><td>add a section</td></tr>
-    <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
-    <tr><td>enter / l / h</td><td>fold at the cursor. On a section: h collapses; l expands a collapsed
-      section and lands on the child you last came from (else the first). On an item: enter toggles its
-      subtree fold; l unfolds then descends to the child you last came from (else the first); h always
-      steps out to the parent (top-level → section header) and never folds</td></tr>
-    <tr><td>z</td><td>focus-fold (zoom), in the outline and the map: collapse everything except the path
-      to the cursor; the cursor's item stays open one level (children visible, folded). z again restores
-      the previous fold state</td></tr>
-    <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
-    <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
-    <tr><td>b</td><td>toggle blocked [?]</td></tr>
-    <tr><td>!</td><td>toggle urgent</td></tr>
-    <tr><td>p</td><td>toggle pin</td></tr>
-    <tr><td>e</td><td>edit item · rename section (on a heading)</td></tr>
-    <tr><td>E</td><td>edit the whole board markdown (3-way merged on save)</td></tr>
-    <tr><td>T</td><td>edit the board title (frontmatter title)</td></tr>
-    <tr><td>B</td><td>back to the board picker</td></tr>
-    <tr><td>o</td><td>open the item's [[link]] — chooser when it has several</td></tr>
-    <tr><td>/ · ↑ / ↓ · Enter</td><td>incremental search: a ranked results panel opens as you type (the board doesn't move); ↑/↓ (ctrl+p/ctrl+n) pick a row, Enter jumps to it and closes search</td></tr>
-    <tr><td>n / N</td><td>next / previous match (document order, wrapping); with no active search, re-runs the last term from where you left off</td></tr>
-    <tr><td>Tab (in search)</td><td>toggle search scope: working set (no Archive/Log) ↔ everything</td></tr>
-    <tr><td>L</td><td>log entry</td></tr>
-    <tr><td>d / D</td><td>archive / hard-delete (item or section)</td></tr>
-    <tr><td>u / ctrl+r</td><td>undo / redo (shared journal — CLI edits too)</td></tr>
-    <tr><td>H</td><td>history: what changed, by whom</td></tr>
-    <tr><td>V</td><td>recent out-of-band changes feed — j/k move, enter jump to the change,
-      v full view, m minimize, x dismiss, esc leave</td></tr>
-    <tr><td>y</td><td>copy board file path</td></tr>
-    <tr><td>m</td><td>mindmap view (in the map: hjkl move, g/G first/last, 1-9 section,
-      tab next section, enter fold, w expand node, f focus subtree, esc step out, e edit,
-      a add child, A sibling, space cycle status, b blocked, p pin, ! urgent, d archive,
-      D delete, o open link, y copy path, u undo, / n N search, H history, E raw, L log,
-      T title, M toggle Log, m/q back)</td></tr>
-    <tr><td>W</td><td>outline width — cycle narrow / wide / full (drag a side grip for a
-      custom width; double-click a grip to reset)</td></tr>
-    <tr><td>?</td><td>this help</td></tr>
-  </table></div>
+  <div id="helpbody" tabindex="0"><div id="helpkeys"></div></div>
 </div></div>
 
 <script>
@@ -1477,6 +1435,32 @@ document.getElementById('undo').addEventListener('click', () => post({ op: 'undo
 document.getElementById('redo').addEventListener('click', () => post({ op: 'redo' }));
 document.getElementById('rawedit').addEventListener('click', openRaw);
 document.getElementById('helpbtn').addEventListener('click', () => toggleModal('helpmodal', true));
+
+// The help overlay is built from the single source of truth (internal/keymap),
+// served at /api/keymap — never hand-copied into this file. Fetched once on
+// load; if it fails the overlay just stays empty (the ? handler still opens it).
+async function buildHelp() {
+  let km;
+  try { km = await (await fetch('/api/keymap')).json(); } catch { return; }
+  const host = document.getElementById('helpkeys');
+  host.textContent = '';
+  const section = (title, rows) => {
+    if (title) { const h = document.createElement('div'); h.className = 'helpsec'; h.textContent = title; host.appendChild(h); }
+    const table = document.createElement('table');
+    for (const r of (rows || [])) {
+      const tr = document.createElement('tr');
+      const k = document.createElement('td'); k.textContent = r.keys;
+      const d = document.createElement('td'); d.textContent = r.desc;
+      tr.appendChild(k); tr.appendChild(d); table.appendChild(tr);
+    }
+    host.appendChild(table);
+  };
+  section('', km.outline);
+  section('Map view', km.map);
+  if (km.footer) document.getElementById('listfoot').textContent = km.footer;
+  window.__sn && (window.__sn.helpRows = (km.outline || []).length + (km.map || []).length);
+}
+buildHelp();
 async function copyPath() {
   if (!cur) return;
   try { await navigator.clipboard.writeText(cur.path); toast('copied ' + cur.path, true); }

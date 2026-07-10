@@ -1594,6 +1594,9 @@ run({
 
   'help overlay scrolls with the keyboard and ? closes it': async t => {
     await t.open();
+    // The help table is built at runtime from /api/keymap (single source of
+    // truth), so wait for it to populate before asserting it overflows.
+    await t.page.waitForFunction(() => document.querySelectorAll('#helpkeys tr').length > 10, null, { timeout: 3000 });
     await t.key('?');
     await t.page.waitForSelector('#helpmodal.open');
     // The key list overflows the panel, so the body must scroll.

@@ -1,5 +1,7 @@
 package main
 
+//go:generate go run ./internal/keymap/cmd/genkeys
+
 import (
 	"fmt"
 	"os"
@@ -7,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nitsanavni/session-notes/internal/hooks"
+	"github.com/nitsanavni/session-notes/internal/keymap"
 )
 
 // docTopics maps a `session-notes docs <topic>` topic to its recipe text. The
@@ -187,6 +190,13 @@ func runDocs(args []string) int {
 		// to keep the injected text and the on-demand doc a single source.
 		if args[0] == "blurb" {
 			fmt.Print(hooks.Blurb("<board-path>"))
+			return 0
+		}
+		// keys: the keybindings help, rendered from the single source of truth
+		// (internal/keymap). `--markdown` emits the README table body used by the
+		// go:generate step; the drift test asserts README matches this output.
+		if args[0] == "keys" {
+			fmt.Print(keymap.Markdown())
 			return 0
 		}
 		if body, ok := docTopics[args[0]]; ok {

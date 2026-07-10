@@ -21,6 +21,18 @@ go test ./...
 
 Go lives at `~/.local/go/bin` (not on PATH by default).
 
+## Keymap is generated — edit `internal/keymap` only
+
+Keybinding help has a single source of truth: `internal/keymap/keymap.go`. The
+TUI footer + `?` overlay render from it at runtime, the web help overlay + footer
+fetch it as JSON (`GET /api/keymap`), and the README keys table is generated
+(`go generate ./...`, backed by `session-notes docs keys`). Do NOT hand-edit the
+README table, the TUI overlay text, or the web help table — change the tables in
+`keymap.go` and regenerate. `go test ./internal/keymap` fails if the README is
+stale or if a TUI handler dispatches a key that isn't documented. The key
+handlers themselves (dispatch switches in `internal/tui`, `board.html` key
+handlers) remain hand-written; keep them in sync with the table.
+
 ## Web UI e2e tests
 
 `./test/e2e/run.sh` drives the web UI (`session-notes serve`) in a real

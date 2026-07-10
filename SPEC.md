@@ -225,14 +225,20 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
 ## TUI (bubbletea + lipgloss + bubbles)
 
 - Layout: board rendered as sections; cursor moves across items; active section highlighted. The sticky header shows the title (frontmatter `title`, else session id, else path); when a `title` is set, a shortened session id (first 8 chars) is shown dimmed next to it (outline header and map header) so the id stays visible.
-- Keys: `j/k` move · `g`/`G` jump to first/last visible stop · `tab`/`shift-tab` next/prev section · `a` add item to current section (a leading `[x]`-style status marker is parsed and stripped, matching the web/CLI add) ·
-  `space` cycle status `[ ]→[>]→[x]` · `b` toggle blocked `[?]` (the space cycle never reaches blocked; `b` sets/clears it directly, matching the web outline) · `!` toggle urgent · `p` toggle pin (`!pin`) · `d` archive / `D` hard-delete item ·
-  `e` edit item inline (textinput) · `T` edit the frontmatter title (empty clears it) ·
-  `E` open board in `$EDITOR` (suspend TUI) ·
-  `o` open item's first `[[link]]` · `y` copy board file path to clipboard ·
-  `enter` fold toggle · `l`/`h` descend-expand / ascend-collapse · `z` focus-fold (zoom) onto the cursor ·
-  `w` wrap the item at the cursor (single truncated line ↔ full multi-line block, session-only) ·
-  `H` history view (read-only) · `V` recent-changes feed (out-of-band edits) · `/` incremental search (see below) · `L` quick log entry · `m` toggle map view · `B` board picker · `r` reload · `q`/`esc` quit · `?` help. (There is no `W` in the TUI; the web outline adds `W` width cycling.)
+- **Keymap is generated from a single source of truth.** All keybinding help —
+  the TUI footer hint line, the TUI `?` overlay, the web help overlay (served as
+  JSON at `/api/keymap`), and the README keys table — is rendered from the tables
+  in `internal/keymap/keymap.go`. To add or reword a key, edit ONLY that file
+  (and its handler), then run `go generate ./...` to refresh the README; a
+  `go test` drift gate fails if the README is stale, and a reality test asserts
+  every key the TUI handlers dispatch is documented in the tables. The actual key
+  handlers (the `internal/tui` dispatch switches and the `board.html` key
+  handlers) stay hand-written. Behavioral notes worth pinning here: `a` parses
+  and strips a leading `[x]`-style status marker (matching the web/CLI add); the
+  `space` status cycle is `[ ]→[>]→[x]` and never reaches blocked, so `b`
+  sets/clears `[?]` directly; there is no `W` in the TUI (the web outline adds
+  `W` width cycling); `ctrl+c` always quits (it is intentionally undocumented in
+  the help surfaces).
 - Archiving (`d`) or deleting (`D`) an item keeps the selection close to where it was, in every view (TUI outline and map, web outline and map): it lands on the next item in document order — the one that visually takes the removed item's place (the removed subtree is skipped); if the removed item was the last in its section it falls back to the previous item; only when the section is left empty does the selection rest on the section head (the parent node, in the maps).
 - Single-press expand-and-nav: descending into a collapsed parent is ONE keystroke everywhere — the same press expands the fold AND lands the selection on the child (the remembered child where child memory exists, else the first), never a first press that only expands and a second that moves. In the maps (TUI and web) an outward `h`/`l` onto a folded node steps the fold as far as needed (a closed replies-only node goes straight to replies-expanded) and focuses the revealed child; in the outlines (TUI and web) `l`/`right` on a collapsed section head expands the section and lands the cursor on its first item (`enter` stays a pure fold toggle, `h` collapses; `l` on an already expanded head is a no-op and never collapses).
 - `u`/`ctrl+r` undo/redo walk the board's SHARED on-disk journal (`board.Undo`/`board.Redo`) — the same timeline the web UI and edit CLI undo through — so "the last edit" means the same thing across every frontend and author. Only when the shared journal can't apply cleanly (an intervening non-journaling writer — a hook or a human in `$EDITOR`) does the TUI fall back to its rebase-aware in-memory history.
