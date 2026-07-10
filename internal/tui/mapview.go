@@ -1105,6 +1105,13 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "focus an item to copy its link path"
 		}
+	case "U":
+		// In-place restart when a fresh binary is on disk (see restart.go / the
+		// outline handler). Preserves the map view via SN_RESUME_VIEW.
+		if m.binaryStale {
+			m.restart = true
+			return m, tea.Quit
+		}
 	case "m":
 		m.exitMap()
 	case "M":
@@ -2056,6 +2063,9 @@ func (m *model) viewMapFooter() string {
 	// outline footer (statusFooter reads the sidecar on every render).
 	if seg := m.statusFooter(); seg != "" {
 		line = seg + "\n" + line
+	}
+	if n := m.binaryNotice(); n != "" {
+		line = n + "\n" + line
 	}
 	return detail + "\n" + line
 }

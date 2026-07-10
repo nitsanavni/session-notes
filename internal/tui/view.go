@@ -735,6 +735,9 @@ func (m *model) viewFooter() string {
 	if seg := m.statusFooter(); seg != "" {
 		line = seg + "\n" + line
 	}
+	if n := m.binaryNotice(); n != "" {
+		line = n + "\n" + line
+	}
 	return line
 }
 

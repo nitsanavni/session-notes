@@ -272,6 +272,15 @@ type model struct {
 	// checkUpdateCmd so it never blocks startup; empty until (and unless) a
 	// newer release is found.
 	updateHint string
+
+	// In-place restart state (see restart.go). exePath/exeBase capture the running
+	// executable's identity at startup; the status tick re-stats it and sets
+	// binaryStale when the on-disk binary changed (a fresh deploy). U then quits
+	// bubbletea and sets restart so runProgram re-execs the new binary in place.
+	exePath     string
+	exeBase     binState
+	binaryStale bool
+	restart     bool
 }
 
 // Run opens the TUI on a specific board file.
@@ -280,6 +289,7 @@ func Run(path string) error {
 	if err := m.openBoard(path); err != nil {
 		return fmt.Errorf("open board %s: %w", path, err)
 	}
+	m.resumeView() // resume into the map view after an in-place restart, if any
 	return runProgram(m)
 }
 
@@ -312,6 +322,14 @@ func runProgram(m *model) error {
 	if m.watch != nil {
 		m.watch.close()
 	}
+	// The terminal is now handed back (p.Run returned, alt-screen torn down), so
+	// it is safe to replace the process image with the freshly-deployed binary.
+	// reexec only returns on failure; on success we never reach here.
+	if err == nil && m.restart {
+		if rerr := m.reexec(); rerr != nil {
+			return rerr
+		}
+	}
 	return err
 }
 
@@ -319,7 +337,9 @@ func newModel() *model {
 	ti := textinput.New()
 	ti.CharLimit = 500
 	ti.Prompt = "> "
-	return &model{cursor: -1, input: ti, width: 80, height: 24, hist: newHistory(100), collapsed: map[string]bool{}, fresh: map[string]bool{}}
+	m := &model{cursor: -1, input: ti, width: 80, height: 24, hist: newHistory(100), collapsed: map[string]bool{}, fresh: map[string]bool{}}
+	m.baselineBinary()
+	return m
 }
 
 // defaultCollapsed is the collapse state a section starts in before the user
@@ -1077,7 +1097,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, dashTick()
 	case statusTickMsg:
-		// Re-render picks up a fresh sidecar; keep the chain alive.
+		// Re-render picks up a fresh sidecar; also re-stat our own executable so a
+		// fresh deploy surfaces the "binary updated — U restarts" notice. Keep the
+		// chain alive.
+		m.checkBinary()
 		return m, statusTick()
 	case editorDoneMsg:
 		// A board edit (editorBuf set) went through a temp copy and needs the
@@ -1408,6 +1431,13 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.reloadExternal()
 		m.status = "reloaded"
+	case "U":
+		// In-place restart: only when a fresh binary is detected on disk. Quit
+		// bubbletea cleanly; runProgram re-execs the new binary after p.Run returns.
+		if m.binaryStale {
+			m.restart = true
+			return m, tea.Quit
+		}
 	case "m":
 		m.enterMap()
 	case "w":

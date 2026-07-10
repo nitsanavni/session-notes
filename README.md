@@ -484,6 +484,7 @@ tenants of the same network.
 | `H` | history: shared edit journal (who changed what), read-only |
 | `V` | recent changes: out-of-band edits newest-first; enter jumps to the change |
 | `r` | reload from disk (TUI only; the web view live-updates) |
+| `U` | restart in place when the binary was updated on disk (TUI only; the footer nags when a fresh deploy is detected) |
 | `B` | back to the board picker |
 | `?` | toggle this help |
 | `q` / `esc` | quit (esc; ctrl+c always quits) |

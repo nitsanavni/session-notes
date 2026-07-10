@@ -356,6 +356,12 @@ Hooks must be fast (<100ms) and never fail the session: on any error, exit 0 sil
   edits appear live). Writes are atomic (temp file + rename) to avoid torn reads. While an
   inline input is open the reload is deferred (it must not touch the input buffer or the
   edit target); the change is merged at save time instead (see Concurrency).
+- In-place restart on redeploy: the TUI records its own executable's size+mtime at startup and
+  re-stats it on the periodic status tick. When it changes (a fresh binary was deployed while the
+  TUI kept running the old code) a persistent footer notice appears in both the outline and map
+  views ("⟳ binary updated — U restarts"); `U` quits bubbletea cleanly and `syscall.Exec` re-execs
+  the new binary in place, preserving the board path (same argv) and the current view (via
+  `SN_RESUME_VIEW`). A failed baseline or a transient stat failure (binary mid-replace) never nags.
 - New items get author `user:` implicitly? No — keep text as typed; author tags optional.
 - Style: dark-friendly, subtle; urgent items highlighted; done items dimmed.
 - Picker mode (fallback/`-l`): list boards (session id, cwd, mtime, first in-progress thread).
