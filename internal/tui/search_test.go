@@ -412,6 +412,27 @@ func TestSearchHighlightOutline(t *testing.T) {
 	}
 }
 
+// Stepping matches with n/N highlights the matched term inside the current
+// match's rendered line — the substring accent survives the recall + step path,
+// so cycling always shows WHERE the term is, not just WHICH row is current.
+func TestSearchNextAccentsCurrentMatchTerm(t *testing.T) {
+	forceColor(t)
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter}) // commit + close
+	// n recalls the term into sticky results mode and steps to the next match.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	out := m.viewBoard()
+	if !strings.Contains(out, searchAccent) {
+		t.Fatalf("expected the matched term accented (%s) on the current match after n:\n%q", searchAccent, out)
+	}
+	// N steps back and must keep the accent live.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	if !strings.Contains(m.viewBoard(), searchAccent) {
+		t.Fatal("the term accent must survive an N step")
+	}
+}
+
 // TestSearchResultsModeSticky: selecting a row (Enter) CLOSES search (highlights
 // clear). Pressing n then re-activates via recall into a persistent results
 // mode where ordinary navigation (n/N, and plain moves like j) keeps the
