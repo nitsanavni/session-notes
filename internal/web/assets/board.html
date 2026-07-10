@@ -22,12 +22,26 @@
 }
 * { box-sizing: border-box; }
 body {
-  margin: 0 auto; padding: 1.5rem 1.25rem 4rem; max-width: 960px;
+  margin: 0 auto; padding: 1.5rem 1.25rem 4rem; max-width: var(--outline-width, 960px);
   background: var(--bg); color: var(--fg);
   font: 15px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 /* The map wants room to breathe — let map mode use the full window width. */
 body.mapmode { max-width: none; }
+/* Outline width handles: subtle vertical grips in each side gutter. Drag to
+   resize the content column, double-click to reset. Hidden in map mode. */
+.wgrip {
+  position: fixed; top: 0; bottom: 0; width: 12px; z-index: 15;
+  cursor: col-resize; opacity: 0; transition: opacity .15s; touch-action: none;
+}
+.wgrip::after {
+  content: ''; position: absolute; top: 50%; left: 4px; transform: translateY(-50%);
+  width: 4px; height: 46px; border-radius: 3px; background: var(--border);
+}
+.wgrip:hover, body.wdragging .wgrip { opacity: 1; }
+.wgrip:hover::after, body.wdragging .wgrip::after { background: var(--accent); }
+body.wdragging { user-select: none; cursor: col-resize; }
+body.mapmode .wgrip { display: none; }
 header { display: flex; align-items: baseline; gap: .6rem; margin-bottom: 1rem; flex-wrap: wrap; }
 header a { color: var(--dim); text-decoration: none; }
 #title { font-size: 1.05rem; font-weight: 600; cursor: pointer; }
@@ -61,6 +75,12 @@ li { padding: .1rem 0; }
 }
 .marker.wip { color: var(--accent); font-weight: 600; }
 .marker.blocked { color: var(--urgent); }
+/* Item-level fold caret (enter/l/h on an item with children): ▾ expanded, ▸
+   collapsed. `.empty` reserves the same width on childless items so bullets
+   stay aligned. `.foldcount` is the dim hidden-descendant tally after the text. */
+.ifold { flex: none; color: var(--dim); cursor: pointer; user-select: none; font-size: .8em; width: .9em; text-align: center; }
+.ifold.empty { cursor: default; }
+.foldcount { flex: none; color: var(--dim); font-size: .8em; cursor: pointer; user-select: none; }
 /* Long items show as one truncated line by default; `w` toggles the .wrap
    class to soft-wrap the item at the cursor to its full height (mirrors the
    TUI's per-item wrap toggle). */
@@ -252,7 +272,7 @@ body.mapmode #mapwrap { display: block; }
 </div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"></div>
 <div id="linkchooser"><div class="lbl">open link — j/k move · enter open · esc cancel</div><div class="list"></div></div>
 <div id="addsecmodal"><div class="lbl">add sections — j/k move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
-<footer id="listfoot">j/k move · tab section · enter fold · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · / search · u undo · ? help</footer>
+<footer id="listfoot">j/k move · tab section · enter fold · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 <div id="searchstatus"></div>
@@ -283,8 +303,9 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>a</td><td>add to the cursor's section</td></tr>
     <tr><td>A</td><td>add a section</td></tr>
     <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
-    <tr><td>enter / l / h</td><td>fold the section at the cursor (h collapses; l expands a collapsed
-      section and lands on its first item in one press)</td></tr>
+    <tr><td>enter / l / h</td><td>fold at the cursor. On a section: h collapses; l expands a collapsed
+      section and lands on its first item. On an item with children: enter toggles, l unfolds, h folds
+      the subtree (or bubbles up to fold the parent)</td></tr>
     <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
@@ -305,6 +326,8 @@ body.mapmode #mapwrap { display: block; }
       f focus subtree, b step out, e edit, a add child, A sibling, space cycle status,
       p pin, ! urgent, d archive, D delete, o open link, y copy path, u undo,
       / n N search, M toggle Log, m/q back)</td></tr>
+    <tr><td>W</td><td>outline width — cycle narrow / wide / full (drag a side grip for a
+      custom width; double-click a grip to reset)</td></tr>
     <tr><td>?</td><td>this help</td></tr>
   </table>
 </div></div>
@@ -337,6 +360,15 @@ function setCollapsed(title, c) {
   if (c === defaultCollapsed(title)) delete collapsedSecs[title];
   else collapsedSecs[title] = c;
 }
+// Per-item collapse override (the enter/l/h keys on an item WITH children),
+// keyed by the item's stop key (`it:<section>:<raw>`) — the same identity the
+// cursor uses, so a fold survives SSE re-renders of unchanged items exactly
+// like collapsedSecs survives by section title. A collapsed item hides its
+// whole subtree (children build no stops, so cursor nav skips them) and shows a
+// dim hidden-descendant count. The web outline's analogue of the map's folds.
+const collapsedItems = new Set();
+const itemKey = (section, it) => `it:${section}:${it.raw}`;
+const itemCollapsed = key => collapsedItems.has(key);
 // While the user is typing in an inline input, live re-renders are deferred
 // (the TUI defers fsnotify reloads the same way); the freshest fetch lands
 // when the input closes, so your in-progress text is never destroyed.
@@ -445,6 +477,61 @@ function toggleSectionCollapse(title, force) {
   setCollapsed(title, c);
   cursorKey = `sec:${title}`; // keep the cursor on the toggled header
   renderOutline(cur);
+}
+
+// toggleItemCollapse flips an item (which must have children) between collapsed
+// and expanded, keeping the cursor on it — so collapsing while the selection
+// sits on a now-hidden descendant pulls it up to the fold. force===false only
+// expands, force===true only collapses (matches the section helpers). Returns
+// true when it actually changed something.
+function toggleItemCollapse(stop, force) {
+  if (!stop || stop.type !== 'item') return false;
+  if (!(stop.it.children && stop.it.children.length)) return false;
+  const key = stop.key;
+  const c = force === undefined ? !itemCollapsed(key) : force;
+  if (c === itemCollapsed(key)) return false;
+  if (c) collapsedItems.add(key); else collapsedItems.delete(key);
+  cursorKey = key; // keep the cursor on the toggled item
+  renderOutline(cur);
+  return true;
+}
+
+// parentItemStop finds the visible stop of stop's parent item (same section,
+// whose children include this item). Object identity holds because both come
+// from the same `cur` tree.
+function parentItemStop(stop) {
+  return stops.find(x => x.type === 'item' && x.section === stop.section
+    && x.it.children && x.it.children.includes(stop.it)) || null;
+}
+
+// collapseItemOrBubble is `h`/left on an item: collapse it if it has an open
+// subtree; otherwise (a leaf, or an already-collapsed item) fold its parent and
+// land the cursor there — the vim-tree "close, then step out" gesture.
+function collapseItemOrBubble(stop) {
+  const has = stop.it.children && stop.it.children.length;
+  if (has && !itemCollapsed(stop.key)) { toggleItemCollapse(stop, true); return; }
+  const p = parentItemStop(stop);
+  if (p) toggleItemCollapse(p, true);
+}
+
+// revealItemAncestors un-collapses every folded item on the path down to
+// target, so a search jump into a folded subtree makes the match visible
+// (the item-level counterpart to expanding a collapsed section).
+function revealItemAncestors(section, target) {
+  const sec = (cur && cur.sections || []).find(x => x.title === section);
+  if (!sec) return;
+  const path = [];
+  const find = items => {
+    for (const it of items || []) {
+      if (it === target) return true;
+      path.push(it);
+      if (find(it.children)) return true;
+      path.pop();
+    }
+    return false;
+  };
+  find(sec.items);
+  for (const anc of path) collapsedItems.delete(itemKey(section, anc));
 }
 
 // ---- edits ----
@@ -640,6 +727,16 @@ function itemNode(section, it) {
   registerStop({ key, type: 'item', el: row, section, it, row, li, text });
   row.addEventListener('click', () => { if (searchHL !== '') endSearch(); setCursor(stops.find(s => s.key === key), false); });
 
+  // Fold caret for an item with children (enter/l/h). Childless items get an
+  // empty same-width caret so bullets keep a common left edge.
+  const hasKids = !!(it.children && it.children.length);
+  const kidsCollapsed = hasKids && itemCollapsed(key);
+  const caret = el('span', { class: 'ifold' + (hasKids ? '' : ' empty'),
+    title: hasKids ? 'fold / unfold subtree (enter · l · h)' : '' },
+    hasKids ? (kidsCollapsed ? '▸' : '▾') : '');
+  if (hasKids) caret.addEventListener('click', ev => { ev.stopPropagation(); toggleItemCollapse(stops.find(s => s.key === key)); });
+  row.append(caret);
+
   if (it.status !== 'none') {
     row.append(el('button', {
       class: `marker ${it.status}`,
@@ -657,6 +754,14 @@ function itemNode(section, it) {
   text.addEventListener('dblclick', () => act.edit(section, it, row));
   row.append(text);
 
+  // Collapsed subtree: a dim "▸ N" hidden-descendant tally after the text
+  // (click to expand), mirroring the map view's "[+N]" fold summary.
+  if (kidsCollapsed) {
+    const badge = el('span', { class: 'foldcount', title: 'expand subtree (l · enter)' }, `▸ ${countItems(it.children)}`);
+    badge.addEventListener('click', ev => { ev.stopPropagation(); toggleItemCollapse(stops.find(s => s.key === key), false); });
+    row.append(badge);
+  }
+
   row.append(el('div', { class: 'actions' },
     el('button', { title: 'reply in thread, flat (R)', onclick: () => act.reply(section, it, row, li, 'reply') }, '↩'),
     el('button', { title: 'fork a sub-thread here (F)', onclick: () => act.reply(section, it, row, li, 'fork') }, '⑂'),
@@ -668,7 +773,7 @@ function itemNode(section, it) {
   ));
   li.append(row);
 
-  if (it.children && it.children.length) {
+  if (hasKids && !kidsCollapsed) {
     const sub = el('ul');
     for (const c of it.children) sub.append(itemNode(section, c));
     li.append(sub);
@@ -1620,8 +1725,9 @@ const sideSign = n => {
 };
 
 function handleMapKey(e) {
-  // A non-search action after a search clears the highlights (n/N/'/' keep them).
-  if (searchHL !== '' && !['n', 'N', '/'].includes(e.key)) endSearch();
+  // Results mode is sticky here too: Escape-to-clear is handled by the global
+  // keydown before dispatch, so every key reaching handleMapKey keeps search
+  // highlights alive (persistent results mode).
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
     'Enter', 'f', 'b', 'e', 'a', 'A', 'w', ' ', '!', 'p', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
@@ -1741,6 +1847,9 @@ let searchSaveCursor = null, searchSaveMapFocus = null, searchSaveMapRoot = null
 // clears all highlights. Kept separate from searchActive so highlights show
 // during typing (before Enter) too.
 let searchHL = '';
+// searchLastTerm remembers the most recent query (per session, in-memory) so `/`
+// pre-fills it (selected/replaceable) and n/N re-activate it with no active search.
+let searchLastTerm = '';
 
 // searchHit reports whether an item matches the active highlight query.
 function searchHit(it) {
@@ -1798,6 +1907,7 @@ function jumpToMatch(m) { if (mapState.in) jumpMatchMap(m); else jumpMatchOutlin
 
 function jumpMatchOutline(m) {
   if (sectionCollapsed(m.section)) setCollapsed(m.section, false);
+  revealItemAncestors(m.section, m.it); // un-fold any collapsed ancestor items
   cursorKey = `it:${m.section}:${m.it.raw}`;
   renderOutline(cur); // rebuild so a revealed section's stops exist, then restore
 }
@@ -1834,21 +1944,25 @@ function startSearch() {
   searchIdx = 0;
   const box = document.getElementById('searchprompt');
   const inp = box.querySelector('input');
-  inp.value = '';
+  inp.value = searchLastTerm; // recall last term (selected below → replaceable)
   box.classList.add('open');
   inputsOpen++; // defer live SSE re-renders while typing, like the add/map inputs
-  inp.oninput = () => {
+  const runQuery = () => {
     searchHL = inp.value.trim(); // highlight live as you type
+    if (inp.value.trim()) searchLastTerm = inp.value.trim();
     const matches = searchMatches(inp.value);
     if (matches.length) { searchIdx = 0; jumpToMatch(matches[0]); setSearchStatus(matches.length); }
     else { clearSearchStatus(); if (inp.value.trim()) toast('no matches', true); if (mapState.in) renderMap(cur); else renderOutline(cur); }
   };
+  inp.oninput = runQuery;
   inp.onkeydown = e => {
     e.stopPropagation();
     if (e.key === 'Enter') { const v = inp.value; closeSearchPrompt(); confirmSearch(v); }
     else if (e.key === 'Escape') { closeSearchPrompt(); cancelSearch(); }
   };
   inp.focus();
+  inp.select(); // recalled term shows selected: typing replaces it wholesale
+  if (inp.value.trim()) runQuery(); // live-preview the recalled term immediately
 }
 
 function closeSearchPrompt() {
@@ -1872,6 +1986,7 @@ function confirmSearch(q) {
   }
   searchActive = true;
   searchHL = searchQuery; // keep matches highlighted while n/N steps
+  searchLastTerm = searchQuery; // remember for `/` recall + n/N re-activation
   setSearchStatus(matches.length); // current match is matches[searchIdx]
   if (mapState.in) renderMap(cur); else renderOutline(cur);
 }
@@ -1890,7 +2005,16 @@ function cancelSearch() {
 // searchNext steps to the next (dir=1) / previous (dir=-1) match, wrapping.
 // Matches are recomputed each time so edits between steps stay honored.
 function searchNext(dir) {
-  if (!searchActive) return;
+  if (!searchActive) {
+    // Re-activate the last term when there's no live search (n/N recall).
+    if (!searchLastTerm) return;
+    searchQuery = searchLastTerm; searchHL = searchLastTerm; searchActive = true; searchIdx = 0;
+    const ms = searchMatches(searchQuery);
+    if (!ms.length) { searchActive = false; searchHL = ''; toast('no matches', true); return; }
+    jumpToMatch(ms[0]); setSearchStatus(ms.length);
+    if (mapState.in) renderMap(cur); else renderOutline(cur);
+    return;
+  }
   const matches = searchMatches(searchQuery);
   if (!matches.length) {
     // Matches vanished (edited away) during n/N: clear highlight + status now,
@@ -1913,8 +2037,10 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape' || e.key === 'q') document.querySelectorAll('.modal.open .bar button:last-child, #helpclose').forEach(b => b.click());
     return;
   }
-  // A non-search action after a search clears the outline highlights.
-  if (searchHL !== '' && !['n', 'N', '/'].includes(e.key)) endSearch();
+  // Persistent results mode: once a search is confirmed, ONLY Escape (or a new
+  // `/`) clears the highlights + tally — every other key keeps them alive so
+  // ordinary navigation no longer silently drops out of search.
+  if (searchHL !== '' && e.key === 'Escape') { e.preventDefault(); endSearch(); return; }
   if (mapState.in) { handleMapKey(e); return; }
   const s = cursorStop();
   const onItem = s && s.type === 'item';
@@ -1942,7 +2068,7 @@ document.addEventListener('keydown', e => {
   // preventDefault for every handled key: keys that open an input (a, e, R…)
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
-    ' ', 'b', '!', 'p', 'e', 'w', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'T', 'B', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
+    ' ', 'b', '!', 'p', 'e', 'w', 'W', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'T', 'B', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
     '/', 'n', 'N']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
@@ -1951,11 +2077,14 @@ document.addEventListener('keydown', e => {
     case 'w': toggleWrap(); break;
     // enter / l / right toggle the section fold (l/right expand, h/left collapse
     // when on a section header); no-op on items — mirrors the TUI.
-    case 'Enter': if (onSec) toggleSectionCollapse(s.title); break;
+    case 'Enter': if (onSec) toggleSectionCollapse(s.title); else if (onItem) toggleItemCollapse(s); break;
     // l/right on a collapsed head: single-press expand-and-nav — the section
     // opens AND the cursor lands on its first item (expanded heads: no-op).
-    case 'l': case 'ArrowRight': if (onSec) expandIntoSection(s.title); break;
-    case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); break;
+    // On an item, l/right only expands a collapsed subtree (never collapses).
+    case 'l': case 'ArrowRight': if (onSec) expandIntoSection(s.title); else if (onItem) toggleItemCollapse(s, false); break;
+    // On an item, h/left collapses an open subtree, or bubbles up to fold the
+    // parent when the item is a leaf / already collapsed.
+    case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); else if (onItem) collapseItemOrBubble(s); break;
     case 'Tab': moveSection(e.shiftKey ? -1 : 1); break;
     case 'g': { const v = visibleStops(); if (v.length) setCursor(v[0]); break; }
     case 'G': { const v = visibleStops(); if (v.length) setCursor(v[v.length - 1]); break; }
@@ -1983,6 +2112,7 @@ document.addEventListener('keydown', e => {
     case 'T': startTitleEdit(); break;
     case 'B': location.href = '/'; break;
     case 'm': enterMap(); break;
+    case 'W': cycleWidth(); break;
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
     case 'y': copyPath(); break;
@@ -2004,6 +2134,97 @@ refresh();
 const es = new EventSource(`${API}/events`);
 es.onmessage = () => refresh();
 
+// ---- outline width (draggable margins + preset modes) ----
+// The outline's content column can be narrowed/widened. `W` cycles the presets
+// narrow(700) → wide(1100) → full(100%); dragging either side grip sets a
+// custom pixel width; double-clicking a grip resets to the default. The choice
+// (mode + custom px) persists in localStorage and is applied on load. Map mode
+// is always full-width and ignores this (the grips hide there).
+const WIDTH_KEY = 'sn.outlineWidth';
+const WIDTH_PX = { narrow: 700, wide: 1100 };
+const WIDTH_CYCLE = ['narrow', 'wide', 'full'];
+const DEFAULT_WIDTH_PX = 960;
+let widthState = loadWidth();
+
+function loadWidth() {
+  try {
+    const v = JSON.parse(localStorage.getItem(WIDTH_KEY) || 'null');
+    if (v && typeof v.mode === 'string') return v;
+  } catch {}
+  return { mode: 'default', px: DEFAULT_WIDTH_PX };
+}
+function saveWidth() { try { localStorage.setItem(WIDTH_KEY, JSON.stringify(widthState)); } catch {} }
+
+// resolveWidth maps the state to the CSS max-width value for --outline-width.
+function resolveWidth() {
+  if (widthState.mode === 'full') return 'none';
+  if (widthState.mode === 'custom') return Math.round(widthState.px) + 'px';
+  if (widthState.mode === 'default') return DEFAULT_WIDTH_PX + 'px';
+  return (WIDTH_PX[widthState.mode] || DEFAULT_WIDTH_PX) + 'px';
+}
+function applyWidth() {
+  document.documentElement.style.setProperty('--outline-width', resolveWidth());
+  positionGrips();
+}
+
+const gripL = el('div', { class: 'wgrip', 'aria-hidden': 'true', title: 'drag to resize · double-click to reset · W cycles presets' });
+const gripR = el('div', { class: 'wgrip', 'aria-hidden': 'true', title: 'drag to resize · double-click to reset · W cycles presets' });
+document.body.append(gripL, gripR);
+
+// positionGrips parks each grip just outside the content column's edges so they
+// sit in the side gutters (the column stays centered by the body's auto margins).
+function positionGrips() {
+  const r = document.body.getBoundingClientRect();
+  gripL.style.left = Math.max(0, r.left - gripL.offsetWidth) + 'px';
+  gripR.style.left = Math.min(window.innerWidth - gripR.offsetWidth, r.right) + 'px';
+}
+
+function startGripDrag(ev) {
+  ev.preventDefault();
+  // The column is centered, so half its width is the distance from viewport
+  // center to the pointer — usable from either grip symmetrically.
+  const center = window.innerWidth / 2;
+  document.body.classList.add('wdragging');
+  const onMove = e => {
+    let w = Math.round(Math.abs(e.clientX - center) * 2);
+    w = Math.max(360, Math.min(window.innerWidth, w));
+    widthState = { mode: 'custom', px: w };
+    document.documentElement.style.setProperty('--outline-width', w + 'px');
+    positionGrips();
+  };
+  const onUp = () => {
+    document.body.classList.remove('wdragging');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    saveWidth();
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+}
+for (const g of [gripL, gripR]) {
+  g.addEventListener('pointerdown', startGripDrag);
+  g.addEventListener('dblclick', () => {
+    widthState = { mode: 'default', px: DEFAULT_WIDTH_PX };
+    saveWidth(); applyWidth(); toast('width reset', true);
+  });
+}
+
+// cycleWidth advances through the narrow/wide/full presets (from a custom or
+// default width it starts at narrow).
+function cycleWidth() {
+  const i = WIDTH_CYCLE.indexOf(widthState.mode);
+  const next = WIDTH_CYCLE[(i + 1) % WIDTH_CYCLE.length];
+  widthState = next === 'full' ? { mode: 'full', px: 0 } : { mode: next, px: WIDTH_PX[next] };
+  saveWidth(); applyWidth();
+  toast('width: ' + next, true);
+}
+
+applyWidth();
+window.addEventListener('resize', positionGrips);
+// Keep the grips glued to the column after any re-render (content height and
+// scrollbar presence can shift the body rect).
+new MutationObserver(positionGrips).observe(document.getElementById('board'), { childList: true, subtree: true });
+
 // Debug handle for the e2e harness (test/e2e): read-only introspection of
 // the navigation state, so tests assert on real state instead of scraping.
 window.__sn = {
@@ -2015,13 +2236,29 @@ window.__sn = {
     pending: mapState.pending ? { kind: mapState.pending.kind, parentKey: mapState.pending.parentKey || null, targetKey: mapState.pending.targetKey || null, text: mapState.pending.text } : null }; },
   get listExpanded() { return [...listExpanded]; },
   get collapsedSecs() { return { ...collapsedSecs }; },
+  get collapsedItems() { return [...collapsedItems]; },
+  // Outline width state for the e2e harness: the current mode, custom px, the
+  // resolved --outline-width value, and the measured content-column width.
+  get width() {
+    return {
+      mode: widthState.mode, px: widthState.px,
+      computed: getComputedStyle(document.documentElement).getPropertyValue('--outline-width').trim(),
+      bodyWidth: Math.round(document.body.getBoundingClientRect().width),
+    };
+  },
+  cycleWidth() { cycleWidth(); },
+  // Set a custom pixel width the way a drag would (drag pointer simulation can
+  // be flaky in headless Chromium), so tests can assert the persisted result.
+  setWidthPx(px) { widthState = { mode: 'custom', px }; saveWidth(); applyWidth(); },
   // Search state for the e2e harness: active flag, query, 1-based current
   // index, total match count, and whether the prompt is open.
   get search() {
     return {
       active: searchActive, query: searchQuery, idx: searchIdx, hl: searchHL,
+      lastTerm: searchLastTerm,
       matches: searchMatches(searchQuery).length,
       promptOpen: document.getElementById('searchprompt').classList.contains('open'),
+      status: document.getElementById('searchstatus').textContent,
     };
   },
   // A cursor stop's on-screen rect, for asserting the selected line is visible
