@@ -8,12 +8,14 @@ import (
 	"github.com/nitsanavni/session-notes/internal/board"
 )
 
-// Incremental substring search, shared by the outline and map views. `/` opens a
-// prompt; as the query changes the cursor/focus jumps to the first match. Enter
-// confirms (leaving n/N to step next/previous, wrapping), Esc cancels and
-// restores the pre-search cursor. Matches hidden behind a collapsed section
-// (outline) or a folded subtree (map) are revealed on the way in, reusing the
-// same auto-expand machinery as ordinary navigation.
+// Incremental search, shared by the outline and map views. `/` opens a prompt;
+// as the query changes a scrollable, fuzzy-ranked results PANEL updates (best
+// match first) WITHOUT revealing or moving anything on the board. Up/Down (and
+// ctrl+n/ctrl+p) move the panel selection; Enter jumps to the selected match,
+// revealing it (expanding any collapsed section / folded subtree). In results
+// mode n/N step matches in document order, keeping the panel's highlighted row
+// in sync. Esc cancels and restores the pre-search cursor. Matched characters are
+// highlighted in both the panel rows and the board.
 
 // searchScopeExcluded reports whether a section is outside the default search
 // scope (the "working set"). Archive and Log are noisy, low-signal sections the
@@ -23,11 +25,12 @@ func searchScopeExcluded(title string) bool {
 	return title == "Archive" || title == "Log"
 }
 
-// searchMatches returns every item whose display text contains query as a
-// case-insensitive substring, in document order across all sections, replies
-// included. An empty (or whitespace-only) query matches nothing. When all is
-// false (the default working-set scope) the Archive and Log sections are
-// skipped so a search never drags the cursor — or the Log ring — into them.
+// searchMatches returns every item that fuzzy-matches query (fzf-style
+// subsequence — the same predicate that populates the ranked panel), in DOCUMENT
+// order across all sections, replies included. It drives predictable n/N
+// board-jumping; the PANEL re-sorts the identical set by score (see searchRanked)
+// so the two never disagree on which items match. Empty query matches nothing;
+// when all is false the Archive and Log sections are skipped.
 func searchMatches(b *board.Board, query string, all bool) []*board.Item {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" || b == nil {
@@ -37,8 +40,10 @@ func searchMatches(b *board.Board, query string, all bool) []*board.Item {
 	var walk func(items []*board.Item)
 	walk = func(items []*board.Item) {
 		for _, it := range items {
-			if it.IsItem() && strings.Contains(strings.ToLower(it.DisplayText()), q) {
-				out = append(out, it)
+			if it.IsItem() {
+				if _, _, ok := fuzzyScore(it.DisplayText(), q); ok {
+					out = append(out, it)
+				}
 			}
 			walk(it.Children)
 		}
@@ -52,15 +57,49 @@ func searchMatches(b *board.Board, query string, all bool) []*board.Item {
 	return out
 }
 
+// searchHitCount sums the literal occurrences of q (a lowercased, trimmed query)
+// across the matched items' text — the "term hit" tally, which exceeds the node
+// count when a node contains the term more than once. Only counts substring
+// occurrences (subsequence-only matches contribute their node but zero literal
+// hits), so it is a floor on how many times the exact term appears on the board.
+func searchHitCount(results []searchResult, q string) int {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return 0
+	}
+	total := 0
+	for _, r := range results {
+		total += strings.Count(strings.ToLower(r.item.DisplayText()), q)
+	}
+	return total
+}
+
+// runResults recomputes the fuzzy-ranked panel for query and clamps the panel
+// selection. It never moves the board (no-reveal-until-jump).
+func (m *model) runResults(query string) {
+	m.searchResults = searchRanked(m.board, query, m.searchScopeAll)
+	if m.searchPanelIdx >= len(m.searchResults) {
+		m.searchPanelIdx = 0
+	}
+	if m.searchPanelIdx < 0 {
+		m.searchPanelIdx = 0
+	}
+	m.clampPanelScroll()
+}
+
 // startSearch opens the incremental search prompt over whichever view is active.
 // It captures the pre-search cursor (outline) or focus key (map) so Esc can
-// restore it.
+// restore it. The results panel populates immediately, but the board does NOT
+// move — nothing is revealed until Enter (or n/N) jumps.
 func (m *model) startSearch() {
 	m.searchSaveCursor = m.cursor
 	m.searchSaveMapKey = m.mapFocusKey
 	m.searchSaveMapRoot = m.mapFocusRoot
 	m.searchActive = false
 	m.searchIdx = 0
+	m.searchPanelIdx = 0
+	m.searchPanelTop = 0
+	m.clearTempUnwrap()
 	m.prevMode = m.mode
 	m.mode = modeSearch
 	m.input.Placeholder = "search"
@@ -72,20 +111,18 @@ func (m *model) startSearch() {
 	m.searchPrefilled = m.searchLastTerm != ""
 	m.input.Focus()
 	if m.searchPrefilled {
-		// Live-preview the recalled term straight away so its matches highlight
-		// and the view jumps to the first hit before any keystroke.
-		matches := searchMatches(m.board, m.searchLastTerm, m.searchScopeAll)
-		if len(matches) > 0 {
-			m.searchIdx = 0
-			m.jumpToMatch(matches[0])
-			m.setSearchStatus(len(matches))
+		// Populate the panel for the recalled term (still no board reveal).
+		m.runResults(m.searchLastTerm)
+		if len(m.searchResults) > 0 {
+			m.setSearchStatus(len(m.searchResults))
 		}
 	}
 }
 
-// handleSearchKey drives the incremental search prompt. Every keystroke that is
-// not enter/esc feeds the text input, then re-runs the match and jumps to the
-// first hit so the view tracks the query live.
+// handleSearchKey drives the incremental search prompt. Enter jumps to the
+// selected panel row; Esc cancels; Tab toggles scope; Up/Down (ctrl+p/ctrl+n)
+// move the panel selection; every other key edits the query and re-ranks the
+// panel — without moving the board.
 func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
@@ -94,9 +131,10 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		m.searchActive = false
 		m.searchQuery = ""
+		m.searchResults = nil
+		m.clearTempUnwrap()
 		if m.mapView {
-			// Restore the pre-search zoom root too: jumpToMatch may have cleared
-			// mapFocusRoot for a match outside the focused subtree.
+			// Restore the pre-search zoom root too.
 			m.mapFocusRoot = m.searchSaveMapRoot
 			m.mapFocusKey = m.searchSaveMapKey
 			m.mp = nil
@@ -110,40 +148,51 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		return m, nil
 	case "enter":
-		// Confirm: keep the query live for n/N and report the tally.
+		// Select: jump to the highlighted panel row (revealing it) and CLOSE search
+		// — picking from the results list is a commit, back to normal navigation.
+		// Highlights clear; the term + landing position are remembered so n/N
+		// recall can resume stepping later.
 		m.input.Blur()
 		m.mode = modeBoard
 		q := strings.TrimSpace(m.input.Value())
 		m.searchQuery = q
-		matches := searchMatches(m.board, q, m.searchScopeAll)
-		if q == "" || len(matches) == 0 {
+		m.runResults(q)
+		if q == "" || len(m.searchResults) == 0 {
 			m.searchActive = false
+			m.searchResults = nil
+			m.clearTempUnwrap()
 			if q != "" {
 				m.status = "no matches"
 			}
 			return m, nil
 		}
-		m.searchActive = true
 		m.searchLastTerm = q
-		m.setSearchStatus(len(matches))
+		m.jumpToPanel(m.searchPanelIdx) // reveal + sync searchIdx to the target
+		total := len(m.searchResults)
+		m.setSearchStatus(total) // leave the tally visible (records searchLastIdx)
+		// Close: drop out of search back to plain navigation.
+		m.searchActive = false
+		m.searchQuery = ""
+		m.searchResults = nil
+		m.clearTempUnwrap()
 		return m, nil
 	case "tab":
-		// Toggle the search scope (working set <-> everything) live, without
-		// leaving the prompt, and re-run the current query so the tally + jump
-		// update immediately. Tab has no other meaning inside the search prompt.
+		// Toggle the search scope live and re-rank, without leaving the prompt or
+		// moving the board.
 		m.searchScopeAll = !m.searchScopeAll
-		q := strings.TrimSpace(m.input.Value())
-		matches := searchMatches(m.board, q, m.searchScopeAll)
-		if len(matches) > 0 {
-			m.searchIdx = 0
-			m.jumpToMatch(matches[0])
-		}
-		m.setSearchStatus(len(matches))
+		m.searchPanelIdx = 0
+		m.runResults(strings.TrimSpace(m.input.Value()))
+		m.setSearchStatus(len(m.searchResults))
+		return m, nil
+	case "up", "ctrl+p":
+		m.movePanel(-1)
+		return m, nil
+	case "down", "ctrl+n":
+		m.movePanel(1)
 		return m, nil
 	}
 	// A recalled term shows selected: the first editing keystroke replaces it
-	// wholesale (rune/space types over it, backspace/delete wipes it). Cursor
-	// moves just deselect without clearing.
+	// wholesale (rune/space types over it, backspace/delete wipes it).
 	if m.searchPrefilled {
 		m.searchPrefilled = false
 		switch msg.Type {
@@ -153,16 +202,15 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	// Live: jump to the first match for the current query.
 	q := strings.TrimSpace(m.input.Value())
 	if q != "" {
 		m.searchLastTerm = q
 	}
-	matches := searchMatches(m.board, q, m.searchScopeAll)
-	if len(matches) > 0 {
-		m.searchIdx = 0
-		m.jumpToMatch(matches[0])
-		m.setSearchStatus(len(matches))
+	m.searchPanelIdx = 0
+	m.searchPanelTop = 0
+	m.runResults(q)
+	if len(m.searchResults) > 0 {
+		m.setSearchStatus(len(m.searchResults))
 	} else if q == "" {
 		m.status = ""
 	} else {
@@ -171,29 +219,58 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// searchNext steps to the next (dir=1) or previous (dir=-1) match, wrapping. It
-// recomputes the match set from the stored query each time so it stays correct
-// across board edits made between steps. Returns false when no search is active.
+// movePanel moves the panel selection by dir (no board reveal until Enter).
+func (m *model) movePanel(dir int) {
+	if len(m.searchResults) == 0 {
+		return
+	}
+	m.searchPanelIdx = ((m.searchPanelIdx+dir)%len(m.searchResults) + len(m.searchResults)) % len(m.searchResults)
+	m.clampPanelScroll()
+	m.setSearchStatus(len(m.searchResults))
+}
+
+// jumpToPanel lands the board on the panel row at idx (ranked order), revealing
+// it and syncing searchIdx to the same item's document-order position.
+func (m *model) jumpToPanel(idx int) {
+	if idx < 0 || idx >= len(m.searchResults) {
+		return
+	}
+	res := m.searchResults[idx]
+	m.searchPanelIdx = idx
+	m.clampPanelScroll()
+	m.jumpToMatch(res.item)
+	m.tempUnwrapForMatch(res.item, res.ranges)
+	// Sync document-order searchIdx for n/N + resume.
+	if docs := searchMatches(m.board, m.searchQuery, m.searchScopeAll); len(docs) > 0 {
+		for i, it := range docs {
+			if it == res.item {
+				m.searchIdx = i
+				break
+			}
+		}
+	}
+}
+
+// searchNext steps to the next (dir=1) or previous (dir=-1) match in DOCUMENT
+// order, wrapping, and keeps the panel's highlighted row in sync. Returns false
+// when no search is active and there is no last term to recall.
 func (m *model) searchNext(dir int) bool {
 	if !m.searchActive {
-		// Re-activate the last term when there's no live search (n/N recall).
 		if m.searchLastTerm == "" {
 			return false
 		}
 		m.searchQuery = m.searchLastTerm
 		m.searchActive = true
+		m.runResults(m.searchQuery)
 		matches := searchMatches(m.board, m.searchQuery, m.searchScopeAll)
 		if len(matches) == 0 {
 			m.searchActive = false
 			m.status = "no matches"
 			return true
 		}
-		// Resume from where the last search session left off: step one from the
-		// remembered index (n -> next, N -> previous), rather than jumping to the top.
 		base := ((m.searchLastIdx % len(matches)) + len(matches)) % len(matches)
 		m.searchIdx = ((base+dir)%len(matches) + len(matches)) % len(matches)
-		m.jumpToMatch(matches[m.searchIdx])
-		m.setSearchStatus(len(matches))
+		m.landDocMatch(matches, m.searchIdx)
 		return true
 	}
 	matches := searchMatches(m.board, m.searchQuery, m.searchScopeAll)
@@ -203,42 +280,197 @@ func (m *model) searchNext(dir int) bool {
 		return true
 	}
 	m.searchIdx = ((m.searchIdx+dir)%len(matches) + len(matches)) % len(matches)
-	m.jumpToMatch(matches[m.searchIdx])
-	m.setSearchStatus(len(matches))
+	m.landDocMatch(matches, m.searchIdx)
 	return true
 }
 
-// clearSearchOnEsc implements persistent results mode. After `enter` confirms a
-// search, the match highlighting and tally stay live through ordinary navigation
-// (moves, folds, edits) — `n`/`N` step matches, `/` reopens the prompt — and
-// ONLY Esc (or a new `/`) clears them. When search is active and Esc is pressed,
-// it clears searchActive + the stored query and returns true so the caller
-// consumes the key: Esc drops the search instead of quitting / focusing out.
-// Every other key is a no-op here, so nothing else silently exits search. A
-// no-op while the prompt is open (modeSearch never reaches the board/map key
-// handlers); the prompt's own Esc is handled in handleSearchKey.
+// landDocMatch jumps to the document-order match at idx, syncing the panel's
+// highlighted row (by item identity) and applying the temporary unwrap so the
+// current match's matched text is visible even if truncation would hide it.
+func (m *model) landDocMatch(matches []*board.Item, idx int) {
+	it := matches[idx]
+	m.jumpToMatch(it)
+	// Find this item's ranked panel row for highlight sync + its match ranges.
+	var ranges [][2]int
+	for i, res := range m.searchResults {
+		if res.item == it {
+			m.searchPanelIdx = i
+			ranges = res.ranges
+			break
+		}
+	}
+	m.clampPanelScroll()
+	m.tempUnwrapForMatch(it, ranges)
+	m.setSearchStatus(len(m.searchResults))
+}
+
+// toggleSearchScope flips the working-set/everything scope while results mode is
+// live (Tab in results mode, mirroring Tab in the prompt), re-ranks, and re-jumps
+// to keep the current selection valid. Bound ahead of section-cycling so Tab
+// during search always means "scope", never "next section".
+func (m *model) toggleSearchScope() {
+	m.searchScopeAll = !m.searchScopeAll
+	m.runResults(m.searchQuery)
+	if len(m.searchResults) == 0 {
+		m.searchActive = false
+		m.clearTempUnwrap()
+		m.status = "no matches"
+		return
+	}
+	if m.searchPanelIdx >= len(m.searchResults) {
+		m.searchPanelIdx = 0
+	}
+	m.jumpToPanel(m.searchPanelIdx)
+	m.setSearchStatus(len(m.searchResults))
+}
+
+// clearSearchOnEsc implements persistent results mode: after Enter, highlighting
+// and the panel stay live through ordinary navigation; only Esc (or a new `/`)
+// clears them. Returns true when it consumed an Esc that dropped search.
 func (m *model) clearSearchOnEsc(key string) bool {
 	if key == "esc" && m.searchActive {
 		m.searchActive = false
 		m.searchQuery = ""
+		m.searchResults = nil
+		m.clearTempUnwrap()
 		m.status = ""
 		return true
 	}
 	return false
 }
 
-// setSearchStatus writes the "k/N matches" tally (1-based current index),
-// annotated with the active scope so the user can see whether Archive/Log are
-// in play (default working set stays unlabelled to keep the common case quiet).
+// setSearchStatus writes the "k/N matches" tally (1-based panel selection),
+// annotated with the active scope. It remembers the document-order index a later
+// n/N recall should resume from.
 func (m *model) setSearchStatus(total int) {
-	m.searchLastIdx = m.searchIdx // remember where a later n/N recall should resume
-	scope := ""
+	m.searchLastIdx = m.searchIdx
+	scope := " (working set)"
 	if m.searchScopeAll {
 		scope = " (all)"
-	} else {
-		scope = " (working set)"
 	}
-	m.status = fmt.Sprintf("%d/%d matches%s · tab scope", m.searchIdx+1, total, scope)
+	cur := m.searchPanelIdx
+	if total == 0 {
+		cur = -1
+	}
+	hits := ""
+	// A term can occur several times inside one node; surface the total literal
+	// occurrences when it exceeds the node count so "3/12 matches · 17 hits".
+	if h := searchHitCount(m.searchResults, m.searchQueryForStatus()); h > total {
+		hits = fmt.Sprintf(" · %d hits", h)
+	}
+	m.status = fmt.Sprintf("%d/%d matches%s%s · tab scope", cur+1, total, scope, hits)
+}
+
+// searchQueryForStatus returns the query the status tally should count against:
+// the live prompt text while typing, else the confirmed query in results mode.
+func (m *model) searchQueryForStatus() string {
+	if m.mode == modeSearch {
+		return m.input.Value()
+	}
+	return m.searchQuery
+}
+
+// clampPanelScroll keeps the selected panel row within the visible window.
+func (m *model) clampPanelScroll() {
+	h := m.panelHeight()
+	if m.searchPanelIdx < m.searchPanelTop {
+		m.searchPanelTop = m.searchPanelIdx
+	}
+	if m.searchPanelIdx >= m.searchPanelTop+h {
+		m.searchPanelTop = m.searchPanelIdx - h + 1
+	}
+	if m.searchPanelTop < 0 {
+		m.searchPanelTop = 0
+	}
+}
+
+// panelHeight is the number of result rows the panel shows at once.
+func (m *model) panelHeight() int {
+	h := m.height / 3
+	if h < 3 {
+		h = 3
+	}
+	if h > 10 {
+		h = 10
+	}
+	return h
+}
+
+// tempUnwrapForMatch temporarily expands the current match's node when its
+// matched substring would be hidden by truncation, so n/N (and Enter) always
+// reveal the matched text. Any prior temporary unwrap is restored first. It only
+// unwraps when the node is not already user-expanded, and records the key so the
+// original (wrapped) state is restored when the match stops being current.
+func (m *model) tempUnwrapForMatch(it *board.Item, ranges [][2]int) {
+	m.clearTempUnwrap()
+	if it == nil || len(ranges) == 0 {
+		return
+	}
+	end := 0
+	for _, r := range ranges {
+		if r[1] > end {
+			end = r[1]
+		}
+	}
+	if it.Urgent {
+		end += 3 // "!! " prefix shifts the displayed text right
+	} else if it.Pinned {
+		end += 5 // "!pin " prefix
+	}
+	if m.mapView {
+		key, ok := m.itemMapKey(it)
+		if !ok || end <= mapNodeMaxWidth || m.mapExpanded[key] {
+			return
+		}
+		if m.mapExpanded == nil {
+			m.mapExpanded = map[string]bool{}
+		}
+		m.mapExpanded[key] = true
+		m.searchUnwrapKey = key
+		m.searchUnwrapMap = true
+		m.mp = nil
+		return
+	}
+	raw := it.Raw()
+	avail := m.width - m.itemHang(it)
+	if end < avail || m.listExpanded[raw] {
+		return
+	}
+	if m.listExpanded == nil {
+		m.listExpanded = map[string]bool{}
+	}
+	m.listExpanded[raw] = true
+	m.searchUnwrapKey = raw
+	m.searchUnwrapMap = false
+}
+
+// clearTempUnwrap restores a node unwrapped only for the current match.
+func (m *model) clearTempUnwrap() {
+	if m.searchUnwrapKey == "" {
+		return
+	}
+	if m.searchUnwrapMap {
+		delete(m.mapExpanded, m.searchUnwrapKey)
+		m.mp = nil
+	} else {
+		delete(m.listExpanded, m.searchUnwrapKey)
+	}
+	m.searchUnwrapKey = ""
+	m.searchUnwrapMap = false
+}
+
+// itemHang returns the outline hang column (gutter + indent + marker) for it,
+// matching renderItem's layout, so tempUnwrapForMatch can tell whether a matched
+// substring falls beyond the truncation width.
+func (m *model) itemHang(it *board.Item) int {
+	depth := 0
+	for _, p := range m.positions {
+		if p.item == it {
+			depth = p.depth
+			break
+		}
+	}
+	return 2 + depth*2 + len("[ ]") + 1
 }
 
 // jumpToMatch moves the active view onto item it, revealing it through any

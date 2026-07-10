@@ -232,6 +232,14 @@ func (m *model) viewBoard() string {
 	footer := m.viewFooter()
 	footerH := lipgloss.Height(footer)
 
+	// Results panel (search prompt open or results mode): a fuzzy-ranked list
+	// rendered between the body and the footer. It reserves its own rows.
+	panel := m.viewSearchPanel()
+	panelH := 0
+	if panel != "" {
+		panelH = lipgloss.Height(panel)
+	}
+
 	// Reserve a sticky header: title row + a blank separator (preserving the
 	// current rhythm), degrading to just the title row on a tiny viewport.
 	headerH := 2
@@ -240,7 +248,7 @@ func (m *model) viewBoard() string {
 	}
 
 	// Scroll the body so the cursor stays visible.
-	bodyH := m.height - headerH - footerH
+	bodyH := m.height - headerH - footerH - panelH
 	if bodyH < 3 {
 		bodyH = 3
 	}
@@ -287,7 +295,67 @@ func (m *model) viewBoard() string {
 	if headerH == 2 {
 		header += "\n"
 	}
+	if panel != "" {
+		return header + "\n" + body + "\n" + panel + "\n" + footer
+	}
 	return header + "\n" + body + "\n" + footer
+}
+
+// viewSearchPanel renders the fuzzy-ranked results list shown while the search
+// prompt is open or results mode is live. Returns "" when there is nothing to
+// show. Each row is "<section> <text>" with matched characters accented; the
+// selected row is reverse-highlighted. The panel does not move or reveal the
+// board — it is a preview list; Enter / n / N do the jumping.
+func (m *model) viewSearchPanel() string {
+	show := m.mode == modeSearch || m.searchActive
+	if !show || len(m.searchResults) == 0 {
+		return ""
+	}
+	h := m.panelHeight()
+	top := m.searchPanelTop
+	if top < 0 {
+		top = 0
+	}
+	end := min(len(m.searchResults), top+h)
+	labelW := 0
+	for _, r := range m.searchResults {
+		if w := lipgloss.Width(r.section); w > labelW {
+			labelW = w
+		}
+	}
+	if labelW > 12 {
+		labelW = 12
+	}
+	q := m.searchHighlight()
+	var lines []string
+	title := styleDim.Render(fmt.Sprintf("── results %d/%d ──", m.searchPanelIdx+1, len(m.searchResults)))
+	lines = append(lines, title)
+	for i := top; i < end; i++ {
+		r := m.searchResults[i]
+		selected := i == m.searchPanelIdx
+		label := ansi.Truncate(r.section, labelW, "")
+		label = label + strings.Repeat(" ", labelW-lipgloss.Width(label))
+		base := lipgloss.NewStyle()
+		labelStyle := styleDim
+		prefix := "  "
+		if selected {
+			prefix = styleCursor.Render("> ")
+			base = base.Foreground(lipgloss.Color("252")).Reverse(true).Bold(true)
+			labelStyle = base
+		}
+		textAvail := m.width - 2 - labelW - 1
+		if textAvail < 1 {
+			textAvail = 1
+		}
+		text := ansi.Truncate(r.item.DisplayText(), textAvail, "…")
+		row := prefix + labelStyle.Render(label) + " " + highlightSegment(text, base, q)
+		lines = append(lines, row)
+	}
+	// Pad to a fixed height so the footer stays anchored.
+	for len(lines) < h+1 {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // sectionItemCount counts the parsed items in a section's whole tree (replies
@@ -582,7 +650,11 @@ func (m *model) viewFooter() string {
 		return labelStyle.Render(label+": ") + m.input.View()
 	}
 	if m.mode == modeSearch {
-		return styleStatus.Render("search: ") + m.input.View()
+		scope := "[working]"
+		if m.searchScopeAll {
+			scope = "[all]"
+		}
+		return styleStatus.Render("search: ") + m.input.View() + "  " + styleDim.Render(scope+" tab scope")
 	}
 	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter collapse · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
@@ -663,7 +735,7 @@ func (m *model) viewHelp() string {
 		{"j / k, up / down", "move cursor"},
 		{"tab / shift-tab", "next / previous section"},
 		{"1 - 9", "jump to the Nth section"},
-		{"/", "incremental search (both views); n/N next/prev, resuming the last term after Esc; tab toggles scope (working set vs Archive+Log)"},
+		{"/", "incremental search (both views): a ranked results panel opens as you type (the board doesn't move); ↑/↓ (ctrl+p/ctrl+n) pick a row, enter jumps to it and closes search; n/N step matches (document order), resuming the last term after Esc; tab toggles scope (working set vs Archive+Log)"},
 		{"a", "add item to current section"},
 		{"A", "add sections (multi-select overlay)"},
 		{"R", "reply in thread (sibling on a reply; starts the thread on an item)"},

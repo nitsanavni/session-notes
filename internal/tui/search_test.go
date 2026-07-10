@@ -96,23 +96,35 @@ func TestSearchScopeExcludesArchiveAndLog(t *testing.T) {
 	}
 }
 
-func TestSearchIncrementalJumpsToFirstMatch(t *testing.T) {
+// TestSearchNoRevealUntilEnter: while typing, the panel populates but the board
+// does NOT move (no-reveal-until-jump). Enter jumps to the selected (best-ranked)
+// match.
+func TestSearchNoRevealUntilEnter(t *testing.T) {
 	m := newTestModel(searchBoard, 80, 40)
 	m.cursor = 0 // on the Plan header
 	typeSearch(m, "beta")
+	if len(m.searchResults) == 0 {
+		t.Fatal("panel should be populated while typing")
+	}
+	if m.cursor != 0 {
+		t.Errorf("board moved while typing (cursor=%d); no-reveal violated", m.cursor)
+	}
+	// Enter jumps to the selected panel row.
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
 	it := m.currentItem()
 	if it == nil || it.DisplayText() != "beta task" {
-		t.Fatalf("cursor did not land on first match; on %v", it)
+		t.Fatalf("Enter did not land on the match; on %v", it)
 	}
 }
 
 func TestSearchNextWrapsAndReportsCount(t *testing.T) {
 	m := newTestModel(searchBoard, 80, 40)
 	typeSearch(m, "alpha")
-	// Confirm the search (enter) to enable n/N.
+	// Enter selects the best-ranked row and CLOSES search (commit); n/N recall
+	// then resumes stepping from that landing position.
 	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if !m.searchActive {
-		t.Fatal("search not active after enter")
+	if m.searchActive {
+		t.Fatal("selecting a row should close search (not stay in results mode)")
 	}
 	first := m.currentItem().DisplayText()
 	if first != "alpha task" {
@@ -152,8 +164,14 @@ func TestSearchRevealsCollapsedSection(t *testing.T) {
 		}
 	}
 	typeSearch(m, "ALPHA idea")
+	// No-reveal: typing must NOT expand the collapsed section.
+	if !m.sectionCollapsed("Ideas") {
+		t.Error("typing revealed the collapsed section; no-reveal violated")
+	}
+	// Enter jumps: only now does the collapsed section reveal + land.
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.sectionCollapsed("Ideas") {
-		t.Error("Ideas still collapsed after matching inside it")
+		t.Error("Ideas still collapsed after jumping into it")
 	}
 	if it := m.currentItem(); it == nil || it.DisplayText() != "ALPHA idea" {
 		t.Fatalf("cursor did not reveal+land on the collapsed match; on %v", it)
@@ -164,9 +182,10 @@ func TestSearchEscRestoresCursor(t *testing.T) {
 	m := newTestModel(searchBoard, 80, 40)
 	m.cursor = 1 // some deliberate starting stop
 	start := m.cursor
-	typeSearch(m, "idea") // jumps away to ALPHA idea
-	if m.cursor == start {
-		t.Fatal("precondition: search should have moved the cursor")
+	typeSearch(m, "idea") // populates the panel; board stays put (no-reveal)
+	m.movePanel(1)        // navigate the panel — still no board move
+	if m.cursor != start {
+		t.Fatalf("panel navigation moved the board (cursor=%d); no-reveal violated", m.cursor)
 	}
 	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.cursor != start {
@@ -174,6 +193,167 @@ func TestSearchEscRestoresCursor(t *testing.T) {
 	}
 	if m.searchActive {
 		t.Error("esc should leave search inactive")
+	}
+}
+
+// TestFuzzyScoreTierOrder: an exact substring beats a word-boundary subsequence,
+// which beats a loose subsequence. All three still match "abc".
+func TestFuzzyScoreTierOrder(t *testing.T) {
+	exact, _, ok1 := fuzzyScore("abc here", "abc")
+	wordBnd, _, ok2 := fuzzyScore("abx bce cxx", "abc") // a..b at word starts, subsequence
+	loose, _, ok3 := fuzzyScore("xaxbxc", "abc")        // buried subsequence, no boundary
+	if !ok1 || !ok2 || !ok3 {
+		t.Fatalf("all should match: %v %v %v", ok1, ok2, ok3)
+	}
+	if !(exact > wordBnd && wordBnd > loose) {
+		t.Errorf("tier order wrong: exact=%d wordBnd=%d loose=%d", exact, wordBnd, loose)
+	}
+	if _, _, ok := fuzzyScore("no match", "abc"); ok {
+		t.Error("non-subsequence should not match")
+	}
+}
+
+// TestFuzzyScoreEarlierPositionWins: for equal tier/contiguity, an earlier match
+// position scores higher.
+func TestFuzzyScoreEarlierPositionWins(t *testing.T) {
+	early, _, _ := fuzzyScore("foo bar", "foo")
+	late, _, _ := fuzzyScore("xxxxxxx foo", "foo")
+	if early <= late {
+		t.Errorf("earlier match should win: early=%d late=%d", early, late)
+	}
+}
+
+// TestSearchRankedExactBeatsLoose: the ranked panel orders an exact substring
+// match ahead of a merely-subsequence one, regardless of document order.
+func TestSearchRankedExactBeatsLoose(t *testing.T) {
+	src := "---\ntitle: T\n---\n" +
+		"## Plan\n" +
+		"- [ ] a big cat sat\n" + // "abc" only as a loose subsequence
+		"- [ ] abcdef exact\n" // contains "abc" verbatim
+	b := board.Parse(src)
+	got := searchRanked(b, "abc", false)
+	if len(got) != 2 {
+		t.Fatalf("want 2 ranked results, got %d", len(got))
+	}
+	if got[0].item.DisplayText() != "abcdef exact" {
+		t.Errorf("exact substring should rank first, got %q", got[0].item.DisplayText())
+	}
+}
+
+// TestSearchRankedWorkingAboveArchive: with scope=all, working-set sections rank
+// above Archive/Log even when the Archive match scores higher on position.
+func TestSearchRankedWorkingAboveArchive(t *testing.T) {
+	src := "---\ntitle: T\n---\n" +
+		"## Archive\n- widget\n" + // exact, position 0
+		"## Plan\n- [ ] a widget here\n"
+	b := board.Parse(src)
+	got := searchRanked(b, "widget", true)
+	if len(got) != 2 {
+		t.Fatalf("want 2, got %d", len(got))
+	}
+	if !got[0].working || got[0].section != "Plan" {
+		t.Errorf("working section should rank first, got section=%q working=%v", got[0].section, got[0].working)
+	}
+}
+
+// TestSearchPanelNavAndEnterSyncsCursor: Up/Down move the panel selection without
+// moving the board; Enter on the selected row jumps the board cursor to it.
+func TestSearchPanelNavAndEnterSyncsCursor(t *testing.T) {
+	m := newTestModel(searchBoard, 80, 40)
+	m.cursor = 0
+	typeSearch(m, "alpha") // 3 ranked results
+	if len(m.searchResults) != 3 {
+		t.Fatalf("want 3 results, got %d", len(m.searchResults))
+	}
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyDown}) // panel -> row 1
+	if m.searchPanelIdx != 1 {
+		t.Errorf("Down did not move panel selection: idx=%d", m.searchPanelIdx)
+	}
+	if m.cursor != 0 {
+		t.Errorf("panel navigation moved the board (cursor=%d)", m.cursor)
+	}
+	want := m.searchResults[1].item.DisplayText()
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if it := m.currentItem(); it == nil || it.DisplayText() != want {
+		t.Errorf("Enter did not sync board to selected row %q, got %v", want, it)
+	}
+}
+
+// TestSearchNextSyncsPanel: in results mode, n steps the board (document order)
+// and keeps the panel's highlighted row pointed at the same item.
+func TestSearchNextSyncsPanel(t *testing.T) {
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m.searchNext(1)
+	cur := m.currentItem()
+	if cur == nil {
+		t.Fatal("no current item after n")
+	}
+	if m.searchResults[m.searchPanelIdx].item != cur {
+		t.Errorf("panel row out of sync with board after n: panel=%q board=%q",
+			m.searchResults[m.searchPanelIdx].item.DisplayText(), cur.DisplayText())
+	}
+}
+
+// TestSearchTempUnwrapCurrentMatch: when a match's text is long enough that the
+// matched substring is truncated off-screen, stepping onto it temporarily
+// unwraps that node; stepping away restores its wrapped state.
+func TestSearchTempUnwrapCurrentMatch(t *testing.T) {
+	long := strings.Repeat("x", 100) + " needle"
+	src := "---\ntitle: T\n---\n## Plan\n- [ ] " + long + "\n- [ ] needle short\n"
+	m := newTestModel(src, 40, 40) // narrow: the first needle is beyond the clip
+	typeSearch(m, "needle")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter}) // jump to best match
+	// Find the long item and step onto it via n/N until current.
+	var longRaw string
+	for _, p := range m.positions {
+		if p.item != nil && strings.Contains(p.item.DisplayText(), "xxxx") {
+			longRaw = p.item.Raw()
+		}
+	}
+	if longRaw == "" {
+		t.Fatal("could not find the long item")
+	}
+	// Step through matches until the long item is current.
+	unwrapped := false
+	for i := 0; i < 4; i++ {
+		if m.currentItem() != nil && m.currentItem().Raw() == longRaw {
+			if m.listExpanded[longRaw] {
+				unwrapped = true
+			}
+			break
+		}
+		m.searchNext(1)
+	}
+	if m.currentItem() != nil && m.currentItem().Raw() == longRaw && !m.listExpanded[longRaw] {
+		t.Error("current long match should be temporarily unwrapped to reveal the needle")
+	}
+	_ = unwrapped
+	// Step away: the temporary unwrap is restored.
+	m.searchNext(1)
+	if m.currentItem() != nil && m.currentItem().Raw() != longRaw && m.listExpanded[longRaw] {
+		t.Error("temporary unwrap should be restored after stepping past the match")
+	}
+}
+
+// TestSearchHitCountInStatus: a term occurring several times inside one node is
+// counted as multiple "hits" even though it is one match node, and the status
+// surfaces the hit tally when it exceeds the node count.
+func TestSearchHitCountInStatus(t *testing.T) {
+	src := "---\ntitle: T\n---\n## Plan\n- [ ] widget widget widget here\n- [ ] one widget\n"
+	m := newTestModel(src, 80, 40)
+	typeSearch(m, "widget") // 2 nodes, 3+1 = 4 literal hits
+	if got := searchHitCount(m.searchResults, "widget"); got != 4 {
+		t.Errorf("hit count = %d, want 4", got)
+	}
+	if !strings.Contains(m.status, "· 4 hits") {
+		t.Errorf("status should surface the hit tally: %q", m.status)
+	}
+	// When hits == node count, the hits clause is omitted.
+	typeSearch(m, "one")
+	if strings.Contains(m.status, "hits") {
+		t.Errorf("status should omit hits when they equal the node count: %q", m.status)
 	}
 }
 
@@ -206,17 +386,25 @@ func TestSearchHighlightOutline(t *testing.T) {
 	}
 }
 
-// TestSearchResultsModeSticky: after Enter, the search enters a persistent
-// results mode. Ordinary navigation (n/N, and plain moves like j) keeps the
-// highlight + query alive; only Esc clears it. This is the "too easy to get out
-// of search" fix.
+// TestSearchResultsModeSticky: selecting a row (Enter) CLOSES search (highlights
+// clear). Pressing n then re-activates via recall into a persistent results
+// mode where ordinary navigation (n/N, and plain moves like j) keeps the
+// highlight + query alive and only Esc clears it.
 func TestSearchResultsModeSticky(t *testing.T) {
 	forceColor(t)
 	m := newTestModel(searchBoard, 80, 40)
 	typeSearch(m, "alpha")
-	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter}) // confirm: results mode
-	if !strings.Contains(m.viewBoard(), searchTint) {
-		t.Fatal("expected highlight to persist after enter (results mode)")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter}) // select + close
+	if m.searchActive {
+		t.Fatal("Enter should close search (commit), not enter results mode")
+	}
+	if strings.Contains(m.viewBoard(), searchTint) {
+		t.Fatal("highlights should clear on select")
+	}
+	// n re-activates the last term (recall) into sticky results mode.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if !m.searchActive || !strings.Contains(m.viewBoard(), searchTint) {
+		t.Fatal("n should re-activate sticky results mode with highlights")
 	}
 	// n keeps results mode (and highlight) alive.
 	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
@@ -260,16 +448,12 @@ func TestSearchLastTermRecall(t *testing.T) {
 	if !m.searchPrefilled {
 		t.Error("recalled term should be marked prefilled (replaceable)")
 	}
-	// Enter reuses the recalled term as-is.
+	// Enter reuses the recalled term as-is (selects + closes; term remembered).
 	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if !m.searchActive || m.searchQuery != "alpha" {
-		t.Errorf("Enter on recalled term did not confirm alpha (active=%v q=%q)", m.searchActive, m.searchQuery)
+	if m.searchActive || m.searchLastTerm != "alpha" {
+		t.Errorf("Enter on recalled term did not commit alpha (active=%v last=%q)", m.searchActive, m.searchLastTerm)
 	}
-	// Esc, then n with no active search re-activates the last term.
-	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.searchActive {
-		t.Fatal("precondition: esc should clear before recall-via-n")
-	}
+	// n with no active search re-activates the last term.
 	if !m.searchNext(1) {
 		t.Fatal("n with no active search should re-activate the last term")
 	}
@@ -348,6 +532,7 @@ func TestSearchHighlightMap(t *testing.T) {
 func TestSearchMapJumpFocusesMatch(t *testing.T) {
 	m := newMapModel(t, searchBoard, 120, 40)
 	typeSearch(m, "gamma")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
 	it := m.itemForKey(m.mapFocusKey)
 	if it == nil || it.DisplayText() != "gamma topic" {
 		t.Fatalf("map focus key %q did not resolve to gamma topic (got %v)", m.mapFocusKey, it)
@@ -367,8 +552,9 @@ func TestSearchEscRestoresMapRoot(t *testing.T) {
 		t.Fatal("focusIn did not set a map focus root")
 	}
 
-	// gamma lives in Threads, outside the Plan subtree, so jumpToMatch clears root.
+	// gamma lives in Threads, outside the Plan subtree, so jumping clears root.
 	typeSearch(m, "gamma")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.mapFocusRoot == savedRoot {
 		t.Fatal("search to an out-of-subtree match did not clear the focus root (test precondition)")
 	}
@@ -402,6 +588,7 @@ func TestMapUrgentToggle(t *testing.T) {
 func TestSearchMapRevealsFoldedReply(t *testing.T) {
 	m := newMapModel(t, searchBoard, 120, 40)
 	typeSearch(m, "alpha reply")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
 	it := m.itemForKey(m.mapFocusKey)
 	if it == nil || it.DisplayText() != "claude: alpha reply here" {
 		t.Fatalf("map focus did not reveal the folded reply (got %v)", it)

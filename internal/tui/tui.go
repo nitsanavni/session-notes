@@ -210,6 +210,19 @@ type model struct {
 	// (everything except the Archive and Log sections) to every section.
 	// Toggled with ctrl+s while the prompt is open; persists per session.
 	searchScopeAll bool
+	// searchResults holds the fuzzy-ranked panel rows (best-first) for the current
+	// query — the scrollable results list shown while the prompt is open and in
+	// results mode. searchPanelIdx is the highlighted row within it (Up/Down /
+	// ctrl+n/ctrl+p move it; Enter jumps to that match). It is kept in sync with
+	// n/N: stepping the board selection re-highlights the matching row.
+	searchResults  []searchResult
+	searchPanelIdx int
+	searchPanelTop int // top row offset for scrolling the panel
+	// searchUnwrapKey holds the raw source line (outline) or node key (map) of the
+	// CURRENT match that was temporarily unwrapped to reveal a matched substring
+	// hidden by truncation. Restored when n/N moves past it or search ends.
+	searchUnwrapKey string
+	searchUnwrapMap bool // the temporary unwrap targets a map node (else outline)
 
 	// updateHint is a dim, text-only "newer release available" notice shown in
 	// the picker and dashboard footers. Populated asynchronously by
@@ -811,6 +824,12 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	if m.clearSearchOnEsc(msg.String()) {
+		return m, nil
+	}
+	// In results mode, Tab toggles the search scope (not the section) and n/N step
+	// matches while keeping the panel row in sync.
+	if m.searchActive && msg.String() == "tab" {
+		m.toggleSearchScope()
 		return m, nil
 	}
 	switch msg.String() {

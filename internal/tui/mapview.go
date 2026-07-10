@@ -987,6 +987,10 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.clearSearchOnEsc(key) {
 		return m, nil
 	}
+	if m.searchActive && key == "tab" {
+		m.toggleSearchScope()
+		return m, nil
+	}
 	// Surprise recorder: capture a replayable before-state for map actions so
 	// `!` can attach the recent trail to a feedback note (see feedback.go).
 	var before *feedbackState
@@ -1553,7 +1557,12 @@ func (m *model) viewMap() string {
 	if crumbLine != "" {
 		headerH = 2
 	}
-	bodyH := m.height - headerH - footerH
+	panel := m.viewSearchPanel()
+	panelH := 0
+	if panel != "" {
+		panelH = lipgloss.Height(panel)
+	}
+	bodyH := m.height - headerH - footerH - panelH
 	if bodyH < 3 {
 		bodyH = 3
 	}
@@ -1675,6 +1684,9 @@ func (m *model) viewMap() string {
 	header := styleTitle.Render(ansi.Truncate(boardTitle(m.board), titleW, "")) + idTag
 	if crumbLine != "" {
 		header += "\n" + crumbLine
+	}
+	if panel != "" {
+		return header + "\n" + strings.Join(lines, "\n") + "\n" + panel + "\n" + footer
 	}
 	return header + "\n" + strings.Join(lines, "\n") + "\n" + footer
 }
