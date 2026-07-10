@@ -79,6 +79,10 @@ type model struct {
 	// historyScroll is the top line offset of the read-only history overlay (H).
 	historyScroll int
 
+	// helpScroll is the top line offset of the help overlay (?) so the key list
+	// stays reachable on short terminals (j/k/arrows scroll it).
+	helpScroll int
+
 	// collapsed holds per-section collapse-state overrides, keyed by section
 	// TITLE (not index) so the state survives reparses — reload, rebase, undo —
 	// which rebuild the section slice. A missing key means the section is in
@@ -192,6 +196,14 @@ type model struct {
 	// that the first edit keystroke should replace wholesale.
 	searchLastTerm  string
 	searchPrefilled bool
+	// searchLastIdx remembers the match index the last search session left off on,
+	// so re-activating via n/N resumes from there (n -> the next match after that
+	// point, N -> the previous) rather than jumping back to the top.
+	searchLastIdx int
+	// searchScopeAll widens the search scope from the default working set
+	// (everything except the Archive and Log sections) to every section.
+	// Toggled with ctrl+s while the prompt is open; persists per session.
+	searchScopeAll bool
 
 	// updateHint is a dim, text-only "newer release available" notice shown in
 	// the picker and dashboard footers. Populated asynchronously by
@@ -743,8 +755,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeLinkPick:
 		return m.handleLinkPickKey(msg)
 	case modeHelp:
-		m.mode = m.prevMode
-		return m, nil
+		return m.handleHelpKey(msg)
 	case modeHistory:
 		return m.handleHistoryKey(msg)
 	}
@@ -1019,6 +1030,28 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp
+		m.helpScroll = 0
+	}
+	return m, nil
+}
+
+// handleHelpKey drives the help overlay (?): j/k (and arrows) scroll, g/G jump
+// to the top/bottom, anything else returns to the previous view. The bottom
+// clamp lives in viewHelp, which knows the rendered line count.
+func (m *model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		m.helpScroll++
+	case "k", "up":
+		if m.helpScroll > 0 {
+			m.helpScroll--
+		}
+	case "g":
+		m.helpScroll = 0
+	case "G":
+		m.helpScroll = 1 << 30 // clamped to the last page in viewHelp
+	default:
+		m.mode = m.prevMode
 	}
 	return m, nil
 }

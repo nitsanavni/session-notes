@@ -637,14 +637,14 @@ func (m *model) viewHelp() string {
 		{"q / esc", "quit"},
 		{"?", "close help"},
 	}
-	var b strings.Builder
-	b.WriteString(styleTitle.Render("session-notes — keys") + "\n\n")
+	var lines []string
+	lines = append(lines, styleTitle.Render("session-notes — keys"), "")
 	for _, k := range keys {
-		b.WriteString(fmt.Sprintf("  %s%s\n", styleKey.Render(fmt.Sprintf("%-20s", k[0])), k[1]))
+		lines = append(lines, fmt.Sprintf("  %s%s", styleKey.Render(fmt.Sprintf("%-20s", k[0])), k[1]))
 	}
-	b.WriteString("\n" + styleSection.Render("Statuses") + ": " +
-		styleMarker.Render("[ ]") + " open · " + styleInProg.Render("[>]") + " in progress · " +
-		styleDone.Render("[x]") + " done · " + styleBlocked.Render("[?]") + " blocked\n")
+	lines = append(lines, "", styleSection.Render("Statuses")+": "+
+		styleMarker.Render("[ ]")+" open · "+styleInProg.Render("[>]")+" in progress · "+
+		styleDone.Render("[x]")+" done · "+styleBlocked.Render("[?]")+" blocked")
 	notes := []string{
 		"Section headers are cursor stops: " + styleKey.Render("d") + " there archives the whole section (its items",
 		"move to ## Archive), " + styleKey.Render("D") + " hard-deletes it. Archive and Log can't be archived.",
@@ -665,10 +665,27 @@ func (m *model) viewHelp() string {
 		"Undo/redo track the last 100 changes; an external edit is kept in history too,",
 		"so undo steps back over it rather than clobbering the other party's write.",
 	}
+	lines = append(lines, "")
 	for _, n := range notes {
-		b.WriteString(styleDim.Render("") + n + "\n")
+		lines = append(lines, styleDim.Render("")+n)
 	}
-	b.WriteString("\n" + styleHelpBar.Render("press any key to return"))
+
+	// Scroll window: reserve rows for the title padding (2) and footer (2), so
+	// the whole list stays reachable on short terminals (j/k/arrows scroll).
+	bodyH := max(1, m.height-4)
+	maxScroll := max(0, len(lines)-bodyH)
+	if m.helpScroll > maxScroll {
+		m.helpScroll = maxScroll
+	}
+	start := m.helpScroll
+	end := min(len(lines), start+bodyH)
+	var b strings.Builder
+	b.WriteString(strings.Join(lines[start:end], "\n"))
+	bar := "j/k/arrows scroll · g/G top/bottom · any other key returns"
+	if maxScroll > 0 {
+		bar = scrollReadout(m.helpScroll, start+1, end, len(lines)) + "  " + bar
+	}
+	b.WriteString("\n\n" + styleHelpBar.Render(bar))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 

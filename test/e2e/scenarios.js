@@ -912,7 +912,7 @@ run({
     await t.key('Enter');
     let s = await t.searchState();
     t.assert(s.lastTerm === 'legacy', `last term remembered (got ${JSON.stringify(s)})`);
-    t.assert(/^\d+\/\d+ matches$/.test(s.status), `count shown (got ${JSON.stringify(s.status)})`);
+    t.assert(/^\d+\/\d+ matches\b/.test(s.status), `count shown (got ${JSON.stringify(s.status)})`);
     // Clear, then `/` recalls the term pre-filled + selected, live-previewed.
     await t.key('Escape');
     await t.key('/');
@@ -931,6 +931,22 @@ run({
     await t.key('n');
     s = await t.searchState();
     t.assert(s.active && s.query === 'legacy', `n re-activated last term (got ${JSON.stringify(s)})`);
+  },
+
+  'search: default scope excludes Log; ctrl+s widens to everything': async t => {
+    await t.open();
+    await t.key('/');
+    await t.type('session'); // "wire sessions" (Plan) + "session started" (Log)
+    let s = await t.searchState();
+    // Default working-set scope skips the Log line (status is live even before Enter).
+    t.assert(!s.scopeAll && /\/1 matches \(working set\)/.test(s.status),
+      `working-set scope excludes Log (got ${JSON.stringify(s)})`);
+    // ctrl+s widens to everything → the Log match appears (1/2 now).
+    await t.page.keyboard.down('Control'); await t.page.keyboard.press('s'); await t.page.keyboard.up('Control');
+    s = await t.searchState();
+    t.assert(s.scopeAll && /\/2 matches \(all\)/.test(s.status),
+      `ctrl+s widened scope to include Log (got ${JSON.stringify(s)})`);
+    await t.key('Escape');
   },
 
   // Which side of the center the focused map node sits on (1 right, -1 left),
@@ -1285,5 +1301,46 @@ run({
     w = await t.page.evaluate(() => window.__sn.width);
     t.assert(w.mode === 'custom' && w.px === dragged,
       `custom drag width persisted after reload (got ${JSON.stringify(w)})`);
+  },
+
+  'map view centers its content vertically in the viewport': async t => {
+    await t.open();
+    await t.key('m');
+    await t.settled();
+    const r = await t.page.evaluate(() => {
+      const view = document.getElementById('mapview');
+      const canvas = document.getElementById('mapcanvas');
+      const center = document.querySelector('.mapnode.center');
+      const vr = view.getBoundingClientRect();
+      const cr = center.getBoundingClientRect();
+      return {
+        canvasH: canvas.offsetHeight, viewH: view.clientHeight,
+        viewMidY: vr.top + vr.height / 2, centerMidY: cr.top + cr.height / 2,
+      };
+    });
+    // The canvas is grown to at least fill the viewport so short trees center
+    // instead of pinning to the top.
+    t.assert(r.canvasH >= r.viewH, `canvas fills the viewport height (${r.canvasH} >= ${r.viewH})`);
+    // The center node lands near the vertical middle of the map viewport.
+    t.assert(Math.abs(r.centerMidY - r.viewMidY) < r.viewH / 4,
+      `center node is vertically centered (Δ=${Math.round(Math.abs(r.centerMidY - r.viewMidY))}, viewH=${r.viewH})`);
+  },
+
+  'help overlay scrolls with the keyboard and ? closes it': async t => {
+    await t.open();
+    await t.key('?');
+    await t.page.waitForSelector('#helpmodal.open');
+    // The key list overflows the panel, so the body must scroll.
+    const overflow = await t.page.$eval('#helpbody', e => e.scrollHeight - e.clientHeight);
+    t.assert(overflow > 0, `help body overflows and is scrollable (slack=${overflow})`);
+    const before = await t.page.$eval('#helpbody', e => e.scrollTop);
+    await t.key('j', 6);
+    const after = await t.page.$eval('#helpbody', e => e.scrollTop);
+    t.assert(after > before, `j scrolls the help body down (before=${before}, after=${after})`);
+    await t.key('k', 3);
+    const upped = await t.page.$eval('#helpbody', e => e.scrollTop);
+    t.assert(upped < after, `k scrolls the help body up (after=${after}, upped=${upped})`);
+    await t.key('?');
+    await t.page.waitForFunction(() => !document.querySelector('#helpmodal.open'), null, { timeout: 3000 });
   },
 });

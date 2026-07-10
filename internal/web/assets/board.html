@@ -156,6 +156,9 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 }
 .modal button:hover { border-color: var(--accent); }
 #helpmodal .panel { width: min(560px, 92vw); }
+/* The key list can outgrow short viewports — let it scroll (j/k/arrows) rather
+   than clip. The panel is already max-height:88vh; this body takes the slack. */
+#helpbody { overflow-y: auto; flex: 1; min-height: 0; outline: none; }
 #histmodal .panel { width: min(640px, 92vw); }
 #histlist { overflow-y: auto; font-size: .88em; }
 #histlist .hentry { margin-bottom: .55rem; }
@@ -294,8 +297,8 @@ body.mapmode #mapwrap { display: block; }
 </div></div>
 
 <div class="modal" id="helpmodal"><div class="panel">
-  <div class="bar"><b>keys</b><button id="helpclose">close</button></div>
-  <table>
+  <div class="bar"><b>keys</b><span class="dim">j/k/arrows scroll · esc / ? close</span><button id="helpclose">close</button></div>
+  <div id="helpbody" tabindex="0"><table>
     <tr><td>j / k</td><td>move cursor down / up</td></tr>
     <tr><td>tab / shift-tab</td><td>next / previous section</td></tr>
     <tr><td>1 … 9</td><td>jump to the Nth section</td></tr>
@@ -330,7 +333,7 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>W</td><td>outline width — cycle narrow / wide / full (drag a side grip for a
       custom width; double-click a grip to reset)</td></tr>
     <tr><td>?</td><td>this help</td></tr>
-  </table>
+  </table></div>
 </div></div>
 
 <script>
@@ -1877,6 +1880,13 @@ let searchHL = '';
 // searchLastTerm remembers the most recent query (per session, in-memory) so `/`
 // pre-fills it (selected/replaceable) and n/N re-activate it with no active search.
 let searchLastTerm = '';
+// searchScopeAll widens the search scope from the default working set (all
+// sections except Archive and Log) to every section. Toggled with ctrl+s in the
+// prompt; persists per session.
+let searchScopeAll = false;
+// searchLastIdx remembers the match index the last search session ended on, so
+// re-activating via n/N resumes from there instead of the top.
+let searchLastIdx = 0;
 
 // searchHit reports whether an item matches the active highlight query.
 function searchHit(it) {
@@ -1915,6 +1925,11 @@ function endSearch() {
 
 // searchMatches: every non-continuation item whose text contains q (case-
 // insensitive), in document order across all sections, replies included.
+// searchScopeExcluded: sections outside the default "working set" scope. Archive
+// and Log are noisy and rarely the jump target, so search skips them unless the
+// scope is widened (ctrl+s) — keeps a search from dragging focus / the Log ring
+// into them.
+function searchScopeExcluded(title) { return title === 'Archive' || title === 'Log'; }
 function searchMatches(q) {
   q = (q || '').trim().toLowerCase();
   if (!q || !cur) return [];
@@ -1925,7 +1940,10 @@ function searchMatches(q) {
       walk(it.children, section);
     }
   };
-  for (const sec of cur.sections || []) walk(sec.items, sec.title);
+  for (const sec of cur.sections || []) {
+    if (!searchScopeAll && searchScopeExcluded(sec.title)) continue;
+    walk(sec.items, sec.title);
+  }
   return out;
 }
 
@@ -1956,8 +1974,10 @@ function jumpMatchMap(m) {
 // setSearchStatus writes the tally to the persistent slot (not the auto-clearing
 // toast) so it stays visible through follow mode and n/N stepping.
 function setSearchStatus(total) {
+  searchLastIdx = searchIdx; // remember where a later n/N recall should resume
   const e = document.getElementById('searchstatus');
-  e.textContent = `${searchIdx + 1}/${total} matches`;
+  const scope = searchScopeAll ? '(all)' : '(working set)';
+  e.textContent = `${searchIdx + 1}/${total} matches ${scope} · ^s scope`;
   e.classList.add('show');
 }
 function clearSearchStatus() {
@@ -1984,6 +2004,13 @@ function startSearch() {
   inp.oninput = runQuery;
   inp.onkeydown = e => {
     e.stopPropagation();
+    if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) {
+      // Toggle scope (working set <-> everything) live, without leaving the prompt.
+      e.preventDefault();
+      searchScopeAll = !searchScopeAll;
+      runQuery();
+      return;
+    }
     if (e.key === 'Enter') { const v = inp.value; closeSearchPrompt(); confirmSearch(v); }
     else if (e.key === 'Escape') { closeSearchPrompt(); cancelSearch(); }
   };
@@ -2035,10 +2062,14 @@ function searchNext(dir) {
   if (!searchActive) {
     // Re-activate the last term when there's no live search (n/N recall).
     if (!searchLastTerm) return;
-    searchQuery = searchLastTerm; searchHL = searchLastTerm; searchActive = true; searchIdx = 0;
+    searchQuery = searchLastTerm; searchHL = searchLastTerm; searchActive = true;
     const ms = searchMatches(searchQuery);
     if (!ms.length) { searchActive = false; searchHL = ''; toast('no matches', true); return; }
-    jumpToMatch(ms[0]); setSearchStatus(ms.length);
+    // Resume from where the last session left off: step one from the remembered
+    // index (n -> next, N -> previous), not from the top.
+    const base = ((searchLastIdx % ms.length) + ms.length) % ms.length;
+    searchIdx = ((base + dir) % ms.length + ms.length) % ms.length;
+    jumpToMatch(ms[searchIdx]); setSearchStatus(ms.length);
     if (mapState.in) renderMap(cur); else renderOutline(cur);
     return;
   }
@@ -2061,6 +2092,19 @@ document.addEventListener('keydown', e => {
   const a = document.activeElement;
   if (a && /INPUT|TEXTAREA/.test(a.tagName)) return;
   if (modalOpen()) {
+    // The help overlay scrolls with j/k/arrows/space and closes on esc/q/?.
+    const help = document.getElementById('helpmodal');
+    if (help.classList.contains('open')) {
+      const body = document.getElementById('helpbody');
+      const step = 40;
+      if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); body.scrollTop += step; return; }
+      if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); body.scrollTop -= step; return; }
+      if (e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); body.scrollTop += body.clientHeight * 0.9; return; }
+      if (e.key === 'PageUp') { e.preventDefault(); body.scrollTop -= body.clientHeight * 0.9; return; }
+      if (e.key === 'g') { e.preventDefault(); body.scrollTop = 0; return; }
+      if (e.key === 'G') { e.preventDefault(); body.scrollTop = body.scrollHeight; return; }
+      if (e.key === '?') { e.preventDefault(); toggleModal('helpmodal', false); return; }
+    }
     if (e.key === 'Escape' || e.key === 'q') document.querySelectorAll('.modal.open .bar button:last-child, #helpclose').forEach(b => b.click());
     return;
   }
@@ -2283,7 +2327,7 @@ window.__sn = {
   get search() {
     return {
       active: searchActive, query: searchQuery, idx: searchIdx, hl: searchHL,
-      lastTerm: searchLastTerm,
+      lastTerm: searchLastTerm, scopeAll: searchScopeAll,
       matches: searchMatches(searchQuery).length,
       promptOpen: document.getElementById('searchprompt').classList.contains('open'),
       status: document.getElementById('searchstatus').textContent,
