@@ -721,30 +721,38 @@ run({
     await t.key('j'); // sec:Waiting on User
     await t.key('j'); // its item
     const saved = await t.cursorKey();
-    // `/` opens the prompt; typing jumps the cursor live to the first match.
+    // `/` opens the prompt; typing populates the ranked panel WITHOUT moving the
+    // board (no-reveal-until-jump).
     await t.key('/');
     let s = await t.searchState();
     t.assert(s.promptOpen, 'search prompt open');
     await t.type('legacy');
-    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint'); // first match, document order
+    s = await t.searchState();
+    // Fuzzy match set: the two "legacy endpoint" items plus the long Ideas item
+    // (a loose subsequence, ranked last).
+    t.assert(s.panelOpen && s.panelCount === 3, `panel shows ranked results (got ${JSON.stringify(s)})`);
+    t.assert(s.panel[0].section === 'Plan', `best-ranked exact match first (got ${JSON.stringify(s.panel)})`);
+    await t.assertCursor(saved); // board did not move while typing
     // Esc cancels and restores the pre-search cursor.
     await t.key('Escape');
     await t.assertCursor(saved);
     s = await t.searchState();
     t.assert(!s.active && !s.promptOpen, `search inactive after esc (got ${JSON.stringify(s)})`);
-    // Re-run, confirm with Enter, then step with n/N (wrapping).
+    // Re-run, confirm with Enter, then step with n/N (document order, wrapping).
     await t.key('/');
     await t.type('legacy');
     await t.key('Enter');
     s = await t.searchState();
-    t.assert(s.active && s.matches === 2 && s.idx === 0, `2 matches confirmed (got ${JSON.stringify(s)})`);
-    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint');
-    await t.key('n'); // forward to the second match
+    t.assert(s.active && s.matches === 3, `matches confirmed (got ${JSON.stringify(s)})`);
+    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint'); // ranked-best jump
+    await t.key('n'); // document order: next after Plan
     await t.assertCursor('it:Questions:- [ ] !! drop the legacy endpoint? @user');
+    await t.key('n'); // then the long Ideas item
+    t.assert((await t.cursorKey()).startsWith('it:Ideas:'), 'n stepped to the Ideas match');
     await t.key('n'); // wraps back to the first
     await t.assertCursor('it:Plan:- [ ] drop legacy endpoint');
-    await t.key('N'); // previous wraps to the last
-    await t.assertCursor('it:Questions:- [ ] !! drop the legacy endpoint? @user');
+    await t.key('N'); // previous wraps to the last (Ideas)
+    t.assert((await t.cursorKey()).startsWith('it:Ideas:'), 'N wrapped to the last match');
   },
 
   'outline: fold/unfold an item, indicator count, cursor stays put': async t => {
@@ -828,10 +836,16 @@ run({
     t.assert(!sn.stops.some(s => s.key === reply), 'reply hidden before search');
     await t.key('/');
     await t.type('extracted'); // only the reply matches
+    // No-reveal: typing must not unfold the ancestor yet.
+    sn = await t.sn();
+    t.assert(sn.collapsedItems.includes('it:Threads:- [>] auth refactor — extracting middleware'),
+      'ancestor still folded while typing (no-reveal)');
+    // Enter jumps and reveals the match.
+    await t.key('Enter');
     await t.assertCursor(reply);
     sn = await t.sn();
     t.assert(!sn.collapsedItems.includes('it:Threads:- [>] auth refactor — extracting middleware'),
-      'ancestor unfolded to reveal the match');
+      'ancestor unfolded to reveal the match after Enter');
     await t.key('Escape');
   },
 
@@ -927,10 +941,13 @@ run({
     t.assert(!map.nodes.includes(replyKey), 'reply hidden behind the default fold');
     await t.key('/');
     await t.type('extracted'); // only the reply matches
+    // No-reveal: typing must not reveal the folded reply yet.
+    map = (await t.sn2()).map;
+    t.assert(!map.nodes.includes(replyKey), 'match not revealed while typing (no-reveal)');
+    await t.key('Enter'); // jump reveals + focuses
     map = (await t.sn2()).map;
     t.assert(map.focus === replyKey, `map focus jumped to the match (got ${map.focus})`);
-    t.assert(map.nodes.includes(replyKey), 'match revealed through the fold');
-    await t.key('Enter');
+    t.assert(map.nodes.includes(replyKey), 'match revealed through the fold after Enter');
     const s = await t.searchState();
     t.assert(s.active && s.matches === 1, `confirmed one match (got ${JSON.stringify(s)})`);
   },
@@ -1003,32 +1020,132 @@ run({
   'search: n after leaving resumes from the last match, not the top': async t => {
     await t.open();
     await t.key('/');
-    await t.type('middleware'); // 3 matches: Waiting, Plan, Threads (doc order)
-    await t.key('Enter'); // idx 0 (Waiting on User)
-    await t.assertCursor('it:Waiting on User:- [ ] review the middleware PR @user');
-    await t.key('n'); // idx 1 (Plan)
+    await t.type('middleware'); // 3 matches; document order: Waiting, Plan, Threads
+    // Enter jumps to the best-ranked row: "extract middleware" (earliest match
+    // position) — Plan, document index 1.
+    await t.key('Enter');
     await t.assertCursor('it:Plan:- [x] extract middleware');
-    await t.key('Escape'); // leave results mode; position (idx 1) remembered
+    await t.key('n'); // n steps document order: next after Plan (idx 1) -> Threads (idx 2)
+    await t.assertCursor('it:Threads:- [>] auth refactor — extracting middleware');
+    await t.key('Escape'); // leave results mode; position (idx 2) remembered
     let s = await t.searchState();
     t.assert(!s.active, 'precondition: search cleared before recall');
-    await t.key('n'); // resume: next after idx 1 -> idx 2 (Threads), not the top
-    await t.assertCursor('it:Threads:- [>] auth refactor — extracting middleware');
+    await t.key('n'); // resume: next after idx 2 wraps to idx 0 (Waiting)
+    await t.assertCursor('it:Waiting on User:- [ ] review the middleware PR @user');
   },
 
   'search: default scope excludes Log; Tab widens to everything': async t => {
     await t.open();
     await t.key('/');
-    await t.type('session'); // "wire sessions" (Plan) + "session started" (Log)
+    await t.type('session'); // matches include "wire sessions" (Plan) + Log line
     let s = await t.searchState();
-    // Default working-set scope skips the Log line (status is live even before Enter).
-    t.assert(!s.scopeAll && /\/1 matches \(working set\)/.test(s.status),
-      `working-set scope excludes Log (got ${JSON.stringify(s)})`);
-    // Tab widens to everything → the Log match appears (1/2 now).
+    // Default working-set scope skips the Log section entirely.
+    t.assert(!s.scopeAll && /matches \(working set\)/.test(s.status),
+      `working-set scope active (got ${JSON.stringify(s)})`);
+    t.assert(!s.panel.some(r => r.section === 'Log'), `no Log rows in working-set panel (got ${JSON.stringify(s.panel)})`);
+    // Tab widens to everything → the Log match now appears in the panel.
     await t.key('Tab');
     s = await t.searchState();
-    t.assert(s.scopeAll && /\/2 matches \(all\)/.test(s.status),
-      `Tab widened scope to include Log (got ${JSON.stringify(s)})`);
+    t.assert(s.scopeAll && /matches \(all\)/.test(s.status),
+      `Tab widened scope to all (got ${JSON.stringify(s)})`);
+    t.assert(s.panel.some(r => r.section === 'Log'), `Log row appears once scope is all (got ${JSON.stringify(s.panel)})`);
     await t.key('Escape');
+  },
+
+  'search: status shows term hit count when a node holds the term twice': async t => {
+    await t.open();
+    await t.key('/');
+    // The long Ideas item contains "truncation" twice — one match node, two hits.
+    await t.type('truncation');
+    const s = await t.searchState();
+    t.assert(/· \d+ hits/.test(s.status), `hit tally surfaced (got ${JSON.stringify(s.status)})`);
+    const hits = Number((s.status.match(/· (\d+) hits/) || [])[1]);
+    t.assert(hits > s.panelCount, `hits (${hits}) exceed node count (${s.panelCount})`);
+    await t.key('Escape');
+  },
+
+  'search: results panel is ranked with section labels': async t => {
+    await t.open();
+    await t.key('/');
+    await t.type('middleware'); // 3 matches across sections
+    const s = await t.searchState();
+    t.assert(s.panelOpen && s.panelCount === 3, `panel open with 3 rows (got ${JSON.stringify(s)})`);
+    // Best-ranked first: "extract middleware" has the earliest match position.
+    t.assert(s.panel[0].text === 'extract middleware',
+      `earliest-position match ranks first (got ${JSON.stringify(s.panel)})`);
+    // Each row carries a section label.
+    t.assert(s.panel.every(r => typeof r.section === 'string' && r.section.length > 0),
+      `every panel row has a section label (got ${JSON.stringify(s.panel)})`);
+    // The panel is also rendered in the DOM with section labels + highlights.
+    const rows = await t.page.locator('#searchpanel .prow').count();
+    t.assert(rows === 3, `3 DOM rows in the panel (got ${rows})`);
+    t.assert((await t.page.locator('#searchpanel .searchmark').count()) >= 3,
+      'matched substrings highlighted in the panel rows');
+    await t.key('Escape');
+  },
+
+  'search: fuzzy ranking — exact substring beats a loose subsequence': async t => {
+    await t.open();
+    await t.key('/');
+    // "extracti": an exact substring of "…extracting middleware" (Threads) but
+    // only a loose subsequence of "extract middleware" (Plan, extract + i).
+    await t.type('extracti');
+    const s = await t.searchState();
+    t.assert(s.panel[0].section === 'Threads',
+      `exact-substring match outranks the subsequence one (got ${JSON.stringify(s.panel)})`);
+    await t.key('Escape');
+  },
+
+  'search: Up/Down pick a panel row, Enter jumps to it': async t => {
+    await t.open();
+    const saved = await t.cursorKey();
+    await t.key('/');
+    await t.type('middleware');
+    // Down moves the panel selection to row 1 without moving the board.
+    await t.key('ArrowDown');
+    let s = await t.searchState();
+    t.assert(s.panelIdx === 1, `Down moved panel selection (got ${JSON.stringify(s)})`);
+    t.assert((await t.cursorKey()) === saved, 'board did not move while picking in the panel');
+    const pickedText = s.panel[1].text;
+    // Enter jumps the board cursor to the picked row.
+    await t.key('Enter');
+    const key = await t.cursorKey();
+    t.assert(key.includes(pickedText), `Enter jumped the board to the picked row "${pickedText}" (got ${key})`);
+  },
+
+  'search: Tab in results mode toggles scope, not the section; scope label shows': async t => {
+    await t.open();
+    await t.key('/');
+    let s = await t.searchState();
+    t.assert(s.scopeLabel === 'working', `scope label visible in prompt (got ${JSON.stringify(s.scopeLabel)})`);
+    await t.type('middleware');
+    await t.key('Enter'); // results mode, cursor on a match item
+    const before = await t.cursorKey();
+    t.assert(before.startsWith('it:'), 'cursor is on a match item after Enter');
+    // Tab in results mode must toggle scope (not cycle to the next section).
+    await t.key('Tab');
+    s = await t.searchState();
+    t.assert(s.active && s.scopeAll, `Tab toggled scope in results mode (got ${JSON.stringify(s)})`);
+    const after = await t.cursorKey();
+    t.assert(after.startsWith('it:'), `Tab did not jump the cursor to a section header (got ${after})`);
+    await t.key('Escape');
+  },
+
+  'search: stepping onto a truncated match temporarily reveals it (map)': async t => {
+    await t.open();
+    await t.key('m'); // map
+    await t.settled();
+    await t.key('/');
+    // "layout" only appears near the END of the very long Ideas item, past the
+    // map's node truncation — jumping onto it must expand the node.
+    await t.type('layout');
+    await t.key('Enter');
+    const expanded = await t.page.evaluate(() => Object.keys(window.__sn.map.expanded || {}).length);
+    t.assert(expanded >= 1, `the long match node was temporarily expanded (got ${expanded})`);
+    // Leaving search restores it.
+    await t.key('Escape');
+    const after = await t.page.evaluate(() => Object.keys(window.__sn.map.expanded || {}).length);
+    t.assert(after === 0, `temporary expansion restored after leaving search (got ${after})`);
   },
 
   // Which side of the center the focused map node sits on (1 right, -1 left),
@@ -1147,7 +1264,7 @@ run({
     await t.waitBoardContains('sibling-reply-x');
     // The new item is a peer reply (indented under auth refactor), not a child
     // of the claude reply.
-    t.assert(t.file().includes('  - sibling-reply-x'), 'sibling added at reply depth');
+    t.assert(t.file().includes('  - user: sibling-reply-x'), 'sibling added at reply depth with user: tag');
   },
 
   'T edits the board title from the outline': async t => {
@@ -1425,6 +1542,72 @@ run({
     await t.key('?');
     await t.page.waitForFunction(() => !document.querySelector('#helpmodal.open'), null, { timeout: 3000 });
   },
+
+  'an out-of-band edit flags the changed item and feeds it': async t => {
+    await t.open();
+    await t.settled();
+    // Another writer (Claude/TUI/other session) adds an item straight to disk.
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'brand new idea' });
+    await t.waitBoardContains('- brand new idea');
+    const key = 'it:Ideas:- brand new idea';
+    // Wait for the SSE-driven re-render to actually paint the new item.
+    await t.page.waitForFunction(k => window.__sn.stops.some(s => s.key === k), key, { timeout: 4000 });
+    await t.settled();
+    const nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.fresh.includes(key), `changed item flagged fresh (fresh=${JSON.stringify(nov.fresh)})`);
+    t.assert(nov.feed.length >= 1 && /Ideas/.test(nov.feed[0]),
+      `event feed shows the change (feed=${JSON.stringify(nov.feed)})`);
+    // The accent renders on the row, and the corner feed is visible.
+    const shown = await t.page.evaluate(() => ({
+      row: !!document.querySelector('.row.fresh'),
+      feed: document.getElementById('feed').classList.contains('show'),
+    }));
+    t.assert(shown.row, 'a .row.fresh is painted in the outline');
+    t.assert(shown.feed, 'the event feed is visible');
+    // Clicking the feed entry jumps to the item and settles its mark.
+    await t.page.click('#feed .fentry');
+    await t.settled();
+    const nov2 = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(!nov2.fresh.includes(key), `visiting clears the fresh mark (fresh=${JSON.stringify(nov2.fresh)})`);
+    t.assert((await t.cursorKey()) === key, 'the feed entry moved the cursor onto the change');
+  },
+
+  'a self-edit is not flagged as novelty': async t => {
+    await t.open();
+    await t.settled();
+    await t.key('5'); // Ideas
+    await t.key('a');
+    await t.type('my own idea');
+    await t.key('Enter');
+    await t.waitBoardContains('- my own idea');
+    await t.settled();
+    await t.page.waitForTimeout(300); // let the SSE echo land too
+    const nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.fresh.length === 0, `self-edit leaves nothing fresh (fresh=${JSON.stringify(nov.fresh)})`);
+    t.assert(nov.feed.length === 0, `self-edit adds nothing to the feed (feed=${JSON.stringify(nov.feed)})`);
+  },
+
+  'visiting a changed item via the cursor clears its accent': async t => {
+    await t.open();
+    await t.settled();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'another fresh one' });
+    await t.waitBoardContains('- another fresh one');
+    const key = 'it:Ideas:- another fresh one';
+    await t.page.waitForFunction(k => window.__sn.stops.some(s => s.key === k), key, { timeout: 4000 });
+    await t.settled();
+    let nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(nov.fresh.includes(key), 'flagged fresh before visiting');
+    // Walk the cursor onto it directly (no feed click).
+    await t.key('5'); // jump to Ideas section header
+    // Step down until the cursor reaches the fresh item.
+    for (let i = 0; i < 8 && (await t.cursorKey()) !== key; i++) await t.key('j');
+    await t.assertCursor(key);
+    nov = await t.page.evaluate(() => window.__sn.novelty);
+    t.assert(!nov.fresh.includes(key), 'cursor visit cleared the fresh mark');
+    const stillPainted = await t.page.evaluate(() => !!document.querySelector('.row.fresh'));
+    t.assert(!stillPainted, 'the accent is gone from the DOM');
+  },
+
   'session status sidecar shows model + context in the header': async t => {
     t.seedStatus({ model: 'Opus', context_pct: 62, activity: 'working' });
     await t.open();
@@ -1437,10 +1620,60 @@ run({
   },
 
   'stale session status is hidden': async t => {
+    // Updated well beyond the staleness window -> the server omits it.
     t.seedStatus({ model: 'Opus', context_pct: 62, updated: new Date(Date.now() - 30 * 60 * 1000).toISOString() });
     await t.open();
     await t.settled();
     const txt = await t.sessionStatusText();
     t.assert(txt.trim() === '', `stale status hidden (got ${JSON.stringify(txt)})`);
+  },
+
+  'map wrapped multi-line siblings keep a minimum vertical gap (no overlap)': async t => {
+    await t.open();
+    // Two paragraph-length siblings peppered with emoji — the glyphs whose
+    // rendered width overflows the 2-column estimate and rewraps the box.
+    // (No author token: reply-shaped items hide behind the default fold.)
+    const long = tag => `${tag} 🎉 the quick brown fox jumps over the lazy dog again and again, ` +
+      'weighing every wrapped line against its estimated column budget until the box height diverges 🚀 from the plan';
+    await t.editExternally({ op: 'add', section: 'Plan', text: long('wrapcheck-a') });
+    await t.editExternally({ op: 'add', section: 'Plan', text: long('wrapcheck-b') });
+    await t.waitBoardContains('wrapcheck-b');
+    await t.settled();
+    await t.key('m');
+    await t.settled();
+    // Expand both long nodes into wrapped multi-line boxes with w.
+    for (const tag of ['wrapcheck-a', 'wrapcheck-b']) {
+      await t.page.evaluate(s => {
+        const n = [...document.querySelectorAll('.mapnode')].find(e => e.textContent.includes(s));
+        n.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      }, tag);
+      await t.page.waitForTimeout(80);
+      await t.key('w');
+      await t.page.waitForTimeout(120);
+    }
+    const bad = await t.page.evaluate(() => {
+      const rects = [...document.querySelectorAll('.mapnode')].map(e => {
+        const r = e.getBoundingClientRect();
+        return { t: e.textContent.slice(0, 30), x1: r.left, x2: r.right, y1: r.top, y2: r.bottom };
+      });
+      const out = [];
+      for (let i = 0; i < rects.length; i++) for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i], b = rects[j];
+        if (a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 - 1 && b.y1 < a.y2 - 1)
+          out.push(`${JSON.stringify(a.t)} overlaps ${JSON.stringify(b.t)}`);
+      }
+      return out;
+    });
+    t.assert(bad.length === 0, `no map node boxes overlap (got: ${bad.join(' · ') || 'none'})`);
+    // Both wrapcheck nodes really are multi-line (the wrap took effect), and as
+    // adjacent paragraph blocks they get the larger TALL_GAP breathing room.
+    const wr = await t.page.evaluate(() =>
+      [...document.querySelectorAll('.mapnode')].filter(e => e.textContent.includes('wrapcheck'))
+        .map(e => { const r = e.getBoundingClientRect(); return { h: e.offsetHeight, top: r.top, bottom: r.bottom }; })
+        .sort((a, b) => a.top - b.top));
+    t.assert(wr.length === 2 && wr.every(x => x.h > 30),
+      `both long nodes rendered as multi-line boxes (heights: ${wr.map(x => x.h)})`);
+    const gap = wr[1].top - wr[0].bottom;
+    t.assert(gap >= 16, `wrapped paragraph siblings keep a roomy gap (got ${gap.toFixed(1)}px)`);
   },
 });

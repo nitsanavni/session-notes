@@ -971,7 +971,9 @@ const act = {
     const holder = el('li');
     li.after(holder);
     inlineInput(holder, '',
-      v => post({ op, section: s, raw: it.raw, text: v }, v).then(() => holder.remove()),
+      // The TUI stamps replies with the author turn tag (tui.go AddReply
+      // callers); mirror it here so web replies get the user: tint too.
+      v => post({ op, section: s, raw: it.raw, text: 'user: ' + v }, v).then(() => holder.remove()),
       () => holder.remove());
   },
   open: (s, it) => {
@@ -1137,29 +1139,6 @@ function render(b) {
   if (inputsOpen > 0) { pendingRender = true; return; }
   if (mapState.in) { renderMap(b); return; }
   renderOutline(b);
-}
-
-// contextBar renders a compact 5-cell progress bar for a 0–100 percentage.
-function contextBar(pct) {
-  const cells = 5;
-  const p = Math.max(0, Math.min(100, pct));
-  const filled = Math.round(p / 100 * cells);
-  return '▰'.repeat(filled) + '▱'.repeat(cells - filled);
-}
-
-// renderSessionStatus fills the header's live session-status segment from the
-// board's status sidecar (model · context bar · activity · cost), or clears it
-// when no fresh status is present.
-function renderSessionStatus(st) {
-  const el = document.getElementById('sessionstatus');
-  if (!el) return;
-  if (!st) { el.textContent = ''; return; }
-  const parts = [];
-  if (st.model) parts.push(st.model);
-  if (typeof st.contextPct === 'number') parts.push(contextBar(st.contextPct) + ' ' + Math.round(st.contextPct) + '%');
-  if (st.activity) parts.push(st.activity);
-  if (st.costUsd) parts.push('$' + st.costUsd.toFixed(2));
-  el.textContent = parts.join('  ·  ');
 }
 
 // contextBar renders a compact 5-cell progress bar for a 0–100 percentage.
@@ -1542,7 +1521,7 @@ function splitSides(children) {
 // Layout: measure (monospace estimate), stack subtrees vertically, columns
 // per depth per side. Node text truncates at 40 columns; the [+N] suffix is
 // truncation-exempt, like the TUI.
-const NODE_H = 24, LINE_H = 20, GAP = 8, COL_GAP = 40, TRUNC = 40;
+const NODE_H = 24, LINE_H = 20, GAP = 8, TALL_GAP = 18, COL_GAP = 40, TRUNC = 40;
 let CHAR_W = 8; // measured at first map render
 
 // charW / dispWidth mirror internal/mindmap/width.go: wide (CJK/emoji) glyphs
@@ -1707,14 +1686,12 @@ function renderMap(b) {
   const place = (n, yTop, depth, side) => {
     const kids = visKids(n);
     pos.set(n, { cy: yTop + h.get(n) / 2, depth, side });
-    const inner = kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1);
-    let y = yTop + (h.get(n) - inner) / 2;
-    for (const c of kids) { place(c, y, depth + 1, side); y += h.get(c) + GAP; }
+    let y = yTop + (h.get(n) - stackH(kids)) / 2;
+    kids.forEach((c, i) => { place(c, y, depth + 1, side); y += h.get(c) + (i < kids.length - 1 ? gapBetween(c, kids[i + 1]) : 0); });
   };
   const stack = (kids, side) => {
-    const total = kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1);
-    let y = -total / 2;
-    for (const c of kids) { place(c, y, 1, side); y += h.get(c) + GAP; }
+    let y = -stackH(kids) / 2;
+    kids.forEach((c, i) => { place(c, y, 1, side); y += h.get(c) + (i < kids.length - 1 ? gapBetween(c, kids[i + 1]) : 0); });
   };
   stack(rightKids, 1);
   stack(leftKids, -1);
@@ -1994,7 +1971,7 @@ function mapEdit(n) {
 
 function mapAdd(n) {
   if (n.kind === 'item') {
-    mapBeginAdd(n.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: n.it.raw, text: v }, v); });
+    mapBeginAdd(n.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: n.it.raw, text: 'user: ' + v }, v); });
   } else if (n.kind === 'section') {
     mapBeginAdd(n.key, v => { cursorFollow = { section: n.title, text: v }; post({ op: 'add', section: n.title, text: v }, v); });
   } else {
@@ -2010,7 +1987,7 @@ function mapAddSibling(n) {
   if (n.kind === 'item') {
     const p = n.parent;
     if (p && p.kind === 'item') {
-      mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: p.it.raw, text: v }, v); });
+      mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: p.it.raw, text: 'user: ' + v }, v); });
     } else if (p) {
       mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'add', section: n.section, text: v }, v); });
     }
@@ -2344,7 +2321,11 @@ function setPanelStatus() {
   const e = document.getElementById('searchstatus');
   const scope = searchScopeAll ? '(all)' : '(working set)';
   const total = searchResults.length;
-  e.textContent = `${(total ? searchPanelIdx + 1 : 0)}/${total} matches ${scope} · tab scope`;
+  const q = (document.getElementById('searchprompt').classList.contains('open')
+    ? document.getElementById('searchprompt').querySelector('input').value : searchQuery);
+  const hits = searchHitCount(q);
+  const hitPart = hits > total ? ` · ${hits} hits` : '';
+  e.textContent = `${(total ? searchPanelIdx + 1 : 0)}/${total} matches ${scope}${hitPart} · tab scope`;
   e.classList.add('show');
 }
 // toggleSearchScopeLive flips scope from results mode (Tab outside the prompt),
@@ -2456,13 +2437,15 @@ function endSearch() {
 // scope is widened (ctrl+s) — keeps a search from dragging focus / the Log ring
 // into them.
 function searchScopeExcluded(title) { return title === 'Archive' || title === 'Log'; }
+// searchMatches uses the SAME fuzzy predicate that fills the ranked panel, in
+// document order, so n/N and the panel never disagree on the match set.
 function searchMatches(q) {
   q = (q || '').trim().toLowerCase();
   if (!q || !cur) return [];
   const out = [];
   const walk = (items, section) => {
     for (const it of items || []) {
-      if (!it.continuation && (it.text || '').toLowerCase().includes(q)) out.push({ section, it });
+      if (!it.continuation && fuzzyScore(it.text || '', q).ok) out.push({ section, it });
       walk(it.children, section);
     }
   };
@@ -2471,6 +2454,19 @@ function searchMatches(q) {
     walk(sec.items, sec.title);
   }
   return out;
+}
+// searchHitCount sums literal occurrences of q across the matched nodes — the
+// "term hits" tally, ≥ the node count when a node holds the term more than once.
+function searchHitCount(q) {
+  q = (q || '').trim().toLowerCase();
+  if (!q) return 0;
+  let total = 0;
+  for (const r of searchResults) {
+    const t = (r.it.text || '').toLowerCase();
+    let i = 0, at;
+    while ((at = t.indexOf(q, i)) !== -1) { total++; i = at + q.length; }
+  }
+  return total;
 }
 
 // jumpToMatch lands the active view on a match, revealing it first.
@@ -2497,15 +2493,6 @@ function jumpMatchMap(m) {
   renderMap(cur);
 }
 
-// setSearchStatus writes the tally to the persistent slot (not the auto-clearing
-// toast) so it stays visible through follow mode and n/N stepping.
-function setSearchStatus(total) {
-  searchLastIdx = searchIdx; // remember where a later n/N recall should resume
-  const e = document.getElementById('searchstatus');
-  const scope = searchScopeAll ? '(all)' : '(working set)';
-  e.textContent = `${searchIdx + 1}/${total} matches ${scope} · tab scope`;
-  e.classList.add('show');
-}
 function clearSearchStatus() {
   document.getElementById('searchstatus').classList.remove('show');
 }
