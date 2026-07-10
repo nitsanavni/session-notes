@@ -412,6 +412,25 @@ func TestSearchHighlightOutline(t *testing.T) {
 	}
 }
 
+// While TYPING at the search prompt the footer already shows the live match
+// tally (web parity: the bar counts as you type), not only after Enter.
+func TestSearchPromptShowsLiveCount(t *testing.T) {
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha") // 3 matches in the working set
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "/3 matches") {
+		t.Fatalf("prompt view should show the live match count, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(working set)") {
+		t.Errorf("prompt view should carry the scope indicator, got:\n%s", out)
+	}
+	// A no-match query says so, live.
+	typeSearch(m, "zzzznope")
+	if out := stripANSI(m.View()); !strings.Contains(out, "no matches") {
+		t.Errorf("prompt view should say 'no matches' live, got:\n%s", out)
+	}
+}
+
 // On a LIGHT terminal theme the search accents adapt: the matched-substring
 // accent renders magenta 126 (bright yellow 228 is invisible on white) and the
 // whole-line tint a dark green 28. Guards the theme-adaptive palette.

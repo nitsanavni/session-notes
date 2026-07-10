@@ -717,7 +717,15 @@ func (m *model) viewFooter() string {
 		if m.searchScopeAll {
 			scope = "[all]"
 		}
-		return styleStatus.Render("search: ") + m.input.View() + "  " + styleDim.Render(scope+" tab scope")
+		// Live tally while typing: handleSearchKey refreshes m.status ("k/N
+		// matches (scope) · H hits · tab scope" / "no matches") on every
+		// keystroke — surface it next to the prompt like the web bar counts
+		// live. With no status yet (empty prompt) fall back to the scope hint.
+		tail := styleDim.Render(scope + " tab scope")
+		if m.status != "" {
+			tail = styleDim.Render(m.status)
+		}
+		return styleStatus.Render("search: ") + m.input.View() + "  " + tail
 	}
 	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter fold · l expand/descend · h ascend · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · V recents · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
