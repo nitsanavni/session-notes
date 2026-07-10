@@ -772,6 +772,21 @@ run({
     await t.key('Escape');
   },
 
+  'outline: descent returns to the child you came from (child memory)': async t => {
+    await t.open();
+    await t.key('2'); // Plan (expanded by default)
+    await t.key('j'); await t.key('j'); // second item: wire sessions
+    const child = 'it:Plan:- [>] wire sessions through it';
+    await t.assertCursor(child);
+    await t.key('h'); // ascend to the section header (records the child we came from)
+    await t.assertCursor('sec:Plan');
+    await t.key('h'); // collapse the section so l descends again
+    await t.assertCursor('sec:Plan');
+    await t.key('l'); // descend — must land on the remembered child, not the first item
+    await t.assertCursor(child);
+    t.assert((await t.cursorKey()) !== 'it:Plan:- [x] extract middleware', 'did not fall to the first item');
+  },
+
   'outline: fold/unfold an item, indicator count, cursor stays put': async t => {
     await t.open();
     await t.key('3'); // Threads

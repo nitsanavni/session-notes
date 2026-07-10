@@ -411,9 +411,9 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>A</td><td>add a section</td></tr>
     <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
     <tr><td>enter / l / h</td><td>fold at the cursor. On a section: h collapses; l expands a collapsed
-      section and lands on its first item. On an item: enter toggles its subtree fold; l unfolds then
-      descends to the first child; h always steps out to the parent (top-level → section header) and
-      never folds</td></tr>
+      section and lands on the child you last came from (else the first). On an item: enter toggles its
+      subtree fold; l unfolds then descends to the child you last came from (else the first); h always
+      steps out to the parent (top-level → section header) and never folds</td></tr>
     <tr><td>z</td><td>focus-fold (zoom): collapse everything except the path to the cursor; the
       cursor's item stays open one level (children visible, folded). z again restores the previous
       fold state</td></tr>
@@ -774,8 +774,21 @@ function expandIntoSection(title) {
   setCollapsed(title, false);
   cursorKey = `sec:${title}`;
   renderOutline(cur);
-  const first = stops.find(x => x.type === 'item' && x.section === title);
-  if (first) setCursor(first);
+  const sec = (cur && cur.sections || []).find(x => x.title === title);
+  const kids = stops.filter(x => x.type === 'item' && x.section === title
+    && sec && sec.items && sec.items.includes(x.it));
+  if (kids.length) setCursor(outlineChildPick(`sec:${title}`, kids));
+}
+
+// Outline child memory (mirrors the map view's childMem): the child a descent
+// last came from, per parent stop, so l/right re-enters that same child instead
+// of always the first. Session-scoped, keyed by the parent stop's key; falls
+// back to the first child when nothing is remembered (or it no longer exists).
+const outlineChildMem = {};
+function rememberOutlineChild(parentKey, childKey) { outlineChildMem[parentKey] = childKey; }
+function outlineChildPick(parentKey, kids) {
+  const memKey = outlineChildMem[parentKey];
+  return kids.find(s => s.key === memKey) || kids[0];
 }
 
 // toggleSectionCollapse flips the section at the cursor between collapsed
@@ -820,9 +833,9 @@ function expandOrGotoChild(stop) {
   const has = stop.it.children && stop.it.children.length;
   if (!has) return;
   if (itemCollapsed(stop.key)) { toggleItemCollapse(stop, false); return; }
-  const child = stops.find(x => x.type === 'item' && x.section === stop.section
+  const kids = stops.filter(x => x.type === 'item' && x.section === stop.section
     && stop.it.children.includes(x.it));
-  if (child) setCursor(child);
+  if (kids.length) setCursor(outlineChildPick(stop.key, kids));
 }
 
 // gotoParentStop is `h`/left on an item: pure ascent — to the parent item, or
@@ -831,9 +844,9 @@ function expandOrGotoChild(stop) {
 // is a section header — the "top" stop with nowhere further left to go.
 function gotoParentStop(stop) {
   const p = parentItemStop(stop);
-  if (p) { setCursor(p); return; }
+  if (p) { rememberOutlineChild(p.key, stop.key); setCursor(p); return; }
   const head = stops.find(x => x.type === 'section' && x.title === stop.section);
-  if (head) setCursor(head);
+  if (head) { rememberOutlineChild(head.key, stop.key); setCursor(head); }
 }
 
 // revealItemAncestors un-collapses every folded item on the path down to
