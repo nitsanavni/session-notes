@@ -157,9 +157,10 @@ func TestMapExpandIntoCollapsed(t *testing.T) {
 	}
 }
 
-// TestMapExpandIntoRepliesOnly: a replies-only node steps collapsed -> default
-// (replies still summarized, focus stays) -> replies-expanded (focus first
-// reply). This exercises the default -> replies-expanded transition.
+// TestMapExpandIntoRepliesOnly: a collapsed replies-only node descends in ONE
+// press — the keystroke jumps straight to replies-expanded (default would
+// reveal nothing) and lands focus on the first reply, never wasting a press
+// on an expansion that doesn't move (single-press expand-and-nav).
 func TestMapExpandIntoRepliesOnly(t *testing.T) {
 	src := "## Threads\n- [ ] rparent\n  - user: hi\n  - claude: yo\n"
 	m := newMapModel(t, src, 120, 40)
@@ -168,17 +169,9 @@ func TestMapExpandIntoRepliesOnly(t *testing.T) {
 	m.ensureMap()
 	focusMapKey(t, m, "s0/0")
 
-	m.handleMapKey(keyPress("l")) // collapsed -> default; replies still hidden
-	if _, present := m.mapFold["s0/0"]; present {
-		t.Errorf("first step should reach default (absent), got %v", m.mapFold["s0/0"])
-	}
-	if m.mapFocusKey != "s0/0" {
-		t.Errorf("with no visible child yet, focus should stay on the node: %q", m.mapFocusKey)
-	}
-
-	m.handleMapKey(keyPress("l")) // default -> replies-expanded; focus first reply
+	m.handleMapKey(keyPress("l")) // ONE press: collapsed -> replies-expanded + move
 	if got := m.mapFold["s0/0"]; got != foldRepliesExpanded {
-		t.Fatalf("second step should reach replies-expanded, got %v", got)
+		t.Fatalf("single press should reach replies-expanded, got %v", got)
 	}
 	if m.mapFocusKey != "s0/0/0" {
 		t.Errorf("focus did not land on first reply: %q, want s0/0/0", m.mapFocusKey)

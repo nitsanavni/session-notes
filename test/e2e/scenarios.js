@@ -150,6 +150,85 @@ run({
     await t.waitBoardContains('## Archive');
   },
 
+  'archive keeps the selection on the next sibling': async t => {
+    await t.open();
+    await t.key('2'); // Plan head
+    await t.key('j', 2); // wire sessions through it (mid-section)
+    await t.key('d');
+    await t.waitBoardContains('## Archive');
+    // The next sibling in document order takes the archived item's place.
+    await t.page.waitForFunction(k => window.__sn.cursorKey === k,
+      'it:Plan:- [ ] drop legacy endpoint', { timeout: 3000 });
+  },
+
+  'archiving the last item selects the previous one': async t => {
+    await t.open();
+    await t.key('2'); // Plan head
+    await t.key('j', 3); // drop legacy endpoint (last in Plan)
+    await t.key('d');
+    await t.waitBoardContains('## Archive');
+    await t.page.waitForFunction(k => window.__sn.cursorKey === k,
+      'it:Plan:- [>] wire sessions through it', { timeout: 3000 });
+  },
+
+  'archiving the only item falls back to the section head': async t => {
+    await t.open();
+    await t.key('1'); // Waiting on User head
+    await t.key('j'); // its single item
+    await t.key('d');
+    await t.waitBoardContains('## Archive');
+    await t.page.waitForFunction(k => window.__sn.cursorKey === k,
+      'sec:Waiting on User', { timeout: 3000 });
+  },
+
+  'D delete keeps the selection on the next sibling': async t => {
+    await t.open();
+    await t.key('2'); // Plan head
+    await t.key('j', 2); // wire sessions through it
+    await t.key('D');
+    await t.waitBoardContains('wire sessions through it', false);
+    await t.page.waitForFunction(k => window.__sn.cursorKey === k,
+      'it:Plan:- [ ] drop legacy endpoint', { timeout: 3000 });
+  },
+
+  'map archive moves focus to the next sibling node': async t => {
+    await t.open();
+    await t.key('2');
+    await t.key('j', 2); // wire sessions through it
+    await t.key('m'); // map seeds focus from the outline cursor
+    await t.page.waitForFunction(() => window.__sn.map.in);
+    await t.key('d');
+    await t.waitBoardContains('## Archive');
+    await t.page.waitForFunction(k => window.__sn.map.focus === k,
+      'it:Plan:- [ ] drop legacy endpoint', { timeout: 3000 });
+  },
+
+  'map: one press descends into a collapsed node (expand and land)': async t => {
+    await t.open();
+    await t.key('3'); // Threads head
+    await t.key('j'); // auth refactor — its only child is a claude: reply
+    await t.key('m'); // map seeds focus from the outline cursor
+    const itemKey = 'it:Threads:- [>] auth refactor — extracting middleware';
+    const replyKey = 'it:Threads:  - claude: extracted, tests green';
+    await t.page.waitForFunction(k => window.__sn.map.in && window.__sn.map.focus === k, itemKey);
+    // Fold the node fully closed, stepping the enter cycle deterministically:
+    // default (reply hidden) -> all (reply shown) -> closed (hidden again).
+    await t.key('Enter');
+    await t.page.waitForFunction(k => window.__sn.map.nodes.includes(k), replyKey);
+    await t.key('Enter');
+    await t.page.waitForFunction(k => !window.__sn.map.nodes.includes(k), replyKey);
+    // Descend outward with ONE press: the same keystroke must expand the fold
+    // AND land focus on the revealed child (no dead second press).
+    const dir = await t.page.evaluate(() => {
+      const f = document.querySelector('.mapnode.focus');
+      const c = document.querySelector('.mapnode.center');
+      return f.offsetLeft >= c.offsetLeft ? 'l' : 'h';
+    });
+    await t.key(dir);
+    await t.page.waitForFunction(k => window.__sn.map.focus === k, replyKey, { timeout: 3000 });
+    t.assert((await t.sn2()).map.nodes.includes(replyKey), 'reply node visible after one press');
+  },
+
   'undo and redo walk this browser\'s edits': async t => {
     await t.open();
     await t.key('2'); // Plan
@@ -420,9 +499,11 @@ run({
     t.assert(!(await t.sn()).stops.some(s => s.key === itemStop), 'collapsed items build no stops');
     t.assert((await t.page.textContent('.sechead .count')) || '', 'count hint shown');
     await t.assertCursor('sec:Plan'); // cursor stays on the header
-    await t.key('l'); // expand
+    await t.key('l'); // single-press descend: expand AND land on the first item
     t.assert(!('Plan' in (await collapsed())), 'Plan expanded again');
     t.assert((await t.sn()).stops.some(s => s.key === itemStop && s.visible), 'items back');
+    await t.assertCursor(itemStop); // one press moved the cursor into the section
+    await t.key('2'); // back to the head
     await t.key('Enter'); // enter toggles too
     t.assert((await collapsed()).Plan === true, 'enter collapsed');
   },

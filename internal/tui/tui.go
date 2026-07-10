@@ -338,6 +338,68 @@ func (m *model) currentItem() *board.Item {
 	return m.positions[m.cursor].item
 }
 
+// inSubtree reports whether target is root or nested anywhere beneath it.
+func inSubtree(root, target *board.Item) bool {
+	if root == target {
+		return true
+	}
+	for _, c := range root.Children {
+		if inSubtree(c, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// removalNeighbor picks the item the selection should land on after the item
+// at the cursor (+ its whole subtree) is archived/deleted: the next item in
+// the same section outside the removed subtree (the one that visually takes
+// its place), else the previous item in the section; nil when the section is
+// left with no other items (the caller then falls back to the section header).
+// Must be called BEFORE the mutation, while m.positions still lists the item.
+func (m *model) removalNeighbor(it *board.Item) *board.Item {
+	if m.cursor < 0 || m.cursor >= len(m.positions) {
+		return nil
+	}
+	sec := m.positions[m.cursor].sec
+	for i := m.cursor + 1; i < len(m.positions); i++ {
+		p := m.positions[i]
+		if p.sec != sec {
+			break
+		}
+		if p.item != nil && !inSubtree(it, p.item) {
+			return p.item
+		}
+	}
+	for i := m.cursor - 1; i >= 0; i-- {
+		p := m.positions[i]
+		if p.sec != sec {
+			break
+		}
+		if p.item != nil {
+			return p.item
+		}
+	}
+	return nil
+}
+
+// selectAfterRemoval re-places the cursor after an archive/delete: on the
+// pre-computed neighbor when it still has a stop, else on the header of the
+// section the item was removed from (looked up by title — archiving can insert
+// the Archive section and shift raw section indices).
+func (m *model) selectAfterRemoval(neighbor *board.Item, secTitle string) {
+	if neighbor != nil && m.setCursorToItem(neighbor) {
+		return
+	}
+	for i, p := range m.positions {
+		if p.header && p.sec < len(m.board.Sections) && m.board.Sections[p.sec].Title == secTitle {
+			m.cursor = i
+			m.selSec = p.sec
+			return
+		}
+	}
+}
+
 // onHeader reports whether the cursor sits on a section header stop, and if so
 // returns that section. When the cursor is on an item it returns (nil, false).
 func (m *model) onHeader() (*board.Section, bool) {
@@ -758,9 +820,14 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if it := m.currentItem(); it != nil {
 			m.snapshot()
 			// Capture identity BEFORE ArchiveItem moves it out of its section.
-			op := pendingOp{typ: opArchiveItem, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+			secTitle := m.board.SectionTitleOf(it)
+			op := pendingOp{typ: opArchiveItem, section: secTitle, rawLine: it.Raw()}
+			// Where the selection should land afterwards: the next sibling in
+			// document order, else the previous item, else the section header.
+			neighbor := m.removalNeighbor(it)
 			if m.board.ArchiveItem(it) { // item + its whole subtree
 				m.rebuildPositions()
+				m.selectAfterRemoval(neighbor, secTitle)
 				m.saveWithRebase(op)
 				m.status = "archived"
 			}
@@ -777,17 +844,36 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if it := m.currentItem(); it != nil {
 			m.snapshot()
 			// Capture identity BEFORE Remove; delete replays exact-raw only.
-			op := pendingOp{typ: opDeleteItem, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
-			m.board.Remove(it) // removes the item and its whole subtree of replies
+			secTitle := m.board.SectionTitleOf(it)
+			op := pendingOp{typ: opDeleteItem, section: secTitle, rawLine: it.Raw()}
+			neighbor := m.removalNeighbor(it) // next sibling, else previous, else header
+			m.board.Remove(it)                // removes the item and its whole subtree of replies
 			m.rebuildPositions()
+			m.selectAfterRemoval(neighbor, secTitle)
 			m.saveWithRebase(op)
 		}
-	case "enter", "l", "right":
+	case "enter":
 		// Toggle the section under the cursor between collapsed and expanded.
-		// Only header stops toggle; on items enter/l/right stay a no-op.
+		// Only header stops toggle; on items enter stays a no-op.
 		if sec, ok := m.onHeader(); ok {
 			m.setCollapsed(sec.Title, !m.sectionCollapsed(sec.Title))
 			m.rebuildPositions()
+		}
+	case "l", "right":
+		// Single-press descend: on a collapsed header one keystroke expands the
+		// section AND lands the cursor on its first item — no second press to
+		// actually move. Expanded headers and items are a no-op (matching the
+		// web outline, where l never collapses).
+		if sec, ok := m.onHeader(); ok && m.sectionCollapsed(sec.Title) {
+			m.setCollapsed(sec.Title, false)
+			m.rebuildPositions()
+			for i, p := range m.positions {
+				if p.item != nil && p.sec < len(m.board.Sections) && m.board.Sections[p.sec] == sec {
+					m.cursor = i
+					m.selSec = p.sec
+					break
+				}
+			}
 		}
 	case "h", "left":
 		// Collapse the section when on its header (symmetric with l/right).

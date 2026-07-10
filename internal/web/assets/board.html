@@ -283,7 +283,8 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>a</td><td>add to the cursor's section</td></tr>
     <tr><td>A</td><td>add a section</td></tr>
     <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
-    <tr><td>enter / l / h</td><td>fold / expand the section at the cursor (h collapses, l expands)</td></tr>
+    <tr><td>enter / l / h</td><td>fold the section at the cursor (h collapses; l expands a collapsed
+      section and lands on its first item in one press)</td></tr>
     <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
@@ -422,6 +423,20 @@ function toggleWrap() {
   s.el.scrollIntoView({ block: 'nearest' });
 }
 
+// expandIntoSection is the outline's single-press descend (l/right on a
+// collapsed section head): it expands the section AND lands the cursor on its
+// first item in one keystroke — no second press to actually move. An already
+// expanded head stays a no-op (l is not a nav key there); an empty section
+// keeps the cursor on the head.
+function expandIntoSection(title) {
+  if (!sectionCollapsed(title)) return;
+  setCollapsed(title, false);
+  cursorKey = `sec:${title}`;
+  renderOutline(cur);
+  const first = stops.find(x => x.type === 'item' && x.section === title);
+  if (first) setCursor(first);
+}
+
 // toggleSectionCollapse flips the section at the cursor between collapsed
 // (header + count only) and expanded, then re-renders (enter/l/h keys).
 function toggleSectionCollapse(title, force) {
@@ -555,6 +570,30 @@ function linkChooser(links) {
   document.addEventListener('keydown', onKey, true);
 }
 
+// followAfterRemoval computes the cursorFollow for archiving/deleting `target`
+// from section s: the selection lands on the next item in document order
+// (skipping the removed subtree — the item that visually takes its place); if
+// it was the last in its section, on the previous item; only when the section
+// is left empty does it fall back to the section head.
+function followAfterRemoval(s, target) {
+  const sec = (cur && cur.sections || []).find(x => x.title === s);
+  const flat = []; // every non-continuation item in document order, flagged if it goes away
+  const collect = (items, inside) => {
+    for (const it of items || []) {
+      const gone = inside || (!it.continuation && it.raw === target.raw);
+      if (!it.continuation) flat.push({ it, gone });
+      collect(it.children, gone);
+    }
+  };
+  collect(sec ? sec.items : [], false);
+  const i = flat.findIndex(e => e.gone);
+  if (i < 0) return { section: s };
+  const next = flat.slice(i).find(e => !e.gone);
+  const prev = i > 0 ? flat[i - 1] : null; // entries before i are never gone
+  const pick = next || prev;
+  return pick ? { section: s, text: pick.it.text } : { section: s };
+}
+
 // ---- item actions, shared by hover buttons and keys ----
 const act = {
   cycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: NEXT[it.status] || 'open' }); },
@@ -564,10 +603,13 @@ const act = {
   pin: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'pin', section: s, raw: it.raw, pinned: !it.pinned }); },
   blocked: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: it.status === 'blocked' ? 'open' : 'blocked' }); },
   urgent: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'urgent', section: s, raw: it.raw, urgent: !it.urgent }); },
-  archive: (s, it) => { cursorFollow = { section: s }; return post({ op: 'archive', section: s, raw: it.raw }); },
+  // Archive/delete keep the selection close: the next sibling in document
+  // order takes the removed item's place; the last item falls to the previous
+  // one; only an emptied section drops back to its head (followAfterRemoval).
+  archive: (s, it) => { cursorFollow = followAfterRemoval(s, it); return post({ op: 'archive', section: s, raw: it.raw }); },
   // Hard-delete with no confirm, matching the TUI's D (both share the undo
   // journal, so the prompt is redundant friction).
-  del: (s, it) => { cursorFollow = { section: s }; return post({ op: 'delete', section: s, raw: it.raw }); },
+  del: (s, it) => { cursorFollow = followAfterRemoval(s, it); return post({ op: 'delete', section: s, raw: it.raw }); },
   edit: (s, it, row) => inlineInput(row, it.text, v => { cursorFollow = { section: s, text: v }; post({ op: 'edit', section: s, raw: it.raw, text: v }, v); }),
   reply: (s, it, row, li, op) => {
     const holder = el('li');
@@ -1546,6 +1588,9 @@ function descendInto(n, side, refocus) {
     const f = mapState.folds[n.key] || 'default';
     mapState.folds[n.key] = f === 'closed' ? 'default' : 'all';
     kids = visKids(n);
+    // A closed replies-only node is still empty at 'default' — go straight to
+    // 'all' so the descent is a single press: expand AND land on the child.
+    if (!kids.length) { mapState.folds[n.key] = 'all'; kids = visKids(n); }
   }
   if (kids.length) refocus(childMemPick(n, side, kids).key);
 }
@@ -1886,7 +1931,9 @@ document.addEventListener('keydown', e => {
     // enter / l / right toggle the section fold (l/right expand, h/left collapse
     // when on a section header); no-op on items — mirrors the TUI.
     case 'Enter': if (onSec) toggleSectionCollapse(s.title); break;
-    case 'l': case 'ArrowRight': if (onSec) toggleSectionCollapse(s.title, false); break;
+    // l/right on a collapsed head: single-press expand-and-nav — the section
+    // opens AND the cursor lands on its first item (expanded heads: no-op).
+    case 'l': case 'ArrowRight': if (onSec) expandIntoSection(s.title); break;
     case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); break;
     case 'Tab': moveSection(e.shiftKey ? -1 : 1); break;
     case 'g': { const v = visibleStops(); if (v.length) setCursor(v[0]); break; }

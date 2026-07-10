@@ -882,6 +882,12 @@ func (m *model) expandInto() {
 	switch cur {
 	case foldCollapsed:
 		next = foldDefault
+		// A replies-only node is still empty at default — go straight to
+		// replies-expanded so the descent is a single press: the same keystroke
+		// expands the fold AND lands focus on the revealed child.
+		if !hasNonReplyChild(items) {
+			next = foldRepliesExpanded
+		}
 	case foldDefault:
 		// Only reveal the reply thread when there are no visible non-reply
 		// children — a mixed node already shows its non-reply children, so
@@ -910,8 +916,9 @@ func (m *model) expandInto() {
 	if n, ok := m.mp.nodeByKey[key]; ok && len(n.Children) > 0 {
 		m.setMapFocus(m.preferredChild(n, m.mp.sideOf(n), n.Children[0]))
 	} else {
-		// The step revealed a suffix but no child node (e.g. collapsed -> default
-		// on a replies-only node): keep focus on this node for the next press.
+		// Defensive: the step revealed no child node (shouldn't happen now that
+		// a collapsed replies-only node expands straight to replies-expanded);
+		// keep focus on this node for the next press.
 		if n, ok := m.mp.nodeByKey[key]; ok {
 			m.setMapFocus(n)
 		}
@@ -1223,10 +1230,51 @@ func (m *model) mapDelete() {
 	it := ref.item
 	m.snapshot()
 	op := pendingOp{typ: opDeleteItem, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
-	m.mapFocusKey = parentKeyOf(m.mapFocusKey)
+	// Focus lands on the next sibling (which takes the deleted node's place),
+	// else the previous sibling, else the parent.
+	m.mapFocusKey = m.mapRemovalFocusKey()
 	m.board.Remove(it)
 	m.saveWithRebase(op)
 	m.mp = nil
+}
+
+// mapRemovalFocusKey picks where map focus should land after the focused item
+// (+ its subtree) is archived/deleted: the next visible sibling (whose key
+// index drops by one once the removed IsItem sibling vanishes), else the
+// previous visible sibling, else the parent node. Must run BEFORE the board
+// mutation, while m.mp still reflects the pre-removal tree.
+func (m *model) mapRemovalFocusKey() string {
+	parentKey := parentKeyOf(m.mapFocusKey)
+	parent := m.mp.parentOf(m.mp.focus)
+	if parent == nil {
+		return parentKey
+	}
+	kids := parent.Children // visible siblings, document order
+	pos := -1
+	for i, c := range kids {
+		if c == m.mp.focus {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return parentKey
+	}
+	if pos+1 < len(kids) {
+		// The next sibling shifts one index down: exactly one IsItem sibling
+		// (the removed one) precedes it less after the removal.
+		k := m.mp.keys[kids[pos+1]]
+		if i := strings.LastIndexByte(k, '/'); i >= 0 {
+			if idx, err := strconv.Atoi(k[i+1:]); err == nil && idx > 0 {
+				return k[:i+1] + strconv.Itoa(idx-1)
+			}
+		}
+		return parentKey
+	}
+	if pos > 0 {
+		return m.mp.keys[kids[pos-1]] // last child: fall back to the previous
+	}
+	return parentKey // only child: rest on the parent
 }
 
 // parentKeyOf drops the last path segment of a node key: "s0/1/2" -> "s0/1",
@@ -1292,8 +1340,11 @@ func (m *model) mapArchive() {
 	it := ref.item
 	m.snapshot()
 	op := pendingOp{typ: opArchiveItem, section: m.board.SectionTitleOf(it), rawLine: it.Raw()}
+	// Compute the post-archive focus BEFORE the mutation (it reads the still-
+	// current m.mp): next sibling, else previous sibling, else the parent.
+	next := m.mapRemovalFocusKey()
 	if m.board.ArchiveItem(it) {
-		m.mapFocusKey = parentKeyOf(m.mapFocusKey)
+		m.mapFocusKey = next
 		m.rebuildPositions()
 		m.saveWithRebase(op)
 		m.status = "archived"
