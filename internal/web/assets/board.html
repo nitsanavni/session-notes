@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>session-notes</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='7' fill='%231C2226'/%3E%3Cpath d='M13 16h-5M19 16c3 0 3-6 7-6M19 16c3 0 3 6 7 6' fill='none' stroke='%238B9997' stroke-width='2.8' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='4.2' fill='%2346B3A4'/%3E%3Ccircle cx='7' cy='16' r='2.6' fill='%238B9997'/%3E%3Ccircle cx='26.5' cy='10' r='2.6' fill='%238B9997'/%3E%3Ccircle cx='26.5' cy='22' r='2.6' fill='%238B9997'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='7' fill='%231C2226'/%3E%3Cpath d='M13 16h-5M19 16c3 0 3-6 7-6M19 16c3 0 3 6 7 6' fill='none' stroke='%238B9997' stroke-width='2.8' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='4.2' fill='%2346B3A4'/%3E%3Ccircle cx='7' cy='16' r='2.6' fill='%238ea3d8'/%3E%3Ccircle cx='26.5' cy='10' r='2.6' fill='%23e0a878'/%3E%3Ccircle cx='26.5' cy='22' r='2.6' fill='%23e0a878'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #f7f7f5; --fg: #1a1a1a; --dim: #77776f; --border: #e2e2dd;
@@ -132,6 +132,50 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
   border-radius: 6px; font-size: .78em; display: none;
 }
 #searchstatus.show { display: block; }
+/* ---- novelty: out-of-band changes ---- */
+/* A row/node another writer just changed wears a persistent accent bar (and a
+   one-shot tint pulse on arrival) until the user visits it or it times out. */
+.row.fresh {
+  box-shadow: inset 3px 0 0 var(--accent); border-radius: 6px;
+  animation: freshpulse 1.4s ease-out;
+}
+.mapnode.fresh { box-shadow: 0 0 0 2px var(--accent); animation: freshpulse 1.4s ease-out; }
+@keyframes freshpulse {
+  from { background: color-mix(in srgb, var(--accent) 34%, transparent); }
+  to { background: transparent; }
+}
+/* Event feed: a small corner log of recent out-of-band changes, newest first.
+   Collapsible + dismissible; entries dim as they age. Keyboard: header button
+   is focusable; each entry is a button that jumps to the changed item. */
+#feed {
+  position: fixed; left: .8rem; bottom: 2.2rem; z-index: 23;
+  width: min(300px, 60vw); max-height: 42vh; display: none;
+  flex-direction: column; background: var(--input);
+  border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.18); overflow: hidden; font-size: .82em;
+}
+#feed.show { display: flex; }
+#feed .fhead {
+  display: flex; align-items: center; gap: .4rem; padding: .3rem .5rem;
+  border-bottom: 1px solid var(--border); color: var(--dim);
+}
+#feed .fhead b { flex: 1; color: var(--accent); font-weight: 600; }
+#feed .fhead button {
+  background: none; border: none; color: var(--dim); cursor: pointer;
+  font: inherit; padding: 0 .25rem; border-radius: 4px;
+}
+#feed .fhead button:hover { color: var(--fg); background: var(--border); }
+#feed .fbody { overflow-y: auto; }
+#feed.collapsed .fbody { display: none; }
+#feed .fentry {
+  display: block; width: 100%; text-align: left; background: none;
+  border: none; border-bottom: 1px solid var(--border); color: var(--fg);
+  cursor: pointer; font: inherit; padding: .3rem .5rem; transition: opacity .8s;
+}
+#feed .fentry:last-child { border-bottom: none; }
+#feed .fentry:hover, #feed .fentry:focus { background: var(--cursor); outline: none; }
+#feed .fentry.aged { opacity: .5; }
+#feed .fentry .fwhen { color: var(--dim); font-size: .85em; margin-left: .3rem; }
 .modal {
   position: fixed; inset: 0; background: rgba(0,0,0,.45);
   display: none; align-items: center; justify-content: center; z-index: 20;
@@ -251,6 +295,31 @@ body.mapmode #mapwrap { display: block; }
   flex: 1; font: inherit; color: var(--fg); background: var(--input);
   border: 1px solid var(--border); border-radius: 6px; padding: .25rem .5rem;
 }
+/* Active-scope pill inside the search prompt, so the working-set/all scope is
+   always visible while searching. */
+#searchprompt .scope {
+  flex: none; font-size: .72em; color: var(--dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: .05rem .45rem;
+}
+/* Fuzzy-ranked results panel: a scrollable list shown under the search prompt.
+   It previews matches best-first WITHOUT revealing anything on the board — the
+   board only jumps on Enter (or n/N). */
+#searchpanel {
+  position: fixed; top: calc(12% + 3.1rem); left: 50%; transform: translateX(-50%);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  z-index: 25; width: min(480px, 90vw); max-height: 46vh; overflow-y: auto;
+  display: none; padding: .25rem;
+}
+#searchpanel.open { display: block; }
+#searchpanel .phead { color: var(--dim); font-size: .72em; padding: .1rem .4rem .25rem; }
+#searchpanel .prow {
+  display: flex; gap: .5rem; align-items: baseline; padding: .18rem .4rem;
+  border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden;
+}
+#searchpanel .prow.sel { background: var(--cursor); outline: 1px solid var(--accent); }
+#searchpanel .prow .psec { color: var(--dim); font-size: .74em; flex: none; min-width: 5.5ch; }
+#searchpanel .prow .ptext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#searchpanel .prow .searchmark { background: var(--accent); color: var(--bg); border-radius: 2px; }
 </style>
 </head>
 <body>
@@ -259,6 +328,7 @@ body.mapmode #mapwrap { display: block; }
   <span id="title" title="click to rename"></span>
   <span class="dim" id="sid"></span>
   <span class="dim" id="cwd"></span>
+  <span class="dim" id="sessionstatus" title="live Claude Code session status"></span>
   <span class="tools">
     <button id="undo" title="undo last web edit (u)">↶</button>
     <button id="redo" title="redo (ctrl+r)">↷</button>
@@ -272,13 +342,18 @@ body.mapmode #mapwrap { display: block; }
 <div id="mapwrap">
   <div id="mapcrumb"></div>
   <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
-</div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"></div>
+</div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"><span class="scope" id="searchscope">working</span></div>
+<div id="searchpanel" aria-label="search results"></div>
 <div id="linkchooser"><div class="lbl">open link — j/k/arrows move · enter open · esc cancel</div><div class="list"></div></div>
 <div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
 <footer id="listfoot">j/k/arrows move · tab section · enter fold · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
 <div id="searchstatus"></div>
+<div id="feed"><div class="fhead"><b>recent changes</b>
+  <button id="feedcollapse" title="collapse / expand">–</button>
+  <button id="feedclear" title="dismiss all">✕</button></div>
+  <div class="fbody" role="log" aria-live="polite" aria-label="recent out-of-band changes"></div></div>
 
 <div class="modal" id="notemodal"><div class="panel">
   <div class="bar"><b id="notename"></b><button id="notesave">save</button><button id="noteclose">close</button></div>
@@ -380,6 +455,112 @@ const itemCollapsed = key => collapsedItems.has(key);
 let inputsOpen = 0;
 let pendingRender = false;
 
+// ---- novelty: notice out-of-band changes ----
+// When the board changes because of a writer OTHER than this page — Claude via
+// `session-notes edit`, another session, the TUI — the affected items get a
+// "fresh" accent that clears when the user visits the item or after a timeout,
+// and an entry lands in the corner event feed. Self-edits (made from THIS page,
+// which flow through post()) are suppressed: post() stamps lastLocalEdit, and
+// any refresh within LOCAL_WINDOW of it is treated as our own echo.
+const FRESH_TTL = 20000;      // a fresh mark auto-clears after 20s untouched
+const LOCAL_WINDOW = 2500;    // refreshes this soon after a local edit are "ours"
+const FEED_MAX = 30;
+let lastLocalEdit = 0;
+let prevKeys = null;                 // Set of item keys from the last board seen
+const freshItems = new Set();        // keys currently marked novel
+const freshTimers = new Map();       // key -> setTimeout handle
+let feed = [];                       // [{id, msg, key, ts, aged}]
+let feedSeq = 0;
+
+// flattenItems walks the board into one entry per non-continuation item, each
+// carrying its stop key plus the text of its nearest item ancestor (for "X
+// replied under 'Y'" messages).
+function flattenItems(b) {
+  const out = [];
+  const walk = (items, section, parentText) => {
+    for (const it of items || []) {
+      if (!it.continuation) out.push({ key: `it:${section}:${it.raw}`, section, text: it.text, parentText });
+      walk(it.children, section, it.continuation ? parentText : it.text);
+    }
+  };
+  for (const sec of b.sections || []) walk(sec.items, sec.title, null);
+  return out;
+}
+
+const noveltyStrip = t => (t || '').replace(AUTHOR_RE, '').replace(/^\s*(?:!!\s*|⚲\s*)?/, '').trim();
+const noveltyShort = (t, n = 42) => { t = (t || '').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+function noveltyMsg(f) {
+  const am = AUTHOR_RE.exec(f.text || '');
+  if (am && f.parentText) return `${am[2]} replied under “${noveltyShort(noveltyStrip(f.parentText), 30)}”`;
+  if (am) return `${am[2]}: ${noveltyShort(noveltyStrip(f.text))}`;
+  return `${f.section}: ${noveltyShort(noveltyStrip(f.text))}`;
+}
+
+// computeNovelty diffs the incoming board against the last one seen. New item
+// keys (additions, and status/text changes that rewrite the raw line) are the
+// novel set; when the change came from elsewhere they get marked + fed.
+function computeNovelty(b) {
+  const flat = flattenItems(b);
+  const newKeys = new Set(flat.map(f => f.key));
+  // Drop fresh marks whose item no longer exists (e.g. a status re-toggle).
+  for (const k of [...freshItems]) if (!newKeys.has(k)) clearFresh(k);
+  if (prevKeys === null) { prevKeys = newKeys; return; } // first load: baseline only
+  const novel = flat.filter(f => !prevKeys.has(f.key));
+  prevKeys = newKeys;
+  if (Date.now() - lastLocalEdit < LOCAL_WINDOW) return; // our own echo
+  for (const f of novel) markFresh(f);
+}
+
+function markFresh(f) {
+  freshItems.add(f.key);
+  if (freshTimers.has(f.key)) clearTimeout(freshTimers.get(f.key));
+  freshTimers.set(f.key, setTimeout(() => clearFresh(f.key), FRESH_TTL));
+  feed.unshift({ id: ++feedSeq, msg: noveltyMsg(f), key: f.key, ts: Date.now() });
+  if (feed.length > FEED_MAX) feed.length = FEED_MAX;
+  renderFeed();
+}
+
+function clearFresh(key) {
+  if (!freshItems.has(key)) return;
+  freshItems.delete(key);
+  if (freshTimers.has(key)) { clearTimeout(freshTimers.get(key)); freshTimers.delete(key); }
+  // Peel the accent off the live element without a full re-render.
+  const s = stops.find(x => x.key === key);
+  if (s && s.el) s.el.classList.remove('fresh');
+  const n = mapNodes.find(x => x.key === key);
+  if (n && n.el) n.el.classList.remove('fresh');
+}
+
+function renderFeed() {
+  const box = document.getElementById('feed');
+  const body = box.querySelector('.fbody');
+  box.classList.toggle('show', feed.length > 0);
+  body.textContent = '';
+  for (const e of feed) {
+    const t = new Date(e.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const aged = Date.now() - e.ts > 12000;
+    const b = el('button', { class: 'fentry' + (aged ? ' aged' : ''), title: 'jump to this change' },
+      e.msg, el('span', { class: 'fwhen' }, t));
+    b.addEventListener('click', () => jumpToFresh(e.key));
+    body.append(b);
+  }
+}
+
+// jumpToFresh moves the cursor (outline) or focus (map) onto a fed change and
+// clears its fresh mark — the feed doubles as a navigator.
+function jumpToFresh(key) {
+  clearFresh(key);
+  if (mapState.in) {
+    if (mapNodes.some(n => n.key === key)) { mapState.focus = key; renderMap(cur); }
+    return;
+  }
+  const s = stops.find(x => x.key === key);
+  if (s) { setCursor(s); return; }
+  // Item may be inside a collapsed section/subtree — reveal, then retry.
+  const m = /^it:([^:]+):/.exec(key);
+  if (m) { setCollapsed(m[1], false); renderOutline(cur); const s2 = stops.find(x => x.key === key); if (s2) setCursor(s2); }
+}
+
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -421,6 +602,7 @@ function setCursor(stop, scroll = true) {
   for (const s of stops) s.el.classList.remove('cursor');
   cursorKey = stop ? stop.key : null;
   if (stop) {
+    clearFresh(stop.key); // visiting a changed item settles it
     stop.el.classList.add('cursor');
     if (scroll) stop.el.scrollIntoView({ block: 'nearest' });
   }
@@ -558,6 +740,7 @@ function revealItemAncestors(section, target) {
 // section's add box rather than lost — the web analogue of the TUI rebase's
 // "target vanished → append as a new item" rule, but with a human in the loop.
 async function post(body, lostText) {
+  lastLocalEdit = Date.now(); // this page's own write — don't flag it as novelty
   const r = await fetch(`${API}/edit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -743,6 +926,7 @@ function itemNode(section, it) {
   const key = `it:${section}:${it.raw}`;
   const text = el('span', { class: 'text' + (listExpanded.has(it.raw) ? ' wrap' : '') });
   registerStop({ key, type: 'item', el: row, section, it, row, li, text });
+  if (freshItems.has(key)) row.classList.add('fresh'); // out-of-band change accent
   row.addEventListener('click', () => { if (searchHL !== '') endSearch(); setCursor(stops.find(s => s.key === key), false); });
 
   // Fold caret for an item with children (enter/l/h). Childless items get an
@@ -887,11 +1071,35 @@ function render(b) {
   renderOutline(b);
 }
 
+// contextBar renders a compact 5-cell progress bar for a 0–100 percentage.
+function contextBar(pct) {
+  const cells = 5;
+  const p = Math.max(0, Math.min(100, pct));
+  const filled = Math.round(p / 100 * cells);
+  return '▰'.repeat(filled) + '▱'.repeat(cells - filled);
+}
+
+// renderSessionStatus fills the header's live session-status segment from the
+// board's status sidecar (model · context bar · activity · cost), or clears it
+// when no fresh status is present.
+function renderSessionStatus(st) {
+  const el = document.getElementById('sessionstatus');
+  if (!el) return;
+  if (!st) { el.textContent = ''; return; }
+  const parts = [];
+  if (st.model) parts.push(st.model);
+  if (typeof st.contextPct === 'number') parts.push(contextBar(st.contextPct) + ' ' + Math.round(st.contextPct) + '%');
+  if (st.activity) parts.push(st.activity);
+  if (st.costUsd) parts.push('$' + st.costUsd.toFixed(2));
+  el.textContent = parts.join('  ·  ');
+}
+
 function renderOutline(b) {
   document.title = (b.title || shortId(b.session || b.id)) + ' — session-notes';
   document.getElementById('title').textContent = b.title || shortId(b.session || b.id);
   document.getElementById('sid').textContent = shortId(b.session || b.id);
   document.getElementById('cwd').textContent = b.cwd || '';
+  renderSessionStatus(b.status);
   document.getElementById('undo').disabled = !b.canUndo;
   document.getElementById('redo').disabled = !b.canRedo;
 
@@ -1149,6 +1357,12 @@ let mapNodes = []; // visible nodes of the last renderMap, in placement order
 // When set, the next renderMap centers the focused node in the viewport (on
 // first entry and after f/b re-roots) instead of the minimal-scroll default.
 let mapRecenter = false;
+// Measured node heights (key → px) from the last render, used when the browser
+// wrapped a node taller than the column-count estimate (emoji and bold glyphs
+// overflow the estimated width and rewrap). Ratchets upward only; renderMap
+// re-lays-out once when a fresh measurement grows, so sibling spacing always
+// reflects real rendered heights.
+const mapRealH = new Map();
 
 // mapBuild converts the board JSON into the full node tree. Keys match the
 // outline's stop keys exactly, so selection carries over both ways.
@@ -1348,6 +1562,7 @@ function renderMap(b) {
   cursorFollow = null;
   if (!focus) focus = root;
   mapState.focus = focus.key;
+  clearFresh(focus.key); // focusing a changed node settles it
   if (focus !== root) reveal(focus);
 
   // A focused (re-rooted) collapsed node would hide the children being shown.
@@ -1359,16 +1574,33 @@ function renderMap(b) {
     const l = mapLabel(n);
     label.set(n, l);
     // Longest line drives the box width; the [+N] suffix rides the last line.
+    // Ceil + 2px slack: a fractional shortfall would rewrap a max-width line
+    // in the browser and make the box taller than the layout planned for.
     const lineLen = (ln, i) => dispWidth(ln) + (i === l.lines.length - 1 ? dispWidth(l.suffix) : 0);
-    width.set(n, Math.max(...l.lines.map(lineLen)) * CHAR_W + 16);
+    width.set(n, Math.ceil(Math.max(...l.lines.map(lineLen)) * CHAR_W) + 18);
     // A node being added/edited inline reserves a comfortable input width so
     // sibling layout doesn't jump as the box hosts the text field.
     if (n.__pending || n.__editing) width.set(n, Math.max(width.get(n), 22 * CHAR_W));
-    ownH.set(n, Math.max(NODE_H, l.lines.length * LINE_H + 4));
+    // Height: line count × line height, but trust the browser when it rendered
+    // this node taller last pass (emoji/bold glyphs can wrap past the column
+    // estimate) — so siblings never crowd a tall wrapped box. A measurement is
+    // only honored while the estimate that produced it is unchanged (toggling
+    // `w` off must not leave a stale tall gap).
+    const est = Math.max(NODE_H, l.lines.length * LINE_H + 4);
+    const meas = mapRealH.get(n.key);
+    ownH.set(n, meas && meas.est === est ? Math.max(est, meas.real) : est);
+    if (meas && meas.est !== est) mapRealH.delete(n.key);
     const kids = visKids(n);
     kids.forEach(measure);
-    h.set(n, Math.max(ownH.get(n), kids.reduce((s, c) => s + h.get(c), 0) + GAP * Math.max(0, kids.length - 1)));
+    h.set(n, Math.max(ownH.get(n), stackH(kids)));
   };
+  // Sibling gap: single-line neighbors sit GAP apart; a pair where either box
+  // is a multi-line paragraph gets extra breathing room (TALL_GAP) — dense
+  // wrapped threads were reading as one crowded wall of text.
+  const gapBetween = (a, b) => (label.get(a).lines.length > 1 || label.get(b).lines.length > 1) ? TALL_GAP : GAP;
+  // stackH is the vertical extent of kids stacked with their pairwise gaps —
+  // the single source the measure/place/stack formulas all share.
+  const stackH = kids => kids.reduce((s, c, i) => s + h.get(c) + (i ? gapBetween(kids[i - 1], c) : 0), 0);
   measure(root);
 
   const [rightKids, leftKids] = splitSides(visKids(root));
@@ -1457,6 +1689,7 @@ function renderMap(b) {
       if (searchHit(n.it)) cls.push('searchhit');
     }
     if (l.lines.length > 1) cls.push('wrap'); // multi-line (w) node box
+    if (freshItems.has(n.key)) cls.push('fresh'); // out-of-band change accent
     if (n.key === mapState.focus) cls.push('focus');
     const wStyle = l.lines.length > 1 ? `;width:${width.get(n)}px` : '';
     const d = el('div', { class: cls.join(' '), style: `left:${x}px;top:${cy - ownH.get(n) / 2}px${wStyle}` });
@@ -1484,6 +1717,20 @@ function renderMap(b) {
       svg.append(path);
     }
   });
+
+  // Reconcile estimated vs rendered heights: when the browser wrapped a box
+  // taller than planned (fractional glyph widths, emoji wider than 2 columns,
+  // the bold author token), record the real height and re-lay-out once so the
+  // siblings below get real breathing room instead of crowding/overlapping.
+  // Heights only ratchet upward, so this recursion settles in one extra pass.
+  let heightsGrew = false;
+  for (const n of mapNodes) {
+    if (n.__pending || n.__editing) continue; // input boxes size themselves
+    const real = n.el.offsetHeight;
+    const est = Math.max(NODE_H, label.get(n).lines.length * LINE_H + 4);
+    if (real > ownH.get(n) + 1) { mapRealH.set(n.key, { est, real }); heightsGrew = true; }
+  }
+  if (heightsGrew) { renderMap(b); return; }
 
   // breadcrumb + footer
   const crumb = [];
@@ -1886,6 +2133,195 @@ let searchScopeAll = false;
 // searchLastIdx remembers the match index the last search session ended on, so
 // re-activating via n/N resumes from there instead of the top.
 let searchLastIdx = 0;
+// searchResults is the fuzzy-ranked panel list (best-first) for the live query;
+// searchPanelIdx is the highlighted row. Up/Down (ctrl+n/ctrl+p) move it, Enter
+// jumps to it. n/N keep it in sync (by item identity) with the board selection.
+let searchResults = [], searchPanelIdx = 0;
+// searchUnwrapKey holds the raw line (outline) or node key (map) of the CURRENT
+// match temporarily unwrapped to reveal a matched substring hidden by
+// truncation; restored when n/N moves past it or search ends.
+let searchUnwrapKey = null, searchUnwrapMap = false;
+
+// isWordChar: part of a word for boundary detection (mirrors the Go port).
+function isWordChar(c) { return /[A-Za-z0-9_]/.test(c); }
+
+// fuzzyScore scores query (lowercased, non-empty) against text fzf-style: exact
+// substring > word-boundary subsequence > loose subsequence; contiguity and an
+// earlier first-match position raise the score. Returns {score, ranges, ok}.
+function fuzzyScore(text, query) {
+  const low = (text || '').toLowerCase();
+  const idx = low.indexOf(query);
+  if (idx >= 0) {
+    const boundary = idx === 0 || !isWordChar(low[idx - 1]);
+    let score = 200000 + (query.length - 1) * 1000 - idx * 4;
+    if (boundary) score += 5000;
+    return { score, ranges: [[idx, idx + query.length]], ok: true };
+  }
+  const pos = [];
+  let qi = 0;
+  for (let i = 0; i < low.length && qi < query.length; i++) {
+    if (low[i] === query[qi]) { pos.push(i); qi++; }
+  }
+  if (qi < query.length) return { score: 0, ranges: [], ok: false };
+  let contig = 0, boundaryBonus = 0;
+  for (let i = 0; i < pos.length; i++) {
+    if (i > 0 && pos[i] === pos[i - 1] + 1) contig++;
+    if (pos[i] === 0 || !isWordChar(low[pos[i] - 1])) boundaryBonus++;
+  }
+  const firstBoundary = pos[0] === 0 || !isWordChar(low[pos[0] - 1]);
+  const tier = firstBoundary ? 1 : 0;
+  const score = tier * 100000 + contig * 1000 + boundaryBonus * 300 - pos[0] * 4;
+  const ranges = [];
+  let rs = pos[0], re = pos[0] + 1;
+  for (const p of pos.slice(1)) {
+    if (p === re) re = p + 1; else { ranges.push([rs, re]); rs = p; re = p + 1; }
+  }
+  ranges.push([rs, re]);
+  return { score, ranges, ok: true };
+}
+
+// searchRanked returns matches best-first (fuzzy). Working-set sections rank
+// above Archive/Log; ties break on document order. Honors the active scope.
+function searchRanked(q) {
+  q = (q || '').trim().toLowerCase();
+  if (!q || !cur) return [];
+  const out = [];
+  const walk = (items, section, working) => {
+    for (const it of items || []) {
+      if (!it.continuation) {
+        const r = fuzzyScore(it.text || '', q);
+        if (r.ok) out.push({ section, it, working, score: r.score, ranges: r.ranges });
+      }
+      walk(it.children, section, working);
+    }
+  };
+  for (const sec of cur.sections || []) {
+    if (!searchScopeAll && searchScopeExcluded(sec.title)) continue;
+    walk(sec.items, sec.title, !searchScopeExcluded(sec.title));
+  }
+  out.forEach((r, i) => r._doc = i); // stable document-order tiebreak
+  out.sort((a, b) => (a.working !== b.working) ? (a.working ? -1 : 1)
+    : (b.score !== a.score) ? b.score - a.score : a._doc - b._doc);
+  return out;
+}
+
+// markRanges wraps the given ranges of str in <span class="searchmark"> spans.
+function markRanges(str, ranges) {
+  const frag = document.createDocumentFragment();
+  let i = 0;
+  for (const [a, b] of ranges) {
+    if (a > i) frag.append(str.slice(i, a));
+    frag.append(el('span', { class: 'searchmark' }, str.slice(a, b)));
+    i = b;
+  }
+  if (i < str.length) frag.append(str.slice(i));
+  return frag;
+}
+
+// renderSearchPanel draws the ranked results list. The board is NOT touched.
+function renderSearchPanel() {
+  const box = document.getElementById('searchpanel');
+  if (!searchResults.length) { box.classList.remove('open'); box.innerHTML = ''; return; }
+  box.innerHTML = '';
+  box.append(el('div', { class: 'phead' }, `${searchPanelIdx + 1}/${searchResults.length} matches · ↑↓ pick · enter jump`));
+  searchResults.forEach((r, i) => {
+    const sec = el('span', { class: 'psec' }, r.section);
+    const text = el('span', { class: 'ptext' });
+    text.append(markRanges(r.it.text || '', r.ranges));
+    const row = el('div', { class: 'prow' + (i === searchPanelIdx ? ' sel' : '') }, sec, text);
+    row.addEventListener('click', () => { searchPanelIdx = i; const inp = document.getElementById('searchprompt').querySelector('input'); const v = inp.value; closeSearchPrompt(); confirmSearch(v); });
+    box.append(row);
+  });
+  box.classList.add('open');
+  const sel = box.querySelector('.prow.sel');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function closeSearchPanel() { const box = document.getElementById('searchpanel'); box.classList.remove('open'); box.innerHTML = ''; }
+function updateSearchScopeLabel() {
+  const e = document.getElementById('searchscope');
+  if (e) e.textContent = searchScopeAll ? 'all' : 'working';
+}
+// movePanel moves the panel selection (no board reveal until jump).
+function movePanel(dir) {
+  if (!searchResults.length) return;
+  searchPanelIdx = ((searchPanelIdx + dir) % searchResults.length + searchResults.length) % searchResults.length;
+  renderSearchPanel();
+  setPanelStatus();
+}
+function setPanelStatus() {
+  searchLastIdx = searchIdx;
+  const e = document.getElementById('searchstatus');
+  const scope = searchScopeAll ? '(all)' : '(working set)';
+  const total = searchResults.length;
+  e.textContent = `${(total ? searchPanelIdx + 1 : 0)}/${total} matches ${scope} · tab scope`;
+  e.classList.add('show');
+}
+// toggleSearchScopeLive flips scope from results mode (Tab outside the prompt),
+// re-ranks and re-jumps to keep the current selection valid.
+function toggleSearchScopeLive() {
+  searchScopeAll = !searchScopeAll;
+  updateSearchScopeLabel();
+  searchResults = searchRanked(searchQuery);
+  if (!searchResults.length) { searchActive = false; searchHL = ''; clearSearchStatus(); clearTempUnwrap();
+    if (mapState.in) renderMap(cur); else renderOutline(cur); toast('no matches', true); return; }
+  if (searchPanelIdx >= searchResults.length) searchPanelIdx = 0;
+  jumpToPanel(searchPanelIdx);
+  setPanelStatus();
+}
+
+// clearTempUnwrap restores a node unwrapped only for the current match.
+function clearTempUnwrap() {
+  if (searchUnwrapKey == null) return;
+  if (searchUnwrapMap) { delete mapState.expanded[searchUnwrapKey]; }
+  else { listExpanded.delete(searchUnwrapKey); }
+  searchUnwrapKey = null; searchUnwrapMap = false;
+}
+// tempUnwrapForMatch reveals the current match's node when its matched substring
+// is truncated off-screen. Outline: if the .text is clipped, add wrap; map: if
+// the node text is truncated, expand it. Only touches nodes the user has not
+// already expanded, and records the key so the original state is restored.
+function tempUnwrapForMatch(m) {
+  clearTempUnwrap();
+  if (!m || !searchHL) return;
+  if (mapState.in) {
+    const key = `it:${m.section}:${m.it.raw}`;
+    if (mapState.expanded[key]) return;
+    const full = m.it.text || '';
+    // The map truncates a node to ~40 chars; if the matched substring survives in
+    // that visible slice it is already readable, otherwise expand the node.
+    const shown = full.length > 40 ? full.slice(0, 39) : full;
+    if (shown.toLowerCase().includes(searchHL.toLowerCase())) return;
+    mapState.expanded[key] = true;
+    searchUnwrapKey = key; searchUnwrapMap = true;
+    renderMap(cur);
+    return;
+  }
+  if (listExpanded.has(m.it.raw)) return;
+  const s = stops.find(x => x.type === 'item' && x.section === m.section && x.it.raw === m.it.raw);
+  if (!s || !s.text) return;
+  const mark = s.text.querySelector('.searchmark');
+  const clipped = s.text.scrollWidth > s.text.clientWidth + 1;
+  // Unwrap when the row is clipped and the (first) matched span is at/over the edge.
+  if (!clipped) return;
+  if (mark && mark.offsetLeft + mark.offsetWidth <= s.text.clientWidth) return; // visible
+  listExpanded.add(m.it.raw);
+  searchUnwrapKey = m.it.raw; searchUnwrapMap = false;
+  s.text.classList.add('wrap');
+}
+// jumpToPanel jumps the board to the ranked panel row at idx (revealing it) and
+// syncs searchIdx to the same item's document-order position for n/N.
+function jumpToPanel(idx) {
+  if (idx < 0 || idx >= searchResults.length) return;
+  searchPanelIdx = idx;
+  const r = searchResults[idx];
+  clearTempUnwrap(); // restore the previous match before this jump re-renders
+  jumpToMatch(r);
+  tempUnwrapForMatch(r);
+  const docs = searchMatches(searchQuery);
+  const di = docs.findIndex(d => d.it.raw === r.it.raw && d.section === r.section);
+  if (di >= 0) searchIdx = di;
+  renderSearchPanel();
+}
 
 // searchHit reports whether an item matches the active highlight query.
 function searchHit(it) {
@@ -1918,7 +2354,7 @@ function markSearch(container) {
 function endSearch() {
   if (!searchActive && searchHL === '' && searchQuery === '') return;
   searchActive = false; searchHL = ''; searchQuery = '';
-  clearSearchStatus();
+  searchResults = []; clearSearchStatus(); closeSearchPanel(); clearTempUnwrap();
   if (mapState.in) renderMap(cur); else renderOutline(cur);
 }
 
@@ -1991,14 +2427,21 @@ function startSearch() {
   const box = document.getElementById('searchprompt');
   const inp = box.querySelector('input');
   inp.value = searchLastTerm; // recall last term (selected below → replaceable)
+  searchPanelIdx = 0;
+  updateSearchScopeLabel();
   box.classList.add('open');
   inputsOpen++; // defer live SSE re-renders while typing, like the add/map inputs
+  // No-reveal-until-jump: typing only updates the highlight + ranked panel; it
+  // never moves or expands the board. Enter (or n/N) does the jumping.
   const runQuery = () => {
     searchHL = inp.value.trim(); // highlight live as you type
     if (inp.value.trim()) searchLastTerm = inp.value.trim();
-    const matches = searchMatches(inp.value);
-    if (matches.length) { searchIdx = 0; jumpToMatch(matches[0]); setSearchStatus(matches.length); }
-    else { clearSearchStatus(); if (inp.value.trim()) toast('no matches', true); if (mapState.in) renderMap(cur); else renderOutline(cur); }
+    searchResults = searchRanked(inp.value);
+    searchPanelIdx = 0;
+    if (searchResults.length) { setPanelStatus(); }
+    else { clearSearchStatus(); if (inp.value.trim()) toast('no matches', true); }
+    renderSearchPanel();
+    if (mapState.in) renderMap(cur); else renderOutline(cur); // refresh highlights only
   };
   inp.oninput = runQuery;
   inp.onkeydown = e => {
@@ -2008,15 +2451,19 @@ function startSearch() {
       // prompt (Tab has no other meaning here, and ctrl+s is often terminal-taken).
       e.preventDefault();
       searchScopeAll = !searchScopeAll;
+      updateSearchScopeLabel();
       runQuery();
       return;
     }
+    // Up/Down (and ctrl+p/ctrl+n) move the panel selection; no board reveal.
+    if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) { e.preventDefault(); movePanel(1); return; }
+    if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) { e.preventDefault(); movePanel(-1); return; }
     if (e.key === 'Enter') { const v = inp.value; closeSearchPrompt(); confirmSearch(v); }
     else if (e.key === 'Escape') { closeSearchPrompt(); cancelSearch(); }
   };
   inp.focus();
   inp.select(); // recalled term shows selected: typing replaces it wholesale
-  if (inp.value.trim()) runQuery(); // live-preview the recalled term immediately
+  if (inp.value.trim()) runQuery(); // preview the recalled term's panel immediately
 }
 
 function closeSearchPrompt() {
@@ -2030,10 +2477,10 @@ function closeSearchPrompt() {
 
 function confirmSearch(q) {
   searchQuery = (q || '').trim();
-  const matches = searchMatches(searchQuery);
-  if (!searchQuery || !matches.length) {
+  searchResults = searchRanked(searchQuery);
+  if (!searchQuery || !searchResults.length) {
     searchActive = false; searchHL = '';
-    clearSearchStatus();
+    clearSearchStatus(); closeSearchPanel(); clearTempUnwrap();
     if (searchQuery) toast('no matches', true);
     if (mapState.in) renderMap(cur); else renderOutline(cur);
     return;
@@ -2041,13 +2488,14 @@ function confirmSearch(q) {
   searchActive = true;
   searchHL = searchQuery; // keep matches highlighted while n/N steps
   searchLastTerm = searchQuery; // remember for `/` recall + n/N re-activation
-  setSearchStatus(matches.length); // current match is matches[searchIdx]
-  if (mapState.in) renderMap(cur); else renderOutline(cur);
+  // Jump to the selected panel row (revealing it) and stay in results mode.
+  jumpToPanel(searchPanelIdx);
+  setPanelStatus();
 }
 
 function cancelSearch() {
   searchActive = false; searchQuery = ''; searchHL = '';
-  clearSearchStatus();
+  searchResults = []; clearSearchStatus(); closeSearchPanel(); clearTempUnwrap();
   if (mapState.in) {
     mapState.root = searchSaveMapRoot; mapState.focus = searchSaveMapFocus;
     renderMap(cur);
@@ -2063,28 +2511,42 @@ function searchNext(dir) {
     // Re-activate the last term when there's no live search (n/N recall).
     if (!searchLastTerm) return;
     searchQuery = searchLastTerm; searchHL = searchLastTerm; searchActive = true;
+    searchResults = searchRanked(searchQuery);
     const ms = searchMatches(searchQuery);
-    if (!ms.length) { searchActive = false; searchHL = ''; toast('no matches', true); return; }
+    if (!ms.length) { searchActive = false; searchHL = ''; searchResults = []; toast('no matches', true); return; }
     // Resume from where the last session left off: step one from the remembered
     // index (n -> next, N -> previous), not from the top.
     const base = ((searchLastIdx % ms.length) + ms.length) % ms.length;
     searchIdx = ((base + dir) % ms.length + ms.length) % ms.length;
-    jumpToMatch(ms[searchIdx]); setSearchStatus(ms.length);
-    if (mapState.in) renderMap(cur); else renderOutline(cur);
+    landDocMatch(ms, searchIdx);
     return;
   }
   const matches = searchMatches(searchQuery);
   if (!matches.length) {
     // Matches vanished (edited away) during n/N: clear highlight + status now,
     // re-render so stale search styling disappears immediately (TUI parity).
-    searchActive = false; searchHL = ''; clearSearchStatus();
+    searchActive = false; searchHL = ''; searchResults = []; clearSearchStatus(); closeSearchPanel(); clearTempUnwrap();
     if (mapState.in) renderMap(cur); else renderOutline(cur);
     toast('no matches', true);
     return;
   }
   searchIdx = ((searchIdx + dir) % matches.length + matches.length) % matches.length;
-  jumpToMatch(matches[searchIdx]);
-  setSearchStatus(matches.length);
+  landDocMatch(matches, searchIdx);
+}
+
+// landDocMatch jumps to the document-order match at idx, keeps the panel's
+// highlighted row in sync (by item identity), and applies the temporary unwrap
+// so a truncated match's text becomes visible while it is current.
+function landDocMatch(matches, idx) {
+  const m = matches[idx];
+  clearTempUnwrap(); // restore the previous match before this jump re-renders
+  jumpToMatch(m);
+  searchResults = searchRanked(searchQuery); // keep panel fresh across edits
+  const pi = searchResults.findIndex(r => r.it.raw === m.it.raw && r.section === m.section);
+  if (pi >= 0) searchPanelIdx = pi;
+  tempUnwrapForMatch(m);
+  renderSearchPanel();
+  setPanelStatus();
 }
 
 // ---- keyboard layer ----
@@ -2112,6 +2574,9 @@ document.addEventListener('keydown', e => {
   // `/`) clears the highlights + tally — every other key keeps them alive so
   // ordinary navigation no longer silently drops out of search.
   if (searchHL !== '' && e.key === 'Escape') { e.preventDefault(); endSearch(); return; }
+  // In results mode, Tab toggles the search scope (not the section) so a search
+  // never drifts into section-cycling.
+  if (searchActive && e.key === 'Tab') { e.preventDefault(); toggleSearchScopeLive(); return; }
   if (mapState.in) { handleMapKey(e); return; }
   const s = cursorStop();
   const onItem = s && s.type === 'item';
@@ -2198,7 +2663,9 @@ document.addEventListener('keydown', e => {
 
 async function refresh() {
   try {
-    cur = await (await fetch(API)).json();
+    const b = await (await fetch(API)).json();
+    computeNovelty(b); // flag out-of-band changes before the render paints them
+    cur = b;
     render(cur); // render() itself defers when an input is open
   } catch { /* transient; SSE or next action will retry */ }
 }
@@ -2300,7 +2767,19 @@ new MutationObserver(positionGrips).observe(document.getElementById('board'), { 
 
 // Debug handle for the e2e harness (test/e2e): read-only introspection of
 // the navigation state, so tests assert on real state instead of scraping.
+// Event feed controls: collapse/expand and dismiss-all.
+document.getElementById('feedcollapse').addEventListener('click', () => {
+  const box = document.getElementById('feed');
+  box.classList.toggle('collapsed');
+  document.getElementById('feedcollapse').textContent = box.classList.contains('collapsed') ? '+' : '–';
+});
+document.getElementById('feedclear').addEventListener('click', () => {
+  feed = []; renderFeed();
+});
 window.__sn = {
+  // Novelty state for the e2e harness: which items are flagged fresh, and the
+  // event-feed messages (newest first).
+  get novelty() { return { fresh: [...freshItems], feed: feed.map(e => e.msg) }; },
   get stops() { return stops.map(s => ({ key: s.key, type: s.type, visible: s.el.offsetParent !== null })); },
   get cursorKey() { return cursorKey; },
   get inputsOpen() { return inputsOpen; },
@@ -2332,6 +2811,12 @@ window.__sn = {
       matches: searchMatches(searchQuery).length,
       promptOpen: document.getElementById('searchprompt').classList.contains('open'),
       status: document.getElementById('searchstatus').textContent,
+      panelOpen: document.getElementById('searchpanel').classList.contains('open'),
+      panelIdx: searchPanelIdx,
+      panelCount: searchResults.length,
+      // Ranked panel rows (section + text) for asserting order + section labels.
+      panel: searchResults.map(r => ({ section: r.section, text: r.it.text })),
+      scopeLabel: document.getElementById('searchscope').textContent,
     };
   },
   // A cursor stop's on-screen rect, for asserting the selected line is visible
