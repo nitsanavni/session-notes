@@ -437,10 +437,11 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>V</td><td>recent out-of-band changes feed — j/k move, enter jump to the change,
       v full view, m minimize, x dismiss, esc leave</td></tr>
     <tr><td>y</td><td>copy board file path</td></tr>
-    <tr><td>m</td><td>mindmap view (in the map: hjkl move, enter fold, w expand node,
-      f focus subtree, b step out, e edit, a add child, A sibling, space cycle status,
-      p pin, ! urgent, d archive, D delete, o open link, y copy path, u undo,
-      / n N search, M toggle Log, m/q back)</td></tr>
+    <tr><td>m</td><td>mindmap view (in the map: hjkl move, g/G first/last, 1-9 section,
+      tab next section, enter fold, w expand node, f focus subtree, esc step out, e edit,
+      a add child, A sibling, space cycle status, b blocked, p pin, ! urgent, d archive,
+      D delete, o open link, y copy path, u undo, / n N search, H history, E raw, L log,
+      T title, M toggle Log, m/q back)</td></tr>
     <tr><td>W</td><td>outline width — cycle narrow / wide / full (drag a side grip for a
       custom width; double-click a grip to reset)</td></tr>
     <tr><td>?</td><td>this help</td></tr>
@@ -2016,7 +2017,7 @@ function renderMap(b) {
   document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (b steps out)';
   const logHidden = !mapState.showLog && (b.sections || []).some(s => s.title === 'Log');
   document.getElementById('mapfoot').textContent =
-    `${focus.text}  ·  hjkl move · enter fold · z zoom · w expand · f focus · b out · e edit · a add · A sibling · space status · p pin · / search · M log · m/q back` +
+    `${focus.text}  ·  hjkl move · g/G ends · tab section · enter fold · z zoom · w expand · f focus · esc out · e edit · a add · A sibling · space status · b blocked · p pin · / search · M log · m/q back` +
     (logHidden ? '  ·  Log hidden · M' : '');
   // On first entry / after f/b, center the focused node in the viewport (the
   // map opens centered, not with the node pinned to an edge); otherwise scroll
@@ -2278,6 +2279,35 @@ const sideSign = n => {
   return n.el.offsetLeft >= n.parent.el.offsetLeft ? 1 : -1;
 };
 
+// mapDocOrder lists the visible nodes in DOCUMENT order (board order), unlike
+// mapNodes' placement order (right ring first, then left): the layout root
+// followed by a visKids walk, which preserves section/item source order. The
+// backbone of the outline-parity nav keys (g/G, 1-9, tab).
+function mapDocOrder() {
+  const root = mapNodes.find(x => x.key === mapState.root) || mapNodes.find(x => x.kind === 'center');
+  if (!root) return [];
+  const out = [];
+  const walk = node => { out.push(node); visKids(node).forEach(walk); };
+  walk(root);
+  return out;
+}
+// mapSectionOf climbs from node to its enclosing section node (or itself).
+function mapSectionOf(node) {
+  for (let p = node; p; p = p.parent) if (p.kind === 'section') return p;
+  return null;
+}
+// mapMoveSection is tab/shift-tab: step to the next/prev section node in
+// document order, wrapping — the outline's moveSection for the map.
+function mapMoveSection(delta) {
+  const secs = mapDocOrder().filter(x => x.kind === 'section');
+  if (!secs.length) return;
+  const curSec = mapSectionOf(mapFocused());
+  let i = curSec ? secs.indexOf(curSec) : -1;
+  i = i < 0 ? (delta > 0 ? 0 : secs.length - 1) : ((i + delta) % secs.length + secs.length) % secs.length;
+  mapState.focus = secs[i].key;
+  renderMap(cur);
+}
+
 function handleMapKey(e) {
   // Results mode is sticky here too: Escape-to-clear is handled by the global
   // keydown before dispatch, so every key reaching handleMapKey keeps search
@@ -2285,9 +2315,16 @@ function handleMapKey(e) {
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
     'Enter', 'f', 'b', 'e', 'a', 'A', 'w', 'z', ' ', '!', 'p', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
-    '/', 'n', 'N', 'V']);
+    '/', 'n', 'N', 'V', 'g', 'G', 'Tab', 'H', 'E', 'L', 'T']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   const refocus = key => { mapState.focus = key; renderMap(cur); };
+  // 1-9 jump to the Nth section's node (document order) — outline parity.
+  if (e.key >= '1' && e.key <= '9') {
+    e.preventDefault();
+    const secs = mapDocOrder().filter(x => x.kind === 'section');
+    if (secs[+e.key - 1]) refocus(secs[+e.key - 1].key);
+    return;
+  }
   switch (e.key) {
     case 'j': case 'ArrowDown': case 'k': case 'ArrowUp': {
       if (!n) break;
@@ -2346,8 +2383,12 @@ function handleMapKey(e) {
         }
       }
       break;
-    case 'b': case 'Escape': {
-      if (mapState.root === 'center') { if (e.key === 'Escape') exitMap(); break; }
+    // b toggles blocked [?] on the focused item — outline muscle memory beats
+    // the old map-only "step out" binding, which lives on unambiguously as
+    // Escape (it always shared the handler). Sections/center: no-op.
+    case 'b': if (n && n.kind === 'item' && n.it.status !== 'none') act.blocked(n.section, n.it); break;
+    case 'Escape': {
+      if (mapState.root === 'center') { exitMap(); break; }
       const full = mapBuild(cur);
       const rootNode = findNode(full, mapState.root);
       const out = rootNode && rootNode.parent ? rootNode.parent.key : 'center';
@@ -2357,6 +2398,12 @@ function handleMapKey(e) {
       renderMap(cur);
       break;
     }
+    // g/G: first/last node in document order (outline parity). g skips the
+    // layout root itself so it lands on the first real node, like the outline's
+    // first visible stop.
+    case 'g': { const d = mapDocOrder(); if (d.length) refocus((d[1] || d[0]).key); break; }
+    case 'G': { const d = mapDocOrder(); if (d.length) refocus(d[d.length - 1].key); break; }
+    case 'Tab': mapMoveSection(e.shiftKey ? -1 : 1); break;
     case 'w': if (n) { mapState.expanded[n.key] = !mapState.expanded[n.key]; renderMap(cur); } break;
     case 'e': if (n) mapEdit(n); break;
     case 'a': if (n) mapAdd(n); break;
@@ -2377,6 +2424,19 @@ function handleMapKey(e) {
     case 'o': if (n && n.kind === 'item') act.open(n.section, n.it); break;
     case 'z': mapFocusFold(); break;
     case 'V': enterFeedMode(); break;
+    // Modal/global keys, same as the outline (parity): history, raw editor,
+    // quick log, title edit — all view-agnostic.
+    case 'H': openHistory(); break;
+    case 'E': openRaw(); break;
+    case 'T': startTitleEdit(); break;
+    case 'L': {
+      // Quick log, map-native: reveal the Log ring if hidden, focus its node,
+      // and open the inline add box on it (the outline's L focuses Log's add).
+      if (!mapState.showLog) { mapState.showLog = true; renderMap(cur); }
+      const log = mapNodes.find(x => x.kind === 'section' && x.title === 'Log');
+      if (log) { mapState.focus = log.key; renderMap(cur); mapAdd(mapFocused()); }
+      break;
+    }
     case 'M': mapState.showLog = !mapState.showLog; renderMap(cur); break;
     case 'm': case 'q': exitMap(); break;
     case 'u': post({ op: 'undo' }); break;

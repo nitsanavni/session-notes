@@ -384,7 +384,7 @@ run({
     t.assert(!map.nodes.includes(replyKey), 'default again');
   },
 
-  'map: f focuses a subtree, b steps out': async t => {
+  'map: f focuses a subtree, esc steps out': async t => {
     await t.open();
     await t.key('3'); // Threads head
     await t.key('m');
@@ -394,7 +394,7 @@ run({
     t.assert(map.focus.startsWith('it:Threads:'), 'focus on first child');
     const crumb = await t.page.textContent('#mapcrumb');
     t.assert(crumb.includes('Threads'), 'breadcrumb shows path');
-    await t.key('b');
+    await t.key('Escape'); // b now toggles blocked (outline parity); esc steps out
     map = (await t.sn2()).map;
     t.assert(map.root === 'center', 'stepped back out');
     t.assert(map.focus === 'sec:Threads', 'focus rests on the stepped-out node');
@@ -692,10 +692,10 @@ run({
     let outLeft = (await t.sn2()).map.focus;
     if (outLeft === 'sec:Threads') { await t.key('l'); outLeft = (await t.sn2()).map.focus; }
     t.assert(outLeft.startsWith('it:Threads:'), `outward from root entered a child (got ${outLeft})`);
-    // b steps out of focus mode back to the whole board.
-    await t.key('b');
+    // esc steps out of focus mode back to the whole board (b is now blocked).
+    await t.key('Escape');
     map = (await t.sn2()).map;
-    t.assert(map.root === 'center', `b stepped out (got ${map.root})`);
+    t.assert(map.root === 'center', `esc stepped out (got ${map.root})`);
     t.assert(map.focus === 'sec:Threads', 'focus rests on the stepped-out node');
   },
 
@@ -1719,6 +1719,63 @@ run({
     t.assert(nov.feed[0] === 'second novelty', `feed reappears with the new change (feed=${JSON.stringify(nov.feed)})`);
     const shown = await t.page.evaluate(() => document.getElementById('feed').classList.contains('show'));
     t.assert(shown, 'the feed panel is visible again');
+  },
+
+  'map: g/G jump to the first/last node in document order': async t => {
+    await t.open();
+    await t.key('m');
+    await t.page.waitForFunction(() => window.__sn.map.in);
+    await t.key('G'); // last node in document order (Log hidden by default)
+    let m = (await t.sn2()).map;
+    t.assert(m.focus.startsWith('it:Ideas:'), `G landed on the last Ideas node (got ${m.focus})`);
+    await t.key('g'); // first node: the first section's node
+    m = (await t.sn2()).map;
+    t.assert(m.focus === 'sec:Waiting on User', `g landed on the first section node (got ${m.focus})`);
+  },
+
+  'map: 1-9 jump to the Nth section node; tab cycles sections': async t => {
+    await t.open();
+    await t.key('m');
+    await t.page.waitForFunction(() => window.__sn.map.in);
+    await t.key('3'); // Threads
+    t.assert((await t.sn2()).map.focus === 'sec:Threads', 'digit jumped to the Threads node');
+    await t.key('Tab'); // next section, document order, wrapping
+    t.assert((await t.sn2()).map.focus === 'sec:Questions', 'tab moved to the next section node');
+    await t.key('Shift+Tab');
+    t.assert((await t.sn2()).map.focus === 'sec:Threads', 'shift-tab moved back');
+  },
+
+  'map: b toggles blocked on the focused item (outline parity)': async t => {
+    await t.open();
+    await t.key('2'); // Plan
+    await t.key('j', 3); // drop legacy endpoint ([ ])
+    await t.assertCursor('it:Plan:- [ ] drop legacy endpoint');
+    await t.key('m'); // map seeds focus from the outline cursor
+    await t.page.waitForFunction(k => window.__sn.map.in && window.__sn.map.focus === k,
+      'it:Plan:- [ ] drop legacy endpoint', { timeout: 3000 });
+    await t.key('b'); // blocked, not the old "step out"
+    await t.waitBoardContains('- [?] drop legacy endpoint');
+    t.assert((await t.sn2()).map.in, 'still in the map view');
+    await t.page.waitForFunction(k => window.__sn.map.focus === k,
+      'it:Plan:- [?] drop legacy endpoint', { timeout: 3000 });
+    await t.key('b'); // toggles back to open
+    await t.waitBoardContains('- [ ] drop legacy endpoint');
+  },
+
+  'map: H opens the history modal (outline parity)': async t => {
+    await t.open();
+    await t.key('5'); // Ideas — seed a journaled edit so history has an entry
+    await t.key('a');
+    await t.type('history seed');
+    await t.key('Enter');
+    await t.waitBoardContains('- history seed');
+    await t.page.click('body');
+    await t.key('m');
+    await t.page.waitForFunction(() => window.__sn.map.in);
+    await t.key('H');
+    await t.page.waitForSelector('#histmodal.open', { timeout: 3000 });
+    const txt = await t.page.textContent('#histlist');
+    t.assert(txt.includes('history seed'), `history lists the seeded edit (got ${JSON.stringify(txt.slice(0, 120))})`);
   },
 
   'map: V drives the recents feed and Enter lands on the node': async t => {
