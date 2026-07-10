@@ -594,3 +594,29 @@ func TestSearchMapRevealsFoldedReply(t *testing.T) {
 		t.Fatalf("map focus did not reveal the folded reply (got %v)", it)
 	}
 }
+
+// TestPanelSnippet checks the head-trim that keeps a deep match visible.
+func TestPanelSnippet(t *testing.T) {
+	// No trim when the match is near the start.
+	if got := panelSnippet("alpha here", [][2]int{{0, 5}}, 18); got != "alpha here" {
+		t.Fatalf("near-start should be unchanged, got %q", got)
+	}
+	// No ranges -> unchanged.
+	if got := panelSnippet("some text", nil, 18); got != "some text" {
+		t.Fatalf("no ranges should be unchanged, got %q", got)
+	}
+	// Deep match trims the head, prepends "…", keeps ~lead columns of context,
+	// and keeps the matched substring visible.
+	long := "the quick brown fox jumps over the lazy dog and then finds NEEDLE at the end"
+	idx := strings.Index(long, "NEEDLE")
+	got := panelSnippet(long, [][2]int{{idx, idx + len("NEEDLE")}}, 18)
+	if !strings.HasPrefix(got, "…") {
+		t.Fatalf("deep match should lead with an ellipsis, got %q", got)
+	}
+	if !strings.Contains(got, "NEEDLE") {
+		t.Fatalf("snippet must still contain the match, got %q", got)
+	}
+	if len(got) >= len(long) {
+		t.Fatalf("snippet should be shorter than the original, got %q", got)
+	}
+}

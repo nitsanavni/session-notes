@@ -3,9 +3,31 @@ package tui
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/nitsanavni/session-notes/internal/board"
 )
+
+// panelSnippet trims a long item's head so a match deep in the text stays
+// visible in the fixed-width results panel row. It keeps roughly lead columns of
+// left context before the first matched range and prepends "…" when it trims;
+// tail truncation is left to the caller. The panel re-finds the query to
+// highlight, so no range remapping is needed. Returns s unchanged when the first
+// match is already near the start (or there are no ranges).
+func panelSnippet(s string, ranges [][2]int, lead int) string {
+	if len(ranges) == 0 {
+		return s
+	}
+	start := ranges[0][0]
+	if start <= lead {
+		return s
+	}
+	cut := start - lead
+	for cut > 0 && cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return "…" + s[cut:]
+}
 
 // Fuzzy search scoring, shared by the outline and map result panels (and the web
 // port in board.html). It ranks matches fzf-style: an exact substring beats a

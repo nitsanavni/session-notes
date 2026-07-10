@@ -2404,6 +2404,22 @@ function searchRanked(q) {
   return out;
 }
 
+// snippetAround trims a long item's head so a deep match stays visible in the
+// fixed-height panel row. It keeps ~LEAD chars of left context before the first
+// match, prepends '…' when it trims the front, and shifts the match ranges to
+// the snippet's coordinates. Trailing truncation is left to CSS text-overflow.
+function snippetAround(str, ranges, lead = 18) {
+  str = str || '';
+  if (!ranges || !ranges.length) return { str, ranges: ranges || [] };
+  const start = ranges[0][0];
+  if (start <= lead) return { str, ranges };
+  const cut = start - lead;
+  const out = '…' + str.slice(cut);
+  const shift = 1 - cut; // '…' is one char, replacing the cut-away prefix
+  const adj = ranges.map(([a, b]) => [a + shift, b + shift]);
+  return { str: out, ranges: adj };
+}
+
 // markRanges wraps the given ranges of str in <span class="searchmark"> spans.
 function markRanges(str, ranges) {
   const frag = document.createDocumentFragment();
@@ -2426,7 +2442,8 @@ function renderSearchPanel() {
   searchResults.forEach((r, i) => {
     const sec = el('span', { class: 'psec' }, r.section);
     const text = el('span', { class: 'ptext' });
-    text.append(markRanges(r.it.text || '', r.ranges));
+    const snip = snippetAround(r.it.text || '', r.ranges);
+    text.append(markRanges(snip.str, snip.ranges));
     const row = el('div', { class: 'prow' + (i === searchPanelIdx ? ' sel' : '') }, sec, text);
     row.addEventListener('click', () => { searchPanelIdx = i; const inp = document.getElementById('searchprompt').querySelector('input'); const v = inp.value; closeSearchPrompt(); confirmSearch(v); });
     box.append(row);
@@ -3055,6 +3072,9 @@ window.__sn = {
       panelCount: searchResults.length,
       // Ranked panel rows (section + text) for asserting order + section labels.
       panel: searchResults.map(r => ({ section: r.section, text: r.it.text })),
+      // The panel rows as actually rendered (post head-trim snippet), so tests
+      // can assert a deep match stays visible with a leading '…'.
+      panelText: [...document.querySelectorAll('#searchpanel .prow .ptext')].map(e => e.textContent),
       scopeLabel: document.getElementById('searchscope').textContent,
     };
   },

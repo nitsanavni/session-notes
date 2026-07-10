@@ -755,6 +755,23 @@ run({
     t.assert((await t.cursorKey()).startsWith('it:Ideas:'), 'N wrapped to the last match');
   },
 
+  'search (outline): deep match snippet keeps the term visible with a leading …': async t => {
+    await t.open();
+    await t.key('/');
+    // "layout" only appears near the END of the very long Ideas item, well past
+    // the panel row's truncation width. The row must trim its head (leading …)
+    // so the matched term stays visible instead of showing only the item's head.
+    await t.type('layout');
+    const s = await t.searchState();
+    t.assert(s.panelOpen, `panel open (got ${JSON.stringify(s)})`);
+    const deep = (s.panelText || []).find(x => x.includes('layout'));
+    t.assert(deep, `a rendered row shows the deep match (got ${JSON.stringify(s.panelText)})`);
+    t.assert(deep.startsWith('…'), `deep match row leads with an ellipsis (got ${JSON.stringify(deep)})`);
+    t.assert(!deep.startsWith('… this is a deliberately'),
+      `row is trimmed to the match, not the item head (got ${JSON.stringify(deep)})`);
+    await t.key('Escape');
+  },
+
   'outline: fold/unfold an item, indicator count, cursor stays put': async t => {
     await t.open();
     await t.key('3'); // Threads

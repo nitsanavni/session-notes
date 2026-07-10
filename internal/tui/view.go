@@ -348,7 +348,8 @@ func (m *model) viewSearchPanel() string {
 		if textAvail < 1 {
 			textAvail = 1
 		}
-		text := ansi.Truncate(r.item.DisplayText(), textAvail, "…")
+		text := panelSnippet(r.item.DisplayText(), r.ranges, 18)
+		text = ansi.Truncate(text, textAvail, "…")
 		row := prefix + labelStyle.Render(label) + " " + highlightSegment(text, base, q)
 		lines = append(lines, row)
 	}
