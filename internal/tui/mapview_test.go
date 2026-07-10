@@ -284,6 +284,67 @@ func TestMapAddChildPersists(t *testing.T) {
 	}
 }
 
+// TestMapAddArrowKeepsTypedText guards against the regression where an arrow
+// key in map add mode discarded the typed text. Once text has been entered,
+// Left/Right must move the caret (not cancel) and Up/Down must be inert — no
+// data loss. Esc remains the explicit cancel; Enter commits.
+func TestMapAddArrowKeepsTypedText(t *testing.T) {
+	src := "## Threads\n- [ ] existing\n"
+	m := newMapModel(t, src, 80, 24)
+	focusMapSection(t, m, "Threads")
+
+	m.handleMapKey(keyPress("a"))
+	if m.mode != modeMapAdd {
+		t.Fatalf("a did not enter map add mode, got %v", m.mode)
+	}
+	m.input.SetValue("half typed")
+	m.input.CursorEnd()
+
+	m.handleMapInputKey(keyPress("left"))
+	// Left moved the caret off the end (standard text editing), proving arrows
+	// are routed to the input rather than swallowed.
+	if pos := m.input.Position(); pos >= len("half typed") {
+		t.Fatalf("left arrow did not move the caret within the text, pos=%d", pos)
+	}
+	for _, k := range []string{"up", "right", "down"} {
+		m.handleMapInputKey(keyPress(k))
+		if m.mode != modeMapAdd {
+			t.Fatalf("%s exited add mode (data would be lost), mode=%v", k, m.mode)
+		}
+		if got := m.input.Value(); got != "half typed" {
+			t.Fatalf("%s changed the typed text, got %q", k, got)
+		}
+	}
+
+	// Enter still commits the preserved text.
+	m.handleMapInputKey(keyPress("enter"))
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.Contains(string(data), "- [ ] half typed") {
+		t.Errorf("typed text not committed after arrows:\n%s", data)
+	}
+}
+
+// TestMapAddEscCancels confirms Esc is still the explicit cancel even with text.
+func TestMapAddEscCancels(t *testing.T) {
+	src := "## Threads\n- [ ] existing\n"
+	m := newMapModel(t, src, 80, 24)
+	focusMapSection(t, m, "Threads")
+
+	m.handleMapKey(keyPress("a"))
+	m.input.SetValue("discard me")
+	m.handleMapInputKey(keyPress("esc"))
+	if m.mode != modeBoard {
+		t.Fatalf("esc did not cancel add mode, mode=%v", m.mode)
+	}
+	data, _ := os.ReadFile(m.path)
+	if strings.Contains(string(data), "discard me") {
+		t.Errorf("esc should discard the typed text, but it persisted:\n%s", data)
+	}
+}
+
 // TestMapAddToSectionPersists adds a top-level item when a section node is
 // focused.
 func TestMapAddToSectionPersists(t *testing.T) {
