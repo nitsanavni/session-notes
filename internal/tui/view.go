@@ -107,6 +107,8 @@ func (m *model) View() string {
 		return m.viewHelp()
 	case modeHistory:
 		return m.viewHistory()
+	case modeRecents:
+		return m.viewRecents()
 	case modeAddSections:
 		return m.viewAddSections()
 	case modeLinkPick:
@@ -705,7 +707,7 @@ func (m *model) viewFooter() string {
 		}
 		return styleStatus.Render("search: ") + m.input.View() + "  " + styleDim.Render(scope+" tab scope")
 	}
-	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter fold · l expand/descend · h ascend · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · r reload · B boards · ? help · q quit"
+	hints := "j/k/arrows move · g/G top/bottom · tab section · 1-9 jump · / search · n/N next/prev · a add · A section · R reply · F fork · space status · b blocked · ! urgent · p pin · d archive · D delete · enter fold · l expand/descend · h ascend · z zoom · w wrap · e edit/rename section · E editor · T title · o open link · y copy path · m map · u undo · ctrl+r redo · L log · H history · V recents · r reload · B boards · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line
@@ -818,6 +820,7 @@ func (m *model) viewHelp() string {
 		{"S (map)", "map nav surprised you? note it — saved to <board>.feedback.jsonl (dev)"},
 		{"L", "quick log entry"},
 		{"H", "history: shared edit journal (who changed what), read-only"},
+		{"V", "recent changes: out-of-band edits newest-first; enter jumps to the change"},
 		{"u", "undo last change (shared journal timeline)"},
 		{"ctrl+r", "redo"},
 		{"r", "reload from disk"},
@@ -920,6 +923,43 @@ func (m *model) viewHistory() string {
 		b.WriteString(l + "\n")
 	}
 	b.WriteString("\n" + styleHelpBar.Render("j/k scroll · any other key returns"))
+	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+}
+
+// viewRecents renders the recent-changes overlay (V): out-of-band changes
+// newest-first, each a headline (what changed) over a dim meta line (who/when).
+// Enter jumps to the selected change; the TUI counterpart of the web feed.
+func (m *model) viewRecents() string {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("recent changes") + "\n")
+	b.WriteString(styleDim.Render("out-of-band edits, newest first · enter jumps · esc closes") + "\n\n")
+	if len(m.recents) == 0 {
+		b.WriteString(styleDim.Render("no out-of-band changes yet") + "\n")
+		b.WriteString("\n" + styleHelpBar.Render("any key returns"))
+		return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+	}
+	// Scroll window: reserve rows for the header (3) and footer (2); two rows per
+	// entry (headline + meta). Keep the selection visible.
+	bodyH := max(2, m.height-6)
+	perPage := max(1, bodyH/2)
+	top := 0
+	if m.recentsSel >= perPage {
+		top = m.recentsSel - perPage + 1
+	}
+	end := min(len(m.recents), top+perPage)
+	for i := top; i < end; i++ {
+		e := m.recents[i]
+		prefix := "  "
+		primaryStyle := lipgloss.NewStyle()
+		if i == m.recentsSel {
+			prefix = styleCursor.Render("> ")
+			primaryStyle = primaryStyle.Bold(true)
+		}
+		primary := ansi.Truncate(e.primary, max(1, m.width-4), "…")
+		b.WriteString(prefix + primaryStyle.Render(primary) + "\n")
+		b.WriteString("    " + styleDim.Render(e.meta+" · "+e.ts.Format("15:04")) + "\n")
+	}
+	b.WriteString("\n" + styleHelpBar.Render("j/k move · enter jump · g/G ends · esc close"))
 	return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
 }
 

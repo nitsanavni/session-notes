@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,6 +43,7 @@ const (
 	modeMapFeedback
 	modeSearch
 	modeHistory
+	modeRecents
 )
 
 // customSectionLabel is the final, always-present entry in the add-sections
@@ -87,6 +89,13 @@ type model struct {
 
 	// historyScroll is the top line offset of the read-only history overlay (H).
 	historyScroll int
+
+	// recents is the newest-first ring (cap recentsMax) of out-of-band changes —
+	// the TUI counterpart of the web novelty feed. Each external reload that
+	// changed the board appends the changed items here; the V overlay lists them
+	// and Enter jumps to the item (clearing its fresh mark). In-memory per session.
+	recents    []recentEntry
+	recentsSel int // selected row in the recents overlay
 
 	// helpScroll is the top line offset of the help overlay (?) so the key list
 	// stays reachable on short terminals (j/k/arrows scroll it).
@@ -809,6 +818,7 @@ func (m *model) doReload(recordExternal bool) {
 			for _, it := range items {
 				m.fresh[it] = true
 			}
+			m.recordRecents(items)
 			m.status = noveltyNotice(items)
 		}
 	}
@@ -827,6 +837,58 @@ var noveltyItemRe = regexp.MustCompile(`^\s*[-*]\s+(?:\[[ >x?~-]?\]\s+)?(.*\S.*)
 // noveltyAuthorRe spots a leading claude:/user: turn tag (tolerating a log
 // "HH:MM " stamp), so a reply reads as "claude replied" in the change notice.
 var noveltyAuthorRe = regexp.MustCompile(`^(?:\d{2}:\d{2}\s+)?(claude|user):\s*(.*)$`)
+
+// recentsMax caps the recent-changes ring (matches the web feed's FEED_MAX).
+const recentsMax = 30
+
+// recentEntry is one row in the recent-changes overlay (V): a headline (the
+// changed item's text or "who replied"), a dim meta line (author/section), the
+// item's trimmed raw line as its jump key, and when it landed.
+type recentEntry struct {
+	primary string
+	meta    string
+	key     string // trimmed raw source line — the fresh-map / DiffLines identity
+	ts      time.Time
+}
+
+// recordRecents prepends the given changed items (trimmed raw source lines, as
+// noveltyItems yields) to the recents ring, newest first, capping at recentsMax.
+// It also keeps the overlay selection pinned on the same entry as rows arrive on
+// top, mirroring the web feed.
+func (m *model) recordRecents(items []string) {
+	for i := len(items) - 1; i >= 0; i-- {
+		m.recents = append([]recentEntry{recentEntryFor(items[i])}, m.recents...)
+		if m.recentsSel >= 0 && m.mode == modeRecents {
+			m.recentsSel++
+		}
+	}
+	if len(m.recents) > recentsMax {
+		m.recents = m.recents[:recentsMax]
+	}
+	if m.recentsSel >= len(m.recents) {
+		m.recentsSel = max(0, len(m.recents)-1)
+	}
+}
+
+// recentEntryFor builds a feed entry from a changed item's trimmed raw line,
+// leading with WHAT changed (author-aware for replies) and relegating who/where
+// to the meta line — mirroring the web noveltyEntry.
+func recentEntryFor(line string) recentEntry {
+	text := line
+	if mm := noveltyItemRe.FindStringSubmatch(line); mm != nil {
+		text = strings.TrimSpace(mm[1])
+	}
+	primary, meta := text, "added"
+	if a := noveltyAuthorRe.FindStringSubmatch(text); a != nil {
+		who, rest := a[1], strings.TrimSpace(a[2])
+		primary = rest
+		if primary == "" {
+			primary = who + " replied"
+		}
+		meta = who + " replied"
+	}
+	return recentEntry{primary: primary, meta: meta, key: line, ts: time.Now()}
+}
 
 // noveltyItems returns the trimmed raw source lines of items that an external
 // write added (or rewrote — a status/text change removes the old line and adds
@@ -995,6 +1057,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHelpKey(msg)
 	case modeHistory:
 		return m.handleHistoryKey(msg)
+	case modeRecents:
+		return m.handleRecentsKey(msg)
 	}
 	if m.mapView {
 		return m.handleMapKey(msg)
@@ -1285,6 +1349,8 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "H":
 		m.openHistory()
+	case "V":
+		m.openRecents()
 	case "?":
 		m.prevMode = m.mode
 		m.mode = modeHelp
@@ -1340,6 +1406,70 @@ func (m *model) handleHistoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = m.prevMode
 	}
 	return m, nil
+}
+
+// openRecents opens the recent-changes overlay (V): a newest-first list of
+// out-of-band changes (the TUI counterpart of the web novelty feed). j/k move
+// the selection, Enter jumps to the change (clearing its fresh mark), esc/other
+// closes.
+func (m *model) openRecents() {
+	m.prevMode = m.mode
+	m.mode = modeRecents
+	m.recentsSel = 0
+}
+
+// handleRecentsKey drives the recents overlay. Enter jumps the cursor onto the
+// selected change and settles its fresh mark; j/k (arrows) move; g/G jump to the
+// ends; anything else closes it.
+func (m *model) handleRecentsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if m.recentsSel < len(m.recents)-1 {
+			m.recentsSel++
+		}
+	case "k", "up":
+		if m.recentsSel > 0 {
+			m.recentsSel--
+		}
+	case "g":
+		m.recentsSel = 0
+	case "G":
+		if len(m.recents) > 0 {
+			m.recentsSel = len(m.recents) - 1
+		}
+	case "enter":
+		if m.recentsSel >= 0 && m.recentsSel < len(m.recents) {
+			m.jumpToRecent(m.recents[m.recentsSel].key)
+		}
+		m.mode = m.prevMode
+	default:
+		m.mode = m.prevMode
+	}
+	return m, nil
+}
+
+// jumpToRecent moves the cursor onto the item whose trimmed raw source line
+// matches key (the fresh-map identity), revealing it through any collapsed
+// section or folded ancestor, and clears its fresh mark. A no-op if the item is
+// gone (e.g. the change was undone).
+func (m *model) jumpToRecent(key string) {
+	delete(m.fresh, key)
+	var target *board.Item
+	var walk func(items []*board.Item)
+	walk = func(items []*board.Item) {
+		for _, it := range items {
+			if target == nil && it.IsItem() && strings.TrimSpace(it.Raw()) == key {
+				target = it
+			}
+			walk(it.Children)
+		}
+	}
+	for _, s := range m.board.Sections {
+		walk(s.Items)
+	}
+	if target != nil {
+		m.jumpToMatch(target)
+	}
 }
 
 func (m *model) moveSection(delta int) {
