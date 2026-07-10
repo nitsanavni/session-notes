@@ -67,3 +67,50 @@ func TestOutlineLNoOpOnExpandedHeader(t *testing.T) {
 		t.Fatal("cursor should stay on the header")
 	}
 }
+
+// Item-level l/h follow the map's expand-or-descend / collapse-or-ascend
+// convention in the outline: l descends into the first child, h steps out to
+// the parent (section header for a top-level item).
+
+func TestOutlineLDescendsIntoChild(t *testing.T) {
+	m := newTestModel("## Threads\n- [ ] parent\n  - claude: a reply\n", 100, 40)
+	m.handleBoardKey(keyPress("j")) // onto "parent"
+	if it := m.currentItem(); it == nil || it.Text != "parent" {
+		t.Fatalf("expected cursor on parent, got %v", m.currentItem())
+	}
+	m.handleBoardKey(keyPress("l")) // descend to the first child
+	if it := m.currentItem(); it == nil || it.Text != "claude: a reply" {
+		t.Fatalf("l should descend to the first child, got %v", m.currentItem())
+	}
+}
+
+func TestOutlineLNoOpOnLeafItem(t *testing.T) {
+	m := newTestModel("## Plan\n- [ ] only\n", 100, 40)
+	m.handleBoardKey(keyPress("j")) // onto "only"
+	m.handleBoardKey(keyPress("l")) // leaf: nothing to descend into
+	if it := m.currentItem(); it == nil || it.Text != "only" {
+		t.Fatalf("l on a leaf item must stay put, got %v", m.currentItem())
+	}
+}
+
+func TestOutlineHAscendsToParent(t *testing.T) {
+	m := newTestModel("## Threads\n- [ ] parent\n  - claude: a reply\n", 100, 40)
+	m.handleBoardKey(keyPress("j")) // parent
+	m.handleBoardKey(keyPress("j")) // the reply (child)
+	if it := m.currentItem(); it == nil || it.Text != "claude: a reply" {
+		t.Fatalf("expected cursor on the reply, got %v", m.currentItem())
+	}
+	m.handleBoardKey(keyPress("h")) // step out to the parent
+	if it := m.currentItem(); it == nil || it.Text != "parent" {
+		t.Fatalf("h should ascend to the parent, got %v", m.currentItem())
+	}
+}
+
+func TestOutlineHOnTopLevelGoesToHeader(t *testing.T) {
+	m := newTestModel("## Plan\n- [ ] first\n", 100, 40)
+	m.handleBoardKey(keyPress("j")) // onto "first" (top-level)
+	m.handleBoardKey(keyPress("h")) // step out to the section header
+	if _, ok := m.onHeader(); !ok {
+		t.Fatal("h on a top-level item should land on the section header")
+	}
+}

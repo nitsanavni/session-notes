@@ -174,26 +174,102 @@ func TestSearchHighlightOutline(t *testing.T) {
 	}
 }
 
-func TestSearchHighlightClearsOnNav(t *testing.T) {
+// TestSearchResultsModeSticky: after Enter, the search enters a persistent
+// results mode. Ordinary navigation (n/N, and plain moves like j) keeps the
+// highlight + query alive; only Esc clears it. This is the "too easy to get out
+// of search" fix.
+func TestSearchResultsModeSticky(t *testing.T) {
 	forceColor(t)
 	m := newTestModel(searchBoard, 80, 40)
 	typeSearch(m, "alpha")
-	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter}) // confirm: n/N live, highlight stays
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter}) // confirm: results mode
 	if !strings.Contains(m.viewBoard(), searchTint) {
-		t.Fatal("expected highlight to persist after enter (search-follow mode)")
+		t.Fatal("expected highlight to persist after enter (results mode)")
 	}
-	// n keeps follow mode (and highlight) alive.
+	// n keeps results mode (and highlight) alive.
 	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	if !strings.Contains(m.viewBoard(), searchTint) {
 		t.Error("n should keep the highlight alive")
 	}
-	// Any other action (a move) ends follow mode and clears the highlight.
+	// A plain move (j) must NOT drop out of results mode any more.
 	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if !m.searchActive {
+		t.Error("j should keep results mode active (sticky search)")
+	}
+	if !strings.Contains(m.viewBoard(), searchTint) {
+		t.Errorf("expected highlight to persist after a nav action:\n%q", m.viewBoard())
+	}
+	// Only Esc clears the search.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.searchActive {
-		t.Error("j should end search-follow mode")
+		t.Error("esc should clear results mode")
 	}
 	if strings.Contains(m.viewBoard(), searchTint) {
-		t.Errorf("expected highlight cleared after a nav action:\n%q", m.viewBoard())
+		t.Errorf("expected highlight cleared after esc:\n%q", m.viewBoard())
+	}
+}
+
+// TestSearchLastTermRecall: `/` pre-fills the previous term (Enter reuses it),
+// and n/N with no active search re-activate the last term.
+func TestSearchLastTermRecall(t *testing.T) {
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	// Esc out of results mode; the last term is remembered.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.searchActive {
+		t.Fatal("precondition: esc should have cleared results mode")
+	}
+	// `/` recalls the term into a fresh prompt (selected/replaceable).
+	m.startSearch()
+	if m.input.Value() != "alpha" {
+		t.Errorf("startSearch did not recall last term: %q", m.input.Value())
+	}
+	if !m.searchPrefilled {
+		t.Error("recalled term should be marked prefilled (replaceable)")
+	}
+	// Enter reuses the recalled term as-is.
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.searchActive || m.searchQuery != "alpha" {
+		t.Errorf("Enter on recalled term did not confirm alpha (active=%v q=%q)", m.searchActive, m.searchQuery)
+	}
+	// Esc, then n with no active search re-activates the last term.
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.searchActive {
+		t.Fatal("precondition: esc should clear before recall-via-n")
+	}
+	if !m.searchNext(1) {
+		t.Fatal("n with no active search should re-activate the last term")
+	}
+	if !m.searchActive || m.searchQuery != "alpha" {
+		t.Errorf("n recall did not re-activate alpha (active=%v q=%q)", m.searchActive, m.searchQuery)
+	}
+}
+
+// TestSearchPrefillReplacedByTyping: typing a rune over a recalled term replaces
+// it wholesale rather than appending.
+func TestSearchPrefillReplacedByTyping(t *testing.T) {
+	m := newTestModel(searchBoard, 80, 40)
+	typeSearch(m, "alpha")
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m.handleBoardKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.startSearch() // recalls "alpha", prefilled
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if got := m.input.Value(); got != "b" {
+		t.Errorf("typing over a recalled term = %q, want %q (wholesale replace)", got, "b")
+	}
+}
+
+// TestSearchInputUnknownKeyNoop: an unhandled key in the prompt (input mode)
+// must not exit search — it stays in modeSearch.
+func TestSearchInputUnknownKeyNoop(t *testing.T) {
+	m := newTestModel(searchBoard, 80, 40)
+	m.startSearch()
+	// ctrl+g is not enter/esc and not printable: it must be swallowed, staying
+	// in the prompt rather than dropping to the board.
+	m.handleSearchKey(tea.KeyMsg{Type: tea.KeyCtrlG})
+	if m.mode != modeSearch {
+		t.Errorf("unknown key exited search prompt: mode=%v", m.mode)
 	}
 }
 

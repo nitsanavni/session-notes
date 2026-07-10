@@ -304,8 +304,9 @@ body.mapmode #mapwrap { display: block; }
     <tr><td>A</td><td>add a section</td></tr>
     <tr><td>R / F</td><td>reply in thread (flat) / fork a sub-thread</td></tr>
     <tr><td>enter / l / h</td><td>fold at the cursor. On a section: h collapses; l expands a collapsed
-      section and lands on its first item. On an item with children: enter toggles, l unfolds, h folds
-      the subtree (or bubbles up to fold the parent)</td></tr>
+      section and lands on its first item. On an item with children: enter toggles; l unfolds then
+      descends to the first child; h folds the subtree, then (leaf / folded) steps out to the parent
+      (top-level → section header)</td></tr>
     <tr><td>w</td><td>wrap the long item at the cursor (toggle truncated ↔ full)</td></tr>
     <tr><td>space</td><td>cycle status [ ] → [&gt;] → [x]</td></tr>
     <tr><td>b</td><td>toggle blocked [?]</td></tr>
@@ -504,14 +505,29 @@ function parentItemStop(stop) {
     && x.it.children && x.it.children.includes(stop.it)) || null;
 }
 
-// collapseItemOrBubble is `h`/left on an item: collapse it if it has an open
-// subtree; otherwise (a leaf, or an already-collapsed item) fold its parent and
-// land the cursor there — the vim-tree "close, then step out" gesture.
-function collapseItemOrBubble(stop) {
+// collapseOrGotoParent is `h`/left on an item, following the map's convention:
+// if the item has an open subtree, collapse it in place; otherwise (a leaf or
+// an already-collapsed item) step the cursor OUT to its parent — the parent
+// item, or the section header for a top-level item. Selection only, no fold.
+// expandOrGotoChild is `l`/right on an item, the mirror of collapseOrGotoParent:
+// a collapsed subtree expands in place; an already-expanded one descends the
+// cursor to its first child; a leaf is a no-op (nothing to expand or enter).
+function expandOrGotoChild(stop) {
+  const has = stop.it.children && stop.it.children.length;
+  if (!has) return;
+  if (itemCollapsed(stop.key)) { toggleItemCollapse(stop, false); return; }
+  const child = stops.find(x => x.type === 'item' && x.section === stop.section
+    && stop.it.children.includes(x.it));
+  if (child) setCursor(child);
+}
+
+function collapseOrGotoParent(stop) {
   const has = stop.it.children && stop.it.children.length;
   if (has && !itemCollapsed(stop.key)) { toggleItemCollapse(stop, true); return; }
   const p = parentItemStop(stop);
-  if (p) toggleItemCollapse(p, true);
+  if (p) { setCursor(p); return; }
+  const head = stops.find(x => x.type === 'section' && x.title === stop.section);
+  if (head) setCursor(head);
 }
 
 // revealItemAncestors un-collapses every folded item on the path down to
@@ -2080,11 +2096,12 @@ document.addEventListener('keydown', e => {
     case 'Enter': if (onSec) toggleSectionCollapse(s.title); else if (onItem) toggleItemCollapse(s); break;
     // l/right on a collapsed head: single-press expand-and-nav — the section
     // opens AND the cursor lands on its first item (expanded heads: no-op).
-    // On an item, l/right only expands a collapsed subtree (never collapses).
-    case 'l': case 'ArrowRight': if (onSec) expandIntoSection(s.title); else if (onItem) toggleItemCollapse(s, false); break;
-    // On an item, h/left collapses an open subtree, or bubbles up to fold the
-    // parent when the item is a leaf / already collapsed.
-    case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); else if (onItem) collapseItemOrBubble(s); break;
+    // On an item, l/right expands a collapsed subtree, else descends to the
+    // first child (leaf: no-op) — the map's expand-or-descend convention.
+    case 'l': case 'ArrowRight': if (onSec) expandIntoSection(s.title); else if (onItem) expandOrGotoChild(s); break;
+    // On an item, h/left collapses an open subtree, else steps out to the
+    // parent item / section header (the map's collapse-or-ascend convention).
+    case 'h': case 'ArrowLeft': if (onSec) toggleSectionCollapse(s.title, true); else if (onItem) collapseOrGotoParent(s); break;
     case 'Tab': moveSection(e.shiftKey ? -1 : 1); break;
     case 'g': { const v = visibleStops(); if (v.length) setCursor(v[0]); break; }
     case 'G': { const v = visibleStops(); if (v.length) setCursor(v[v.length - 1]); break; }

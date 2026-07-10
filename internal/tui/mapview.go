@@ -984,7 +984,9 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.ensureMap()
 	key := msg.String()
-	m.endSearchFollow(key)
+	if m.clearSearchOnEsc(key) {
+		return m, nil
+	}
 	// Surprise recorder: capture a replayable before-state for map actions so
 	// `!` can attach the recent trail to a feedback note (see feedback.go).
 	var before *feedbackState

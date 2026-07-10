@@ -186,6 +186,12 @@ type model struct {
 	// searchSaveMapRoot holds the pre-search map focus root (`f` zoom) so Esc
 	// restores the zoom even when jumpToMatch cleared it for an out-of-subtree hit.
 	searchSaveMapRoot string
+	// searchLastTerm remembers the most recent query (in-memory, per session) so
+	// `/` pre-fills it (replaceable) and `n`/`N` re-activate it with no active
+	// search. searchPrefilled marks that the prompt is showing a recalled term
+	// that the first edit keystroke should replace wholesale.
+	searchLastTerm  string
+	searchPrefilled bool
 
 	// updateHint is a dim, text-only "newer release available" notice shown in
 	// the picker and dashboard footers. Populated asynchronously by
@@ -336,6 +342,41 @@ func (m *model) currentItem() *board.Item {
 		return nil
 	}
 	return m.positions[m.cursor].item
+}
+
+// cursorToItem moves the cursor onto the navItem holding it (no-op if it has no
+// stop, e.g. inside a collapsed section). Returns whether it landed.
+func (m *model) cursorToItem(it *board.Item) bool {
+	for i, p := range m.positions {
+		if p.item == it {
+			m.cursor = i
+			m.selSec = p.sec
+			return true
+		}
+	}
+	return false
+}
+
+// cursorToHeader moves the cursor onto section index sec's header stop.
+func (m *model) cursorToHeader(sec int) bool {
+	for i, p := range m.positions {
+		if p.header && p.sec == sec {
+			m.cursor = i
+			m.selSec = p.sec
+			return true
+		}
+	}
+	return false
+}
+
+// firstChildItem returns parent's first navigable (bullet) child, or nil.
+func firstChildItem(parent *board.Item) *board.Item {
+	for _, c := range parent.Children {
+		if c.IsItem() {
+			return c
+		}
+	}
+	return nil
 }
 
 // inSubtree reports whether target is root or nested anywhere beneath it.
@@ -715,7 +756,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.status = ""
-	m.endSearchFollow(msg.String())
+	if m.clearSearchOnEsc(msg.String()) {
+		return m, nil
+	}
 	switch msg.String() {
 	case "q", "esc":
 		// When the board was opened from the dashboard, q/esc returns there
@@ -874,12 +917,28 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+		} else if it := m.currentItem(); it != nil {
+			// On an item, l/right descends to its first child (the map's
+			// expand-or-descend convention; a leaf is a no-op). The outline has
+			// no per-item fold, so there is nothing to expand first.
+			if c := firstChildItem(it); c != nil {
+				m.cursorToItem(c)
+			}
 		}
 	case "h", "left":
 		// Collapse the section when on its header (symmetric with l/right).
 		if sec, ok := m.onHeader(); ok && !m.sectionCollapsed(sec.Title) {
 			m.setCollapsed(sec.Title, true)
 			m.rebuildPositions()
+		} else if it := m.currentItem(); it != nil {
+			// On an item, h/left steps OUT to the parent (the map's
+			// collapse-or-ascend convention): the parent item, or the section
+			// header for a top-level item.
+			if p := m.board.ParentOf(it); p != nil {
+				m.cursorToItem(p)
+			} else {
+				m.cursorToHeader(m.positions[m.cursor].sec)
+			}
 		}
 	case "e":
 		// On a section header, e renames the heading (reusing the map view's

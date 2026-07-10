@@ -137,6 +137,7 @@ class Ctx {
     cursorKey: window.__sn.cursorKey,
     inputsOpen: window.__sn.inputsOpen,
     stops: window.__sn.stops,
+    collapsedItems: window.__sn.collapsedItems,
   })); }
 
   // sn2 includes the map state as well.

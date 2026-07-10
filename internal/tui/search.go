@@ -52,8 +52,22 @@ func (m *model) startSearch() {
 	m.mode = modeSearch
 	m.input.Placeholder = "search"
 	m.input.Width = max(20, m.width-14)
-	m.input.SetValue("")
+	// Pre-fill the last searched term (recall). It shows selected/replaceable:
+	// the first editing keystroke wipes it, Enter reuses it as-is.
+	m.input.SetValue(m.searchLastTerm)
+	m.input.CursorEnd()
+	m.searchPrefilled = m.searchLastTerm != ""
 	m.input.Focus()
+	if m.searchPrefilled {
+		// Live-preview the recalled term straight away so its matches highlight
+		// and the view jumps to the first hit before any keystroke.
+		matches := searchMatches(m.board, m.searchLastTerm)
+		if len(matches) > 0 {
+			m.searchIdx = 0
+			m.jumpToMatch(matches[0])
+			m.setSearchStatus(len(matches))
+		}
+	}
 }
 
 // handleSearchKey drives the incremental search prompt. Every keystroke that is
@@ -97,13 +111,27 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.searchActive = true
+		m.searchLastTerm = q
 		m.setSearchStatus(len(matches))
 		return m, nil
+	}
+	// A recalled term shows selected: the first editing keystroke replaces it
+	// wholesale (rune/space types over it, backspace/delete wipes it). Cursor
+	// moves just deselect without clearing.
+	if m.searchPrefilled {
+		m.searchPrefilled = false
+		switch msg.Type {
+		case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace, tea.KeyDelete:
+			m.input.SetValue("")
+		}
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	// Live: jump to the first match for the current query.
 	q := strings.TrimSpace(m.input.Value())
+	if q != "" {
+		m.searchLastTerm = q
+	}
 	matches := searchMatches(m.board, q)
 	if len(matches) > 0 {
 		m.searchIdx = 0
@@ -122,7 +150,22 @@ func (m *model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // across board edits made between steps. Returns false when no search is active.
 func (m *model) searchNext(dir int) bool {
 	if !m.searchActive {
-		return false
+		// Re-activate the last term when there's no live search (n/N recall).
+		if m.searchLastTerm == "" {
+			return false
+		}
+		m.searchQuery = m.searchLastTerm
+		m.searchActive = true
+		m.searchIdx = 0
+		matches := searchMatches(m.board, m.searchQuery)
+		if len(matches) == 0 {
+			m.searchActive = false
+			m.status = "no matches"
+			return true
+		}
+		m.jumpToMatch(matches[0])
+		m.setSearchStatus(len(matches))
+		return true
 	}
 	matches := searchMatches(m.board, m.searchQuery)
 	if len(matches) == 0 {
@@ -136,22 +179,23 @@ func (m *model) searchNext(dir int) bool {
 	return true
 }
 
-// endSearchFollow ends confirmed-search follow mode — and with it the match
-// highlighting — when the pressed key is anything other than the search verbs
-// themselves. After `enter` confirms a search, `n`/`N` step through matches and
-// `/` reopens the prompt; those keep search live. Any other board/map action
-// (a move, an edit, a fold, a mode switch, quit) clears searchActive and the
-// stored query, so highlighting disappears the moment the user does something
-// else. Esc's own clearing is handled in handleSearchKey (prompt) and the map's
-// focusOut path. A no-op while the prompt is open (modeSearch never reaches the
-// board/map key handlers).
-func (m *model) endSearchFollow(key string) {
-	switch key {
-	case "n", "N", "/":
-		return // the search verbs keep follow mode (and highlighting) alive
+// clearSearchOnEsc implements persistent results mode. After `enter` confirms a
+// search, the match highlighting and tally stay live through ordinary navigation
+// (moves, folds, edits) — `n`/`N` step matches, `/` reopens the prompt — and
+// ONLY Esc (or a new `/`) clears them. When search is active and Esc is pressed,
+// it clears searchActive + the stored query and returns true so the caller
+// consumes the key: Esc drops the search instead of quitting / focusing out.
+// Every other key is a no-op here, so nothing else silently exits search. A
+// no-op while the prompt is open (modeSearch never reaches the board/map key
+// handlers); the prompt's own Esc is handled in handleSearchKey.
+func (m *model) clearSearchOnEsc(key string) bool {
+	if key == "esc" && m.searchActive {
+		m.searchActive = false
+		m.searchQuery = ""
+		m.status = ""
+		return true
 	}
-	m.searchActive = false
-	m.searchQuery = ""
+	return false
 }
 
 // setSearchStatus writes the "k/N matches" tally (1-based current index).

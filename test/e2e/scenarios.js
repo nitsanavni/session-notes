@@ -786,17 +786,36 @@ run({
     await t.assertCursor('it:Threads:- [x] fix flaky test');
   },
 
-  'outline: h on a leaf child bubbles up to fold the parent': async t => {
+  'outline: h on a leaf child steps out to the parent (no fold)': async t => {
     await t.open();
     await t.key('3'); // Threads
     await t.key('j'); // auth item
     await t.key('j'); // its reply (a leaf)
     await t.assertCursor('it:Threads:  - claude: extracted, tests green');
-    await t.key('h'); // leaf: bubble up, fold parent, move selection there
+    await t.key('h'); // leaf: step OUT to the parent, selection only
     const auth = 'it:Threads:- [>] auth refactor — extracting middleware';
     await t.assertCursor(auth);
     const sn = await t.sn();
-    t.assert(sn.collapsedItems.includes(auth), `parent folded from the child (got ${JSON.stringify(sn.collapsedItems)})`);
+    t.assert(!sn.collapsedItems.includes(auth), `parent stays expanded (got ${JSON.stringify(sn.collapsedItems)})`);
+  },
+
+  'outline: h on a top-level item steps out to the section header': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('j'); // auth item (top-level, expanded)
+    await t.key('h'); // foldable + expanded → collapse in place first
+    await t.assertCursor('it:Threads:- [>] auth refactor — extracting middleware');
+    await t.key('h'); // now folded → step out to the section header
+    await t.assertCursor('sec:Threads');
+  },
+
+  'outline: l on an expanded item descends to its first child': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('j'); // auth item (expanded, one reply child)
+    await t.assertCursor('it:Threads:- [>] auth refactor — extracting middleware');
+    await t.key('l'); // expanded → descend to the first child
+    await t.assertCursor('it:Threads:  - claude: extracted, tests green');
   },
 
   'outline: search reveals a match inside a folded item': async t => {
