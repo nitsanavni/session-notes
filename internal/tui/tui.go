@@ -127,6 +127,15 @@ type model struct {
 	focusFoldPrev      map[string]bool
 	focusFoldPrevItems map[string]bool
 
+	// outlineChildMem remembers, per parent stop, the child the cursor last
+	// ascended from (h/left), so l/right re-enters that child instead of the
+	// first — the outline counterpart of the map's mapChildMem and the web
+	// outline's outlineChildMem. Keyed by the parent's identity ("sec:<title>"
+	// for a section header, the item's raw source line otherwise); the value is
+	// the child item's raw line. Session-scoped; a stale entry (child edited or
+	// gone) falls back to the first child.
+	outlineChildMem map[string]string
+
 	// listExpanded holds, keyed by item raw source line, which items the user has
 	// wrapped in place (the `w` toggle in the outline view): rendered as a wrapped
 	// multi-line block instead of a single truncated line. Session-only, like
@@ -557,6 +566,35 @@ func (m *model) focusFoldToggle() {
 	if it == nil || !m.cursorToItem(it) {
 		m.cursorToHeader(sec)
 	}
+}
+
+// rememberOutlineChild records that the cursor ascended from child to the
+// parent identified by parentKey (see outlineChildMem).
+func (m *model) rememberOutlineChild(parentKey string, child *board.Item) {
+	if m.outlineChildMem == nil {
+		m.outlineChildMem = map[string]string{}
+	}
+	m.outlineChildMem[parentKey] = child.Raw()
+}
+
+// outlineChildPick returns the child of kids the cursor should descend to under
+// parentKey: the remembered ascended-from child when it still exists, else the
+// first navigable child (nil when there is none).
+func (m *model) outlineChildPick(parentKey string, kids []*board.Item) *board.Item {
+	memRaw := m.outlineChildMem[parentKey]
+	var first *board.Item
+	for _, c := range kids {
+		if !c.IsItem() {
+			continue
+		}
+		if first == nil {
+			first = c
+		}
+		if memRaw != "" && c.Raw() == memRaw {
+			return c
+		}
+	}
+	return first
 }
 
 // firstChildItem returns parent's first navigable (bullet) child, or nil.
@@ -1236,23 +1274,21 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sec, ok := m.onHeader(); ok && m.sectionCollapsed(sec.Title) {
 			m.setCollapsed(sec.Title, false)
 			m.rebuildPositions()
-			for i, p := range m.positions {
-				if p.item != nil && p.sec < len(m.board.Sections) && m.board.Sections[p.sec] == sec {
-					m.cursor = i
-					m.selSec = p.sec
-					break
-				}
+			// Land on the remembered ascended-from child (child memory), else
+			// the section's first item.
+			if c := m.outlineChildPick("sec:"+sec.Title, sec.Items); c != nil {
+				m.cursorToItem(c)
 			}
 		} else if it := m.currentItem(); it != nil {
 			// On an item, l/right expands a folded subtree in place; an already
-			// expanded item descends to its first child (a leaf is a no-op) — the
-			// map's expand-or-descend convention.
+			// expanded item descends to the remembered child (else the first;
+			// a leaf is a no-op) — the map's expand-or-descend convention.
 			sec := m.currentSectionTitle()
 			if hasChildItems(it) && m.itemFolded(sec, it) {
 				m.setItemFolded(sec, it, false)
 				m.rebuildPositions()
 				m.cursorToItem(it)
-			} else if c := firstChildItem(it); c != nil {
+			} else if c := m.outlineChildPick(it.Raw(), it.Children); c != nil {
 				m.cursorToItem(c)
 			}
 		}
@@ -1264,11 +1300,17 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if it := m.currentItem(); it != nil {
 			// On an item, h/left steps OUT to the parent (the map's
 			// collapse-or-ascend convention): the parent item, or the section
-			// header for a top-level item.
+			// header for a top-level item. The ascended-from child is remembered
+			// so l/right re-enters it (child memory).
 			if p := m.board.ParentOf(it); p != nil {
+				m.rememberOutlineChild(p.Raw(), it)
 				m.cursorToItem(p)
 			} else {
-				m.cursorToHeader(m.positions[m.cursor].sec)
+				sec := m.positions[m.cursor].sec
+				if sec >= 0 && sec < len(m.board.Sections) {
+					m.rememberOutlineChild("sec:"+m.board.Sections[sec].Title, it)
+				}
+				m.cursorToHeader(sec)
 			}
 		}
 	case "z":
