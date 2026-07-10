@@ -1142,6 +1142,24 @@ func (m *model) handleMapKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mapPin()
 	case "D":
 		m.mapDelete()
+	case "B":
+		// Back to the board picker, same as the outline's B. exitMap first so a
+		// board picked next opens in the outline (enterPicker clears the
+		// per-board map state anyway; this keeps the flag honest too).
+		m.exitMap()
+		return m, m.enterPicker()
+	case "L":
+		// Quick log entry (outline parity); confirming returns to the map.
+		m.startInput(modeInputLog, "", "log entry")
+	case "T":
+		// Edit the board title — same as e on the center node, kept for outline
+		// muscle memory.
+		m.startTitleInput()
+	case "E":
+		// Open the whole board in $EDITOR (outline parity); the 3-way merge on
+		// return reloads and the map re-layouts.
+		m.snapshot()
+		return m, m.openEditor()
 	case "u":
 		m.undo()
 	case "ctrl+r":
@@ -1977,6 +1995,9 @@ func (m *model) viewMapFooter() string {
 	if m.mode == modeMapRename {
 		return styleStatus.Render("rename section: ") + m.input.View()
 	}
+	if m.mode == modeInputLog {
+		return styleStatus.Render("log: ") + m.input.View()
+	}
 	if m.mode == modeMapAdd || m.mode == modeMapEdit {
 		label := "add"
 		if m.mode == modeMapEdit {
@@ -2020,7 +2041,7 @@ func (m *model) viewMapFooter() string {
 			detail += "  " + note
 		}
 	}
-	hints := "hjkl move · g/G ends · tab section · 1-9 jump · / search · n/N next/prev · f focus · esc out · enter fold · z zoom · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · b blocked · ! urgent · p pin · d archive (item/section) · D delete (item/section) · y copy path · H history · V recents · M log · m outline · u undo · S surprised? · ? help · q quit"
+	hints := "hjkl move · g/G ends · tab section · 1-9 jump · / search · n/N next/prev · f focus · esc out · enter fold · z zoom · w wrap · o open link · a add (section on center) · A sibling · e edit/rename (title on center) · space status · b blocked · ! urgent · p pin · d archive (item/section) · D delete (item/section) · y copy path · E editor · T title · L log entry · H history · V recents · M log ring · B boards · m outline · u undo · S surprised? · ? help · q quit"
 	line := styleHelpBar.Render(hints)
 	if m.status != "" {
 		line = styleStatus.Render(m.status) + "  " + line

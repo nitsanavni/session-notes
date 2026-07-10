@@ -129,6 +129,25 @@ func (m *model) enterPicker() tea.Cmd {
 	m.scroll = 0
 	m.target = nil
 	m.collapsed = map[string]bool{}
+	// Per-board view state keyed by the old board's lines / node keys: folds,
+	// zoom snapshots, wrap toggles, child memory, novelty. All of it would
+	// misapply to a different board, so it resets with the board.
+	m.collapsedItems = nil
+	m.focusFoldPrev = nil
+	m.focusFoldPrevItems = nil
+	m.listExpanded = nil
+	m.outlineChildMem = nil
+	m.fresh = map[string]bool{}
+	m.recents = nil
+	m.recentsSel = 0
+	m.mapView = false
+	m.mapFocusKey = ""
+	m.mapFocusRoot = ""
+	m.mapFold = nil
+	m.mapFoldPrev = nil
+	m.mapExpanded = nil
+	m.mapChildMem = nil
+	m.mp = nil
 	m.hist = newHistory(100)
 	m.entries = listBoards()
 	m.pickerCur = 0

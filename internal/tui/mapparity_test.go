@@ -117,6 +117,67 @@ func TestMapAddChildStampsUserAuthor(t *testing.T) {
 	}
 }
 
+// B in the map opens the boards picker (outline parity), leaving map view and
+// clearing per-board state so nothing leaks into the next board.
+func TestMapBOpensBoardsPicker(t *testing.T) {
+	m := newMapModel(t, parityMapSrc, 140, 40)
+	m.mapFold = map[string]foldState{"s0": foldCollapsed}
+	m.collapsedItems = map[string]bool{"Plan\x00- [ ] alpha": true}
+	m.handleMapKey(keyPress("B"))
+	if m.mode != modePicker {
+		t.Fatalf("B in map should open the picker, mode=%v", m.mode)
+	}
+	if m.mapView {
+		t.Error("B should leave map view")
+	}
+	if m.board != nil || m.path != "" {
+		t.Error("picker entry should clear the board")
+	}
+	if m.mapFold != nil || m.collapsedItems != nil {
+		t.Error("per-board fold state must not leak into the next board")
+	}
+	// Esc from the picker quits (same as the outline's B -> picker flow).
+	_, cmd := m.handlePickerKey(keyPress("esc"))
+	if cmd == nil {
+		t.Error("esc in the picker should quit")
+	}
+}
+
+// L in the map opens the quick-log input; confirming returns to the map view
+// with the entry appended to ## Log.
+func TestMapLQuickLog(t *testing.T) {
+	m := newMapModel(t, parityMapSrc+"## Log\n", 140, 40)
+	m.handleMapKey(keyPress("L"))
+	if m.mode != modeInputLog {
+		t.Fatalf("L should open the log input, mode=%v", m.mode)
+	}
+	if out := m.View(); !strings.Contains(stripANSI(out), "log:") {
+		t.Error("map view should render the log input footer")
+	}
+	m.input.SetValue("note to self")
+	m.handleInputKey(keyPress("enter"))
+	if m.mode != modeBoard || !m.mapView {
+		t.Fatalf("confirming should return to the map, mode=%v mapView=%v", m.mode, m.mapView)
+	}
+	if !strings.Contains(m.board.Render(), "note to self") {
+		t.Error("log entry should land on the board")
+	}
+}
+
+// T in the map opens the board-title editor, same as e on the center node.
+func TestMapTEditsTitle(t *testing.T) {
+	m := newMapModel(t, parityMapSrc, 140, 40)
+	m.handleMapKey(keyPress("T"))
+	if m.mode != modeInputTitle {
+		t.Fatalf("T should open the title input, mode=%v", m.mode)
+	}
+	m.input.SetValue("Zoomed Board")
+	m.handleTitleInputKey(keyPress("enter"))
+	if m.board.Frontmatter.Title != "Zoomed Board" {
+		t.Fatalf("title should be set, got %q", m.board.Frontmatter.Title)
+	}
+}
+
 func TestRecentsXDismissesAll(t *testing.T) {
 	m := newTestModel(parityMapSrc, 100, 40)
 	m.recents = []recentEntry{recentEntryFor("- [ ] alpha"), recentEntryFor("- [ ] beta")}

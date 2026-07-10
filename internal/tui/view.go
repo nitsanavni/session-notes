@@ -106,7 +106,7 @@ func statusMarker(s board.Status) string {
 func (m *model) View() string {
 	if m.mapView {
 		switch m.mode {
-		case modeBoard, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback, modeInputTitle, modeSearch:
+		case modeBoard, modeMapAdd, modeMapEdit, modeMapRename, modeMapFeedback, modeInputTitle, modeInputLog, modeSearch:
 			return m.viewMap()
 		}
 	}
