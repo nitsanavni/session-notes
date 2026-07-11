@@ -23,8 +23,8 @@ go build -o /tmp/sn .          # Go lives at ~/.local/go/bin
 2. **Serve** (background task):
    `SESSION_NOTES_DIR=<dir> /tmp/sn serve` → dashboard on
    http://127.0.0.1:7080, the board at `/b/dev`. Remote sandboxes accept no
-   inbound connections — a human cannot open this URL; say so instead of
-   handing it out, and suggest they run `serve` on their own machine.
+   inbound connections, so the user cannot open this URL directly — publish
+   it with an outbound tunnel instead (see "Exposing the board publicly").
 3. **Watch** (Monitor/background task):
    `/tmp/sn watch --board <dir>/dev.md --snapshot <snap>` prints a unified
    item diff per external change (add `--once` to exit after the first).
@@ -32,6 +32,41 @@ go build -o /tmp/sn .          # Go lives at ~/.local/go/bin
    writes don't wake the watcher:
    `/tmp/sn edit reply "<query>" "claude: …" --board <dir>/dev.md --refresh-snapshot <snap>`
 5. **Catch up** after compaction: `/tmp/sn history --board <dir>/dev.md`.
+
+## Exposing the board publicly (Claude Code on the web sandbox)
+
+Verified 2026-07 from a Claude Code on the web session. The sandbox allows
+**no inbound connections** and egress **only on ports 80/443**; all 443
+traffic is transparently TLS-intercepted by Anthropic's egress gateway (its
+CA is in the system store), and anything inside the TLS session that is not
+real HTTP/WebSocket gets dropped. Consequences, so you don't re-litigate
+them each session:
+
+- **cloudflared** — dead: edge transport needs port 7844 (QUIC or TCP).
+- **SSH tunnels** (pinggy, localhost.run, serveo, even on port 443) — dead:
+  raw SSH is not TLS, the gateway kills it at the ClientHello.
+- **tunnelmole** — dead: its service listens on port 8083.
+- **ngrok** — dead: with `root_cas: host` (v2 config) the MITM cert is
+  accepted, but its muxed protocol inside TLS is not HTTP and gets cut.
+- **Microsoft dev tunnels** — WORKS: pure WebSocket over 443, built for
+  corporate proxies.
+
+Recipe (note `--noproxy '*'` for downloads the agent proxy would 403, and
+unsetting the proxy env so devtunnel dials direct):
+
+```
+curl -sSL --noproxy '*' -o /tmp/devtunnel https://aka.ms/TunnelsCliDownload/linux-x64
+chmod +x /tmp/devtunnel
+env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+  /tmp/devtunnel user login -g -d     # device code — user completes on their phone
+env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+  /tmp/devtunnel host -p 7080 --allow-anonymous
+```
+
+Prints `https://<id>-7080.<region>.devtunnels.ms` — hand that to the user
+(first visit shows a one-tap interstitial). Caveats to state: anonymous
+access means anyone with the URL can read/write the board, and both tunnel
+and login live only as long as the session's container.
 
 ## Driving the web UI headlessly
 
