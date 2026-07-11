@@ -603,6 +603,12 @@ or `--session <id>` (resolved to `~/.claude/boards/<id>.md`). Every write is
 | `edit replace <old> <new>` | Exact first-occurrence string replace over the raw file — the escape hatch for anything the structural subcommands don't cover, and for reconciling conflict markers. Errors if `<old>` is not found. Quote multi-word arguments. |
 | `edit undo` / `edit redo` | Walk the board's shared undo journal (`<board>.md.undo.json`, last 100 journaled edits — CLI, web UI, TUI, and hooks, one timeline). Refuses when the board changed through an unjournaled write (raw `$EDITOR` save) since, rather than clobbering it. |
 
+Where no `session-start` hook runs to create the board (headless agents, CI,
+containers), `session-notes init --board <path>` (or `--session <id>`; `--cwd`
+and `--title` override the frontmatter defaults) seeds a fresh board from the
+canonical template, prints its path, and refuses to overwrite an existing one —
+see `docs headless` for the full remote-environment recipe.
+
 Beyond `edit`, `session-notes history --board <path>` (or `--session <id>`;
 `-n <N>` limits, default 20) prints the journal as compact line-diffs, oldest
 first, each entry stamped with time and author (`user`, `claude`, `web`,
@@ -648,6 +654,7 @@ from actual behavior). Topics:
 | `docs monitor` | The `session-notes watch` recipe with self-edit suppression via `edit --refresh-snapshot` (plus the old manual loop as an appendix). |
 | `docs conflicts` | Reconciling `<<<<<<<`/`=======`/`>>>>>>>` markers under the lock with `edit replace`. |
 | `docs cli` | The `session-notes edit` subcommand reference. |
+| `docs headless` | Bootstrapping in environments with no tmux, no hooks, and no inbound network (Claude Code on the web, CI, containers): `session-notes init`, the watch/edit loop, and what `serve` can and cannot do from inside a sandbox. |
 | `docs blurb` | The session-start blurb itself (with a placeholder board path) — the single source shared with the `session-start` hook injection. |
 
 Running `session-notes docs` with no topic (or an unknown one) lists the topics.

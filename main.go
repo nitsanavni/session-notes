@@ -47,6 +47,12 @@ func main() {
 		os.Exit(runEdit(args[1:]))
 	}
 
+	// Init subcommand: seed a fresh board from the canonical template — the
+	// bootstrap for environments where no session-start hook runs. See init.go.
+	if len(args) >= 1 && args[0] == "init" {
+		os.Exit(runInit(args[1:]))
+	}
+
 	// History subcommand: print a board's journaled edits as compact diffs
 	// (the catch-up command for agents and returning humans). See history.go.
 	if len(args) >= 1 && args[0] == "history" {
@@ -287,6 +293,10 @@ Usage:
   session-notes upgrade               update to the latest release
   session-notes feedback <board.md>   list map-nav surprise records (--json raw,
                                       --gen-test print replayable Go test source)
+  session-notes init …                seed a fresh board from the canonical
+                                      template (--board <path> or --session
+                                      <id>; --cwd, --title) — the bootstrap
+                                      where no session-start hook runs
   session-notes edit <sub> …          locked board write (--board <path> or
                                       --session <id>); subs: add reply fork
                                       status log title replace undo redo.
@@ -312,8 +322,8 @@ Usage:
                                       edit --refresh-snapshot file; --interval
                                       <dur> default 2s; watches .notes/ too)
   session-notes docs <topic>          print a protocol/recipe topic
-                                      (protocol|monitor|conflicts|cli|blurb); no
-                                      topic lists them
+                                      (protocol|monitor|conflicts|cli|headless|
+                                      blurb); no topic lists them
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook

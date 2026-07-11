@@ -153,6 +153,12 @@ Why the lock: the user edits the file concurrently, so writes serialize on an
 exclusive flock of the sidecar "<board>.lock" (not the board — it is replaced by
 atomic rename each save). Do NOT hand-roll this; use the CLI.
 
+Bootstrap:
+  init --board <path>           seed a fresh board from the canonical template
+                                (--session <id>, --cwd, --title) — for
+                                environments where no session-start hook runs;
+                                refuses to overwrite (see docs headless)
+
 Read-side helpers (not writes):
   history --board <p> [-n N]    print the board's journaled edits as compact
                                 line-diffs, oldest first, stamped time+author.
@@ -174,6 +180,38 @@ Session status sidecar (not a write you make):
                                 compact "<model> | ctx NN%" line. The TUI footer and
                                 web header show model + a context bar + activity from
                                 that sidecar while it's fresh (hidden after 5m stale).`,
+
+	"headless": `Headless / remote environments — no tmux, no hooks, no inbound net
+
+Sandboxed agent environments (Claude Code on the web, CI, containers) usually
+have no tmux, no installed hooks, and no way for a human to reach a port the
+sandbox binds. The whole protocol still works — it is a file plus this CLI.
+
+Bootstrap (no hook ran, so no board exists yet):
+
+  session-notes init --board <path> [--title <t>]
+
+seeds the canonical sections and prints the path (refuses to overwrite an
+existing board; --session <id> / --cwd override the frontmatter defaults).
+Every command accepts --board <path>, so the file can live anywhere; set
+$SESSION_NOTES_DIR to give --session <id>, the picker, the dashboard, and
+serve a boards directory to resolve against.
+
+The loop, spelled out:
+- WRITE through "session-notes edit …" (docs cli) — never edit the file
+  directly; the CLI takes the same lock every other writer uses.
+- WATCH with "session-notes watch --board B --snapshot S" (docs monitor) in a
+  background task, and pass --refresh-snapshot S on your own edits so the
+  watch fires only for other writers.
+- CATCH UP after context compaction with "session-notes history --board B".
+
+Web UI in a sandbox:
+- "session-notes serve" binds 127.0.0.1:7080; non-loopback binds require
+  --token <t> (or $SESSION_NOTES_TOKEN). If the environment accepts no
+  inbound connections, a human cannot browse to the sandbox's server — drive
+  it yourself with a headless browser when you need the web surface, and
+  point the human at running "serve" on their own machine instead (the UI is
+  touch-friendly, so a phone on their network works).`,
 }
 
 // runDocs implements `session-notes docs [topic]`: print a topic's recipe, or
@@ -217,7 +255,7 @@ func runDocs(args []string) int {
 
 // docTopicNames returns the topic names in a stable, meaningful order.
 func docTopicNames() []string {
-	order := []string{"protocol", "monitor", "conflicts", "cli", "blurb"}
+	order := []string{"protocol", "monitor", "conflicts", "cli", "headless", "blurb"}
 	// Guard against a topic being added to the map but not the order list.
 	seen := map[string]bool{}
 	for _, t := range order {
