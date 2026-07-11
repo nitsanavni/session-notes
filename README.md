@@ -380,6 +380,14 @@ also mouse-reachable: click checkboxes, double-click to edit, hover for
 per-item and per-section actions, type into a section's add box (the Log
 section's box appends a `user:` log line).
 
+**Touch-friendly**, too: on a phone or tablet the tap targets grow, the
+keyboard-hint footer and width grips disappear, and everything keyboard-only
+gets an on-screen path — header buttons reach search (`⌕`) and the map view
+(`◈`), an `✎` action edits items and renames sections, tapping a row selects
+it (revealing its action buttons), and a second tap on the text wraps a long
+line. In the map, tapping a node focuses it, a second tap expands its full
+text, and the `[+N]` badge unfolds a collapsed subtree.
+
 `E` opens the whole board's markdown in an editor overlay (`ctrl+enter`
 saves) — the browser's answer to the TUI's `$EDITOR`, and the way to author
 multi-line continuation blocks. Saves are optimistically locked on the content

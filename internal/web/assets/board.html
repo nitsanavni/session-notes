@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>session-notes</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='7' fill='%231C2226'/%3E%3Cpath d='M13 16h-5M19 16c3 0 3-6 7-6M19 16c3 0 3 6 7 6' fill='none' stroke='%238B9997' stroke-width='2.8' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='4.2' fill='%2346B3A4'/%3E%3Ccircle cx='7' cy='16' r='2.6' fill='%238ea3d8'/%3E%3Ccircle cx='26.5' cy='10' r='2.6' fill='%23e0a878'/%3E%3Ccircle cx='26.5' cy='22' r='2.6' fill='%23e0a878'/%3E%3C/svg%3E">
 <style>
@@ -104,8 +104,8 @@ li { padding: .1rem 0; }
 .wikilink { color: var(--link); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
 .wikilink.path { cursor: help; text-decoration-style: dashed; }
 .actions { visibility: hidden; flex: none; display: flex; gap: .15rem; }
-.row:hover .actions, .row:focus-within .actions, .row.cursor .actions { visibility: visible; }
-@media (hover: none) { .actions, .sechead .actions { visibility: visible; } }
+.row:hover .actions, .row:focus-within .actions, .row.cursor .actions,
+.sechead.cursor .actions { visibility: visible; }
 .actions button {
   background: none; border: none; color: var(--dim); cursor: pointer;
   font: inherit; font-size: .85em; padding: 0 .2rem; border-radius: 4px;
@@ -249,6 +249,7 @@ body.mapmode #mapwrap { display: block; }
 #mapcrumb { color: var(--dim); font-size: .8em; margin: 0 0 .3rem; min-height: 1.2em; }
 #mapview {
   position: relative; overflow: auto; height: calc(100vh - 9rem);
+  height: calc(100dvh - 9rem); /* mobile URL bars shrink the real viewport */
   border: 1px solid var(--border); border-radius: 8px;
 }
 #mapcanvas { position: relative; }
@@ -273,7 +274,7 @@ body.mapmode #mapwrap { display: block; }
 .mapnode.pin { color: var(--pin); }
 .mapnode.wip { color: var(--accent); }
 .mapnode.blocked { color: var(--urgent); }
-.mapnode .suffix { color: var(--pin); }
+.mapnode .suffix { color: var(--pin); cursor: pointer; }
 /* Inline add/edit: a provisional node sits where the new/edited node lives,
    with the text input hosted inside its own box (no detached overlay). */
 .mapnode.provisional { border-style: dashed; border-color: var(--accent); }
@@ -344,6 +345,45 @@ body.mapmode #mapwrap { display: block; }
 #searchpanel .prow .psec { color: var(--dim); font-size: .74em; flex: none; min-width: 5.5ch; }
 #searchpanel .prow .ptext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #searchpanel .prow .searchmark { background: var(--accent); color: var(--bg); border-radius: 2px; }
+/* ---- mobile ---- */
+/* Narrow screens: tighter chrome so the outline gets the width. The cwd is the
+   longest, least tappable header segment — drop it; shallower nesting indent. */
+@media (max-width: 640px) {
+  body { padding: .75rem .7rem 4rem; }
+  header { gap: .45rem; }
+  #cwd { display: none; }
+  #searchstatus { top: 3.4rem; } /* below the sticky header, not over the title */
+  ul ul { padding-left: 1rem; }
+  pre.cont { margin-left: 1.1rem; }
+  .modal .panel { width: 96vw; max-height: 88dvh; padding: .6rem; }
+  .modal textarea { min-height: min(320px, 45vh); }
+}
+/* Touch screens: no hover and no hardware keys, so grow the tap targets and
+   drop hover/keyboard-only chrome — the width grips (which would swallow edge
+   touches) and the key-hint footers. Actions stay selection-revealed: the
+   first tap on a row selects it (showing its buttons), like the cursor keys.
+   16px inputs stop iOS Safari from auto-zooming the page on focus. */
+@media (pointer: coarse) {
+  .wgrip { display: none; }
+  footer { display: none; }
+  body { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+  li { padding: .15rem 0; }
+  .row { gap: .55rem; }
+  /* visibility:hidden still RESERVES the buttons' width — on a phone that
+     starves the text down to a few characters (and invites phantom taps).
+     Remove unselected rows' actions from layout entirely; the selected row
+     wraps them onto their own full-width line under the text. */
+  .row, .sechead { flex-wrap: wrap; }
+  .actions { display: none; gap: .35rem; }
+  .row.cursor .actions, .sechead.cursor .actions {
+    display: flex; flex-basis: 100%; justify-content: flex-end; padding: .1rem 0 .15rem;
+  }
+  .actions button, header .tools button { font-size: 1em; padding: .15rem .4rem; }
+  .sechead .fold, .ifold { font-size: 1em; width: 1.1em; }
+  input.inline, input.add, input.addsec, .modal textarea, #searchprompt input,
+  #addsecmodal input.custom, .mapnode input.mapinput { font-size: 16px; }
+  #mapview { height: calc(100dvh - 7.5rem); } /* no map footer to clear */
+}
 </style>
 </head>
 <body>
@@ -356,6 +396,8 @@ body.mapmode #mapwrap { display: block; }
   <span class="tools">
     <button id="undo" title="undo last web edit (u)">↶</button>
     <button id="redo" title="redo (ctrl+r)">↷</button>
+    <button id="searchbtn" title="search (/)">⌕</button>
+    <button id="mapbtn" title="toggle map view (m)">◈</button>
     <button id="rawedit" title="edit board markdown (E)">✎</button>
     <button id="histbtn" title="history — what changed, by whom (H)">⌚</button>
     <button id="copypath" title="copy board file path (y)">⧉</button>
@@ -1160,6 +1202,12 @@ function itemNode(section, it) {
   linkify(text, tintAuthor(text, it.text));
   if (searchHit(it)) { row.classList.add('searchhit'); markSearch(text); }
   text.addEventListener('dblclick', () => act.edit(section, it, row));
+  // Touch: a second tap on the selected row's text toggles wrap (the `w` key) —
+  // the only way to read a truncated line without hover or keys. Fires before
+  // the row's own click re-selects, so "already selected" is the pre-tap state.
+  text.addEventListener('click', () => {
+    if (cursorKey === key && matchMedia('(pointer: coarse)').matches) toggleWrap();
+  });
   row.append(text);
 
   // Collapsed subtree: a dim "▸ N" hidden-descendant tally after the text
@@ -1171,6 +1219,7 @@ function itemNode(section, it) {
   }
 
   row.append(el('div', { class: 'actions' },
+    el('button', { title: 'edit (e)', onclick: () => act.edit(section, it, row) }, '✎'),
     el('button', { title: 'reply in thread, flat (R)', onclick: () => act.reply(section, it, row, li, 'reply') }, '↩'),
     el('button', { title: 'fork a sub-thread here (F)', onclick: () => act.reply(section, it, row, li, 'fork') }, '⑂'),
     el('button', { title: 'toggle urgent (!)', onclick: () => act.urgent(section, it) }, '!!'),
@@ -1261,6 +1310,7 @@ function sectionHead(title, collapsed, count, idx) {
   }
   const guarded = title === 'Log' || title === 'Archive';
   head.append(el('div', { class: 'actions' },
+    el('button', { title: 'rename (e)', onclick: () => renameSection(head, title) }, '✎'),
     ...(guarded ? [] : [el('button', { title: 'archive whole section (d)', onclick: () =>
       post({ op: 'archive-section', section: title }) }, '⤓')]),
     el('button', { title: 'delete section and contents (D)', onclick: () => {
@@ -1448,6 +1498,8 @@ document.getElementById('title').addEventListener('click', startTitleEdit);
 document.getElementById('undo').addEventListener('click', () => post({ op: 'undo' }));
 document.getElementById('redo').addEventListener('click', () => post({ op: 'redo' }));
 document.getElementById('rawedit').addEventListener('click', openRaw);
+document.getElementById('searchbtn').addEventListener('click', () => startSearch());
+document.getElementById('mapbtn').addEventListener('click', () => { if (mapState.in) exitMap(); else enterMap(); });
 document.getElementById('helpbtn').addEventListener('click', () => toggleModal('helpmodal', true));
 
 // The help overlay is built from the single source of truth (internal/keymap),
@@ -1992,9 +2044,22 @@ function renderMap(b) {
       const pm = /^((?:\[[ x>?]\] )?(?:!! )?)/.exec(l.text);
       if (pm[1]) d.append(pm[1]);
       d.append(tintAuthor(d, l.text.slice(pm[1].length)));
-      if (l.suffix) d.append(el('span', { class: 'suffix' }, l.suffix));
+      if (l.suffix) {
+        // The [+N] badge is clickable: focus the node and step its fold open
+        // (the enter key) — the only unfold path on touch screens.
+        const suf = el('span', { class: 'suffix', title: 'unfold (enter)' }, l.suffix);
+        suf.addEventListener('click', ev => { ev.stopPropagation(); if (searchHL !== '') endSearch(); mapState.focus = n.key; cycleFold(n); });
+        d.append(suf);
+      }
       if (n.kind === 'item') markSearch(d); // tint matched substring during search
-      d.addEventListener('click', () => { if (searchHL !== '') endSearch(); mapState.focus = n.key; renderMap(cur); });
+      d.addEventListener('click', () => {
+        if (searchHL !== '') endSearch();
+        // Touch: a second tap on the already-focused node toggles its wrap
+        // (the `w` key) so a truncated node's full text is reachable.
+        if (mapState.focus === n.key && matchMedia('(pointer: coarse)').matches) mapState.expanded[n.key] = !mapState.expanded[n.key];
+        mapState.focus = n.key;
+        renderMap(cur);
+      });
       d.addEventListener('dblclick', () => mapEdit(n));
     }
     canvas.append(d);

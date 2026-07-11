@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>session-notes</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='7' fill='%231C2226'/%3E%3Cpath d='M13 16h-5M19 16c3 0 3-6 7-6M19 16c3 0 3 6 7 6' fill='none' stroke='%238B9997' stroke-width='2.8' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='4.2' fill='%2346B3A4'/%3E%3Ccircle cx='7' cy='16' r='2.6' fill='%238ea3d8'/%3E%3Ccircle cx='26.5' cy='10' r='2.6' fill='%23e0a878'/%3E%3Ccircle cx='26.5' cy='22' r='2.6' fill='%23e0a878'/%3E%3C/svg%3E">
 <style>
@@ -25,7 +25,7 @@ body {
 }
 h1 { font-size: 1.05rem; font-weight: 600; margin: 0 0 1rem; }
 h1 .dim { color: var(--dim); font-weight: 400; }
-#cards { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+#cards { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
 a.card {
   display: block; background: var(--card); border: 1px solid var(--border);
   border-radius: 8px; padding: .75rem .9rem; text-decoration: none; color: var(--fg);
@@ -47,6 +47,14 @@ a.card:hover, a.card.sel { border-color: var(--accent); }
 #empty { color: var(--dim); }
 #err { background: var(--urgent); color: #fff; padding: .4rem .8rem; border-radius: 6px; margin-bottom: .75rem; font-size: .85em; }
 #projfilter { font: inherit; font-size: .85em; color: var(--dim); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: .1rem .3rem; margin-left: .3rem; }
+/* ---- mobile ---- */
+@media (max-width: 640px) {
+  body { padding: 1rem .8rem calc(1rem + env(safe-area-inset-bottom)); }
+}
+@media (pointer: coarse) {
+  a.card { padding: .9rem 1rem; } /* roomier tap target */
+  #projfilter { font-size: 16px; } /* stop iOS focus auto-zoom */
+}
 </style>
 </head>
 <body>
