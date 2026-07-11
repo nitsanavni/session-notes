@@ -88,6 +88,15 @@ li { padding: .1rem 0; }
 .ifold { flex: none; color: var(--dim); cursor: pointer; user-select: none; font-size: .8em; width: .9em; text-align: center; }
 .ifold.empty { cursor: default; }
 .foldcount { flex: none; color: var(--dim); font-size: .8em; cursor: pointer; user-select: none; }
+/* Delivery receipts: ◌ = the watching agent has not been handed this change
+   yet (derived from the watch snapshot server-side); ✓ flashes on delivery. */
+.receipt { flex: none; color: var(--dim); font-size: .75em; user-select: none; }
+.receipt.seen { color: var(--accent); animation: receiptfade 4s forwards; }
+@keyframes receiptfade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+.mapnode.undelivered::after {
+  content: '◌'; position: absolute; top: -7px; right: -6px;
+  font-size: .65em; color: var(--dim);
+}
 /* Long items show as one truncated line by default; `w` toggles the .wrap
    class to soft-wrap the item at the cursor to its full height (mirrors the
    TUI's per-item wrap toggle). */
@@ -529,6 +538,15 @@ const freshItems = new Set();        // keys currently marked novel
 // never restart it — only the persistent accent bar remains.
 const freshPulse = new Set();
 const freshTimers = new Map();       // key -> setTimeout handle
+// Delivery receipts: keys last rendered with the server's undelivered flag,
+// and keys whose delivery ✓ is still flashing (key -> flash expiry ms).
+const receiptPending = new Set();
+const receiptFlash = new Map();
+let receiptTimer = 0;
+function scheduleReceiptSweep() {
+  if (receiptTimer) return;
+  receiptTimer = setTimeout(() => { receiptTimer = 0; render(cur); }, 4200);
+}
 let feed = [];                       // [{id, primary, meta, key, ts}]
 let feedSeq = 0;
 let feedSel = -1;                    // selected entry while the feed has keyboard focus (V)
@@ -1238,6 +1256,26 @@ function itemNode(section, it) {
     if (cursorKey === key && matchMedia('(pointer: coarse)').matches) toggleWrap();
   });
   row.append(text);
+
+  // Delivery receipt: ◌ while the change hasn't been delivered to the watching
+  // agent (server-derived from the watch snapshot — nothing manual anywhere);
+  // flips to a ✓ that fades once the snapshot advances past this line.
+  if (it.undelivered) {
+    receiptPending.add(key);
+    row.append(el('span', { class: 'receipt', title: 'not yet delivered to the agent' }, '◌'));
+  } else {
+    if (receiptPending.has(key)) {
+      receiptPending.delete(key);
+      receiptFlash.set(key, Date.now() + 4000);
+    }
+    const until = receiptFlash.get(key);
+    if (until !== undefined) {
+      if (Date.now() < until) {
+        row.append(el('span', { class: 'receipt seen', title: 'delivered to the agent' }, '✓'));
+        scheduleReceiptSweep();
+      } else receiptFlash.delete(key);
+    }
+  }
 
   // Collapsed subtree: a dim "▸ N" hidden-descendant tally after the text
   // (click to expand), mirroring the map view's "[+N]" fold summary.
@@ -2063,6 +2101,7 @@ function renderMap(b) {
       else if (n.it.status === 'wip') cls.push('wip');
       else if (n.it.status === 'blocked') cls.push('blocked');
       if (searchHit(n.it)) cls.push('searchhit');
+      if (n.it.undelivered) cls.push('undelivered'); // delivery receipt dot
     }
     if (l.lines.length > 1) cls.push('wrap'); // multi-line (w) node box
     if (freshItems.has(n.key)) { // out-of-band change accent (pulse once on arrival)

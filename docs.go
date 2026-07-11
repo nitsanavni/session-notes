@@ -92,6 +92,12 @@ re-armings is handed to you by your own write instead of being silently
 snapshotted as seen — READ THE STDOUT OF YOUR EDIT CALLS; non-empty output is
 a delivery, react to it like a watch diff.
 
+Delivery receipts: the web UI reads the DEFAULT snapshot path ("<board>.watch")
+and marks items whose change has not reached the snapshot with a pending "◌",
+flipping to a brief "✓" when a delivery advances it — the user literally sees
+whether you have been handed their edit. Use the default snapshot path (omit
+--snapshot, pass "<board>.watch" to --refresh-snapshot) so receipts light up.
+
   session-notes edit reply "frobnicator" "claude: rewired it" \
     --board BOARD --refresh-snapshot snap
 

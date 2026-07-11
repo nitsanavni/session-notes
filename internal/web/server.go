@@ -192,6 +192,7 @@ type itemJSON struct {
 	Urgent       bool       `json:"urgent,omitempty"`
 	Pinned       bool       `json:"pinned,omitempty"`
 	Continuation bool       `json:"continuation,omitempty"`
+	Undelivered  bool       `json:"undelivered,omitempty"`
 	Children     []itemJSON `json:"children,omitempty"`
 }
 
@@ -280,6 +281,33 @@ func itemsJSON(items []*board.Item) []itemJSON {
 	return out
 }
 
+// markUndelivered flags items whose raw line appears in the added-lines
+// multiset from DiffLines(snapshot, board). Each flagged item consumes one
+// occurrence, so duplicate lines mark the right number of items (in document
+// order, matching how DiffLines counts).
+func markUndelivered(secs []sectionJSON, added []string) {
+	if len(added) == 0 {
+		return
+	}
+	avail := map[string]int{}
+	for _, l := range added {
+		avail[l]++
+	}
+	var walk func(items []itemJSON)
+	walk = func(items []itemJSON) {
+		for i := range items {
+			if avail[items[i].Raw] > 0 {
+				avail[items[i].Raw]--
+				items[i].Undelivered = true
+			}
+			walk(items[i].Children)
+		}
+	}
+	for i := range secs {
+		walk(secs[i].Items)
+	}
+}
+
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	path := s.resolve(id)
@@ -305,6 +333,16 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, sec := range b.Sections {
 		resp.Sections = append(resp.Sections, sectionJSON{Title: sec.Title, Items: itemsJSON(sec.Items)})
+	}
+	// Delivery receipts: lines the watch snapshot does not contain yet are
+	// changes not delivered to the watching agent (watch and edit
+	// --refresh-snapshot advance the snapshot exactly when a change has been
+	// printed to it). No snapshot sidecar → no watcher → no markers.
+	if snap, err := os.ReadFile(board.WatchSnapshotPath(path)); err == nil {
+		if cur, err := os.ReadFile(path); err == nil {
+			added, _ := board.DiffLines(string(snap), string(cur))
+			markUndelivered(resp.Sections, added)
+		}
 	}
 	if st, ok := board.ReadStatus(b.Frontmatter.Session); ok && st.Fresh(time.Now()) {
 		sj := &statusJSON{Model: st.Model, CostUSD: st.CostUSD, Activity: st.Activity}
@@ -722,7 +760,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if b, err := board.Load(path); err == nil {
 		statusPath = board.StatusPath(b.Frontmatter.Session)
 	}
-	stamp := func() string { return fileStamp(path) + "|" + fileStamp(statusPath) }
+	// The watch snapshot is part of the stamp so a delivery (snapshot advance)
+	// refreshes the client's receipt markers even though the board is unchanged.
+	stamp := func() string {
+		return fileStamp(path) + "|" + fileStamp(statusPath) + "|" + fileStamp(board.WatchSnapshotPath(path))
+	}
 	last := stamp()
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()

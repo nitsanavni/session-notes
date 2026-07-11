@@ -84,6 +84,54 @@ func TestPinOp(t *testing.T) {
 	}
 }
 
+// TestDeliveryReceipts: with a watch snapshot present, items whose raw line the
+// snapshot does not contain are flagged undelivered; once the snapshot advances
+// (a watch delivery), the flag clears. No snapshot → no flags at all.
+func TestDeliveryReceipts(t *testing.T) {
+	h, path := newTestServer(t)
+	content := "---\nsession: abc-123\n---\n\n## Plan\n- [ ] old item\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func() boardJSON {
+		w := do(t, h, "GET", "/api/board/abc-123", "")
+		var b boardJSON
+		if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	// No snapshot sidecar: nothing is flagged.
+	if b := get(); b.Sections[0].Items[0].Undelivered {
+		t.Fatalf("undelivered flagged with no watcher: %+v", b.Sections[0].Items[0])
+	}
+
+	// Watcher snapshots the current board; then the user adds an item.
+	snap := board.WatchSnapshotPath(path)
+	if err := os.WriteFile(snap, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content+"- [ ] new from phone\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := get()
+	items := b.Sections[0].Items
+	if len(items) != 2 || items[0].Undelivered || !items[1].Undelivered {
+		t.Fatalf("want only the new item undelivered, got %+v", items)
+	}
+
+	// Delivery: the watch advances the snapshot to the current board.
+	if err := os.WriteFile(snap, []byte(content+"- [ ] new from phone\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	items = get().Sections[0].Items
+	if items[0].Undelivered || items[1].Undelivered {
+		t.Fatalf("flags should clear after delivery, got %+v", items)
+	}
+}
+
 func TestBoardJSON(t *testing.T) {
 	h, path := newTestServer(t)
 	if err := os.WriteFile(path, []byte(`---

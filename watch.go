@@ -293,8 +293,10 @@ func notesDirFor(boardPath string) string {
 // defaultSnapshotPath is the snapshot used when --snapshot is omitted. An agent
 // that also writes via `edit --refresh-snapshot` should pass this same path to
 // both (or set --snapshot on watch and --refresh-snapshot on edit to match).
+// Prefer the default: the web UI reads this exact path to render per-item
+// delivery receipts (board.WatchSnapshotPath is the shared convention).
 func defaultSnapshotPath(boardPath string) string {
-	return boardPath + ".watch"
+	return board.WatchSnapshotPath(boardPath)
 }
 
 func watchErr(msg string) int {

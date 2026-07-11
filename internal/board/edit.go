@@ -40,6 +40,16 @@ func EditUnderLock(path, snapshot string, transform func(content string) (string
 	})
 }
 
+// WatchSnapshotPath is the default monitor snapshot sidecar for a board —
+// "<board>.watch". It is a shared convention, not just a watch-CLI default:
+// the web server reads this exact path to derive per-item delivery receipts
+// (a change is "delivered" once the snapshot includes it, because watch and
+// edit --refresh-snapshot only advance the snapshot when the change has been
+// printed to the agent).
+func WatchSnapshotPath(boardPath string) string {
+	return boardPath + ".watch"
+}
+
 // FindByQuery returns the first recognized item anywhere on the board (any
 // section, any nesting depth, document order) whose source line (Raw) or
 // display Text contains query as a substring, along with the total count of

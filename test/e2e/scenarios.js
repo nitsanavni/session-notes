@@ -2035,4 +2035,27 @@ run({
     t.assert(r.hasSpan, 'the reply node wraps its author token in span.author.claude');
     t.assert(r.color === r.want, `author token takes --author-claude (got ${r.color}, want ${r.want})`);
   },
+
+  'delivery receipts: pending ◌ until the watch snapshot advances': async t => {
+    const fs = require('fs');
+    await t.open();
+    // A watcher arms on the current board state (watch snapshots on start).
+    fs.writeFileSync(t.boardPath + '.watch', t.file());
+    // A change lands that no watch poll has delivered yet.
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'needs delivering' });
+    await t.waitBoardContains('needs delivering');
+    // The item renders with the pending receipt ◌.
+    await t.page.waitForFunction(() =>
+      [...document.querySelectorAll('#board li')].some(li =>
+        li.textContent.includes('needs delivering') && li.querySelector('.receipt')),
+      null, { timeout: 3000 });
+    // Delivery: the watch advances the snapshot; the pending dot clears via SSE
+    // (only the transient .seen ✓ may remain).
+    fs.writeFileSync(t.boardPath + '.watch', t.file());
+    await t.page.waitForFunction(() =>
+      [...document.querySelectorAll('#board li')]
+        .filter(li => li.textContent.includes('needs delivering'))
+        .every(li => !li.querySelector('.receipt:not(.seen)')),
+      null, { timeout: 3000 });
+  },
 });

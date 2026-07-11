@@ -28,6 +28,9 @@ go build -o /tmp/sn .          # Go lives at ~/.local/go/bin
 3. **Watch** (Monitor/background task):
    `/tmp/sn watch --board <dir>/dev.md --snapshot <snap>` prints a unified
    item diff per external change (add `--once` to exit after the first).
+   Use the DEFAULT snapshot path `<board>.watch` as `<snap>` — the web UI
+   reads exactly that path to render delivery receipts (◌ pending → ✓ on
+   delivery), so the user sees whether their edit reached you.
 4. **Write** through the CLI only, with self-edit suppression so your own
    writes don't wake the watcher:
    `/tmp/sn edit reply "<query>" "claude: …" --board <dir>/dev.md --refresh-snapshot <snap>`
