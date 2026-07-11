@@ -31,6 +31,9 @@ go build -o /tmp/sn .          # Go lives at ~/.local/go/bin
 4. **Write** through the CLI only, with self-edit suppression so your own
    writes don't wake the watcher:
    `/tmp/sn edit reply "<query>" "claude: …" --board <dir>/dev.md --refresh-snapshot <snap>`
+   READ THE STDOUT: if the edit prints a "-"/"+" diff, that is an external
+   change the watcher hadn't delivered yet (the user edited while you were
+   busy) — react to it like a watch diff, it will not be reported again.
 5. **Catch up** after compaction: `/tmp/sn history --board <dir>/dev.md`.
 
 ## Exposing the board publicly (Claude Code on the web sandbox)

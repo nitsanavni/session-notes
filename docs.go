@@ -84,6 +84,14 @@ It copies the new content over the snapshot INSIDE THE SAME LOCK, right after th
 atomic replace, so the watcher (which reads board+snapshot under that same lock)
 only ever emits the user's edits, never yours.
 
+In-band delivery: before applying, an edit with --refresh-snapshot diffs the
+snapshot against the pre-edit board (still inside the lock) and prints any
+not-yet-delivered external change to stdout in the same "-"/"+" diff shape the
+watch emits. So a user edit that lands while your watch is between --once
+re-armings is handed to you by your own write instead of being silently
+snapshotted as seen — READ THE STDOUT OF YOUR EDIT CALLS; non-empty output is
+a delivery, react to it like a watch diff.
+
   session-notes edit reply "frobnicator" "claude: rewired it" \
     --board BOARD --refresh-snapshot snap
 
@@ -120,8 +128,9 @@ TUI uses), so your write never clobbers the user's concurrent edit and you never
 reinvent an flock script.
 
 Target the board with --board <path> (primary for an agent) or --session <id>
-(resolved to <boards-dir>/<id>.md). Every write is SILENT on success and exits
-non-zero with a one-line reason on failure.
+(resolved to <boards-dir>/<id>.md). Every write is SILENT on success — unless
+--refresh-snapshot finds external changes the monitor has not delivered yet
+(see below) — and exits non-zero with a one-line reason on failure.
 
   edit add <section> <text>     append a top-level item to an existing section
                                 (errors, listing sections, if it is missing)
@@ -147,7 +156,12 @@ non-zero with a one-line reason on failure.
 Flags (any subcommand):
   --board <path> | --session <id>   the target board (exactly one)
   --refresh-snapshot <path>         copy the new content over <path> inside the
-                                    same lock (monitor self-edit suppression)
+                                    same lock (monitor self-edit suppression).
+                                    First prints any external change the watch
+                                    has not delivered yet (snapshot vs pre-edit
+                                    board, same "-"/"+" shape) so a concurrent
+                                    user edit is never silently marked seen —
+                                    treat non-empty stdout as a watch delivery
 
 Why the lock: the user edits the file concurrently, so writes serialize on an
 exclusive flock of the sidecar "<board>.lock" (not the board — it is replaced by

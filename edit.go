@@ -117,6 +117,7 @@ func runEdit(args []string) int {
 			return editErr("usage: session-notes edit replace <old> <new>")
 		}
 		err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
+			deliverPending(snapshot, content)
 			if !strings.Contains(content, rest[0]) {
 				return "", fmt.Errorf("string not found: %q", rest[0])
 			}
@@ -146,11 +147,31 @@ func runEdit(args []string) int {
 	}
 }
 
+// deliverPending prints any external change the monitor has not yet delivered:
+// the snapshot vs the pre-edit board, diffed INSIDE the write lock, before this
+// edit applies. Without it, --refresh-snapshot would copy the post-edit board
+// over the snapshot and silently mark a concurrent user edit as already seen —
+// the one way the watch protocol could lose a change. The diff shape matches
+// what `watch` emits, so the caller reads both the same way.
+func deliverPending(snapshot, content string) {
+	if snapshot == "" {
+		return
+	}
+	snap, err := os.ReadFile(snapshot)
+	if err != nil {
+		return // no snapshot yet: no watcher armed, nothing owed
+	}
+	if d := diffItems(string(snap), content); d != "" {
+		fmt.Print(d)
+	}
+}
+
 // editApplyOp runs one op through the shared board.Apply dispatcher inside a
 // journaled, locked write (author "claude"), printing any advisory note
 // ("N items match; using the first") to stderr.
 func editApplyOp(path, snapshot string, op board.Op) int {
 	err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
+		deliverPending(snapshot, content)
 		b := board.Parse(content)
 		b.Path = path
 		note, aerr := board.Apply(b, op)

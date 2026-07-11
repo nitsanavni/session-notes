@@ -261,6 +261,41 @@ func TestEditRefreshSnapshot(t *testing.T) {
 	}
 }
 
+// TestEditDeliversPendingExternalChange reproduces the monitor swallow race:
+// the watcher snapshots the board, the user edits (external write, snapshot now
+// stale), and the agent writes with --refresh-snapshot before any watch poll
+// runs. The edit must print the user's not-yet-delivered change as a
+// watch-style diff instead of silently snapshotting it as seen.
+func TestEditDeliversPendingExternalChange(t *testing.T) {
+	p := writeSample(t)
+	snap := filepath.Join(filepath.Dir(p), "snap")
+	if err := os.WriteFile(snap, []byte(read(t, p)), 0o644); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+	// External (user) edit lands while no watch poll is armed.
+	if err := board.EditUnderLock(p, "", func(c string) (string, error) {
+		return strings.Replace(c, "## Questions", "- [ ] user slipped this in\n\n## Questions", 1), nil
+	}); err != nil {
+		t.Fatalf("external edit: %v", err)
+	}
+	out := captureStdout(t, func() {
+		if code := runEdit([]string{"reply", "widget", "claude: on it", "--board", p, "--refresh-snapshot", snap}); code != 0 {
+			t.Fatal("reply failed")
+		}
+	})
+	if !strings.Contains(out, "+- [ ] user slipped this in") {
+		t.Fatalf("undelivered user edit not printed; stdout:\n%s", out)
+	}
+	// The edit's own line must NOT be reported — it is a self-edit.
+	if strings.Contains(out, "on it") {
+		t.Fatalf("self-edit leaked into the delivery diff:\n%s", out)
+	}
+	// The snapshot ends up current, so the next watch poll stays quiet.
+	if read(t, snap) != read(t, p) {
+		t.Errorf("snapshot not refreshed to the post-edit board")
+	}
+}
+
 // TestEditConcurrentWritersSerialize runs many concurrent adds against one
 // board; every add must survive (the lock prevents lost updates from
 // read-modify-write races).
