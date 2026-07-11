@@ -246,7 +246,7 @@ footer {
 body.mapmode #board, body.mapmode footer#listfoot { display: none; }
 #mapwrap { display: none; }
 body.mapmode #mapwrap { display: block; }
-#mapcrumb { color: var(--dim); font-size: .8em; margin: 0 0 .3rem; min-height: 1.2em; }
+#mapcrumb { color: var(--dim); font-size: .8em; margin: 0 0 .3rem; min-height: 1.2em; cursor: pointer; }
 #mapview {
   position: relative; overflow: auto; height: calc(100vh - 9rem);
   height: calc(100dvh - 9rem); /* mobile URL bars shrink the real viewport */
@@ -1533,6 +1533,11 @@ document.getElementById('redo').addEventListener('click', () => post({ op: 'redo
 document.getElementById('rawedit').addEventListener('click', openRaw);
 document.getElementById('searchbtn').addEventListener('click', () => startSearch());
 document.getElementById('mapbtn').addEventListener('click', () => { if (mapState.in) exitMap(); else enterMap(); });
+// Tapping the breadcrumb steps the focused map out one level (esc) — guarded
+// so a stray tap on the empty crumb of an unfocused map doesn't exit the view.
+document.getElementById('mapcrumb').addEventListener('click', () => {
+  if (mapState.in && mapState.root !== 'center') mapFocusOut();
+});
 document.getElementById('helpbtn').addEventListener('click', () => toggleModal('helpmodal', true));
 
 // The help overlay is built from the single source of truth (internal/keymap),
@@ -2127,10 +2132,11 @@ function renderMap(b) {
 
   renderMapTools(focus);
 
-  // breadcrumb + footer
+  // breadcrumb + footer — the crumb is tappable (steps out one level), the
+  // touch counterpart of esc.
   const crumb = [];
   for (let n = root; n; n = n.parent) crumb.unshift(n.kind === 'center' ? (b.title || 'board') : n.text);
-  document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (b steps out)';
+  document.getElementById('mapcrumb').textContent = root.key === 'center' ? '' : crumb.join(' › ') + '  (esc / tap steps out)';
   const logHidden = !mapState.showLog && (b.sections || []).some(s => s.title === 'Log');
   document.getElementById('mapfoot').textContent =
     `${focus.text}  ·  hjkl move · g/G ends · tab section · enter fold · z zoom · w expand · f focus · esc out · e edit · a add · A sibling · space status · b blocked · p pin · / search · M log · m/q back` +
@@ -2145,6 +2151,39 @@ function renderMap(b) {
   }
 }
 
+// mapFocusInto re-roots the map on the node (the f key / toolbar ⌖): the
+// node becomes the breadcrumb root and its first visible child takes focus.
+function mapFocusInto(n) {
+  if (!n || n.kind === 'center' || !n.children.length) return;
+  // A collapsed-but-nonempty node is focusable: un-collapse it first so
+  // its children show (mirrors the TUI's focusIn dropping foldCollapsed).
+  if (!visKids(n).length) {
+    const f = mapState.folds[n.key] || 'default';
+    mapState.folds[n.key] = f === 'closed' ? 'default' : 'all';
+    // A replies-only node is still empty under 'default' — open it fully.
+    if (!visKids(n).length) mapState.folds[n.key] = 'all';
+  }
+  if (visKids(n).length) {
+    mapState.root = n.key;
+    mapState.focus = visKids(n)[0].key;
+    mapRecenter = true;
+    renderMap(cur);
+  }
+}
+
+// mapFocusOut steps the root out one level (esc / tapping the breadcrumb);
+// from the unfocused map it leaves the view.
+function mapFocusOut() {
+  if (mapState.root === 'center') { exitMap(); return; }
+  const full = mapBuild(cur);
+  const rootNode = findNode(full, mapState.root);
+  const out = rootNode && rootNode.parent ? rootNode.parent.key : 'center';
+  mapState.focus = mapState.root;
+  mapState.root = out;
+  mapRecenter = true;
+  renderMap(cur);
+}
+
 // renderMapTools fills the fixed bottom toolbar (visible on touch screens only,
 // CSS-gated) with the focused node's actions — the map counterpart of the
 // outline's selected-row action strip. Hidden while an inline add/edit is open.
@@ -2157,6 +2196,10 @@ function renderMapTools(n) {
     b.addEventListener('click', fn);
     bar.append(b);
   };
+  // Focus in/out has no touch path except this toolbar (f / esc are
+  // keyboard-only): ⌖ re-roots on the focused node, ‹ steps back out.
+  if (mapState.root !== 'center') btn('‹', 'focus out one level (esc)', () => mapFocusOut());
+  if (n.kind !== 'center' && n.children.length) btn('⌖', 'focus into the subtree (f)', () => mapFocusInto(n));
   if (n.kind === 'item') {
     btn('✎', 'edit (e)', () => mapEdit(n));
     btn('＋', 'add child (a)', () => mapAdd(n));
@@ -2517,39 +2560,12 @@ function handleMapKey(e) {
       break;
     }
     case 'Enter': if (n) cycleFold(n); break;
-    case 'f':
-      if (n && n.kind !== 'center' && n.children.length) {
-        // A collapsed-but-nonempty node is focusable: un-collapse it first so
-        // its children show (mirrors the TUI's focusIn dropping foldCollapsed).
-        if (!visKids(n).length) {
-          const f = mapState.folds[n.key] || 'default';
-          mapState.folds[n.key] = f === 'closed' ? 'default' : 'all';
-          // A replies-only node is still empty under 'default' — open it fully.
-          if (!visKids(n).length) mapState.folds[n.key] = 'all';
-        }
-        if (visKids(n).length) {
-          mapState.root = n.key;
-          mapState.focus = visKids(n)[0].key;
-          mapRecenter = true;
-          renderMap(cur);
-        }
-      }
-      break;
+    case 'f': mapFocusInto(n); break;
     // b toggles blocked [?] on the focused item — outline muscle memory beats
     // the old map-only "step out" binding, which lives on unambiguously as
     // Escape (it always shared the handler). Sections/center: no-op.
     case 'b': if (n && n.kind === 'item' && n.it.status !== 'none') act.blocked(n.section, n.it); break;
-    case 'Escape': {
-      if (mapState.root === 'center') { exitMap(); break; }
-      const full = mapBuild(cur);
-      const rootNode = findNode(full, mapState.root);
-      const out = rootNode && rootNode.parent ? rootNode.parent.key : 'center';
-      mapState.focus = mapState.root;
-      mapState.root = out;
-      mapRecenter = true;
-      renderMap(cur);
-      break;
-    }
+    case 'Escape': mapFocusOut(); break;
     // g/G: first/last node in document order (outline parity). g skips the
     // layout root itself so it lands on the first real node, like the outline's
     // first visible stop.
