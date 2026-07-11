@@ -386,7 +386,9 @@ gets an on-screen path — header buttons reach search (`⌕`) and the map view
 (`◈`), an `✎` action edits items and renames sections, tapping a row selects
 it (revealing its action buttons), and a second tap on the text wraps a long
 line. In the map, tapping a node focuses it, a second tap expands its full
-text, and the `[+N]` badge unfolds a collapsed subtree.
+text, the `[+N]` badge unfolds a collapsed subtree, and a fixed toolbar along
+the bottom carries the focused node's actions (edit, add, status, urgent, pin,
+fold, archive, delete).
 
 `E` opens the whole board's markdown in an editor overlay (`ctrl+enter`
 saves) — the browser's answer to the TUI's `$EDITOR`, and the way to author

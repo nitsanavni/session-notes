@@ -382,7 +382,20 @@ body.mapmode #mapwrap { display: block; }
   .sechead .fold, .ifold { font-size: 1em; width: 1.1em; }
   input.inline, input.add, input.addsec, .modal textarea, #searchprompt input,
   #addsecmodal input.custom, .mapnode input.mapinput { font-size: 16px; }
-  #mapview { height: calc(100dvh - 7.5rem); } /* no map footer to clear */
+  #mapview { height: calc(100dvh - 9.5rem); } /* clear the map toolbar below */
+  /* Map toolbar: the focused node's actions as a fixed strip along the bottom
+     — the map counterpart of the outline's selected-row action line, and the
+     only way to edit/add/status a map node without keys or double-click. */
+  body.mapmode #maptools {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 16;
+    gap: .4rem; justify-content: center; align-items: center;
+    padding: .35rem .5rem calc(.35rem + env(safe-area-inset-bottom));
+    background: var(--bg); border-top: 1px solid var(--border); overflow-x: auto;
+  }
+  #maptools button {
+    background: none; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--fg); cursor: pointer; font: inherit; padding: .15rem .55rem; flex: none;
+  }
 }
 </style>
 </head>
@@ -408,7 +421,8 @@ body.mapmode #mapwrap { display: block; }
 <div id="mapwrap">
   <div id="mapcrumb"></div>
   <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
-</div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"><span class="scope" id="searchscope">working</span></div>
+</div>
+<div id="maptools"></div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"><span class="scope" id="searchscope">working</span></div>
 <div id="searchpanel" aria-label="search results"></div>
 <div id="linkchooser"><div class="lbl">open link — j/k/arrows move · enter open · esc cancel</div><div class="list"></div></div>
 <div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
@@ -2092,6 +2106,8 @@ function renderMap(b) {
   }
   if (heightsGrew) { renderMap(b); return; }
 
+  renderMapTools(focus);
+
   // breadcrumb + footer
   const crumb = [];
   for (let n = root; n; n = n.parent) crumb.unshift(n.kind === 'center' ? (b.title || 'board') : n.text);
@@ -2107,6 +2123,43 @@ function renderMap(b) {
     const mode = mapRecenter ? 'center' : 'nearest';
     focus.el.scrollIntoView({ block: mode, inline: mode });
     mapRecenter = false;
+  }
+}
+
+// renderMapTools fills the fixed bottom toolbar (visible on touch screens only,
+// CSS-gated) with the focused node's actions — the map counterpart of the
+// outline's selected-row action strip. Hidden while an inline add/edit is open.
+function renderMapTools(n) {
+  const bar = document.getElementById('maptools');
+  bar.textContent = '';
+  if (!n || n.__pending || n.__editing) return;
+  const btn = (label, title, fn) => {
+    const b = el('button', { title }, label);
+    b.addEventListener('click', fn);
+    bar.append(b);
+  };
+  if (n.kind === 'item') {
+    btn('✎', 'edit (e)', () => mapEdit(n));
+    btn('＋', 'add child (a)', () => mapAdd(n));
+    btn(MARKERS[n.it.status] || MARKERS.none, 'cycle status (space)', () => act.mapCycle(n.section, n.it));
+    btn('!!', 'toggle urgent (!)', () => act.urgent(n.section, n.it));
+    btn('⚲', 'toggle pin (p)', () => act.pin(n.section, n.it));
+    if (n.children.length) btn('▾', 'fold cycle (enter)', () => cycleFold(n));
+    btn('⤓', 'archive (d)', () => { const f = mapRemovalFollow(n); act.archive(n.section, n.it); cursorFollow = f; });
+    btn('✕', 'delete (D)', () => { const f = mapRemovalFollow(n); act.del(n.section, n.it); cursorFollow = f; });
+  } else if (n.kind === 'section') {
+    btn('✎', 'rename (e)', () => mapEdit(n));
+    btn('＋', 'add item (a)', () => mapAdd(n));
+    if (n.children.length) btn('▾', 'fold cycle (enter)', () => cycleFold(n));
+    if (n.title !== 'Log' && n.title !== 'Archive') {
+      btn('⤓', 'archive section (d)', () => { cursorFollow = { section: n.title }; post({ op: 'archive-section', section: n.title }); });
+    }
+    btn('✕', 'delete section (D)', () => {
+      if (confirm(`Hard-delete section "${n.title}" and everything in it?`)) post({ op: 'delete-section', section: n.title });
+    });
+  } else { // center
+    btn('✎', 'edit title (e)', () => mapEdit(n));
+    btn('＋', 'add section (a)', () => mapAdd(n));
   }
 }
 
