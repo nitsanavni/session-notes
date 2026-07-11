@@ -284,6 +284,10 @@ body.mapmode #mapwrap { display: block; }
   border: none; border-radius: 5px; padding: 1px 6px; margin: 0;
   outline: none; min-width: 6ch;
 }
+/* Every commit-on-enter text box lives in its own <form> (mobile keyboards
+   commit via form submission, not an Enter keydown); the form itself must be
+   invisible to layout so flex/inline parents see the input directly. */
+form { display: contents; }
 /* Incremental search prompt (`/`), shared by both views. */
 #searchprompt {
   position: fixed; top: 12%; left: 50%; transform: translateX(-50%);
@@ -422,10 +426,10 @@ body.mapmode #mapwrap { display: block; }
   <div id="mapcrumb"></div>
   <div id="mapview"><div id="mapcanvas"><svg id="edges"></svg></div></div>
 </div>
-<div id="maptools"></div><div id="searchprompt"><span class="lbl">/</span><input spellcheck="false" aria-label="search"><span class="scope" id="searchscope">working</span></div>
+<div id="maptools"></div><div id="searchprompt"><span class="lbl">/</span><form><input spellcheck="false" enterkeyhint="search" aria-label="search"></form><span class="scope" id="searchscope">working</span></div>
 <div id="searchpanel" aria-label="search results"></div>
 <div id="linkchooser"><div class="lbl">open link — j/k/arrows move · enter open · esc cancel</div><div class="list"></div></div>
-<div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · enter add · esc cancel</div><div class="list"></div><input class="custom" spellcheck="false" placeholder="custom section name…"></div>
+<div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · enter add · esc cancel</div><div class="list"></div><form><input class="custom" spellcheck="false" enterkeyhint="done" placeholder="custom section name…"></form></div>
 <footer id="listfoot">j/k/arrows move · tab section · enter fold · z zoom · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
@@ -735,6 +739,17 @@ const el = (tag, attrs = {}, ...kids) => {
   }
   n.append(...kids);
   return n;
+};
+
+// inputForm wraps a text input in its own single-input <form> and routes
+// submission to `commit`. Mobile keyboards commit through form submission
+// (the Go/Done/Search action key) and never send a plain Enter keydown, so
+// Enter handling for these boxes lives HERE, not in keydown handlers —
+// desktop Enter reaches the same path via the form's implicit submission.
+const inputForm = (inp, commit) => {
+  const f = el('form', {}, inp);
+  f.addEventListener('submit', e => { e.preventDefault(); commit(); });
+  return f;
 };
 
 function toast(msg, info) {
@@ -1260,17 +1275,19 @@ function inlineInput(holder, initial, submit, cancel) {
     if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
   };
   holder.textContent = '';
-  const inp = el('input', { class: 'inline', value: initial });
+  const inp = el('input', { class: 'inline', value: initial, enterkeyhint: 'done' });
   inputsOpen++;
   inp.addEventListener('keydown', e => {
     e.stopPropagation();
-    if (e.key === 'Enter' && inp.value.trim()) { const v = inp.value.trim(); close(); submit(v); }
     if (e.key === 'Escape') { close(); if (cancel) cancel(); }
   });
   inp.addEventListener('blur', () => {
     setTimeout(() => { if (holder.contains(inp)) { close(); if (cancel) cancel(); } }, 150);
   });
-  holder.append(inp);
+  holder.append(inputForm(inp, () => {
+    if (!inp.value.trim()) return;
+    const v = inp.value.trim(); close(); submit(v);
+  }));
   inp.focus();
   inp.setSelectionRange(initial.length, initial.length);
 }
@@ -1279,15 +1296,11 @@ function addInput(section, isLog) {
   const inp = el('input', {
     class: 'add',
     'data-section': section,
+    enterkeyhint: 'done',
     placeholder: isLog ? '+ log entry' : `+ add to ${section}`,
   });
   inp.addEventListener('keydown', e => {
     e.stopPropagation();
-    if (e.key === 'Enter' && inp.value.trim()) {
-      const v = inp.value.trim();
-      inp.value = '';
-      post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v }, v);
-    }
     if (e.key === 'Escape') inp.blur();
     // Up/down on an EMPTY box means "I'm done adding, navigate away": move the
     // cursor so a stray keystroke doesn't strand you in the add box. Once text
@@ -1299,7 +1312,12 @@ function addInput(section, isLog) {
       moveCursor(e.key === 'ArrowDown' ? 1 : -1);
     }
   });
-  return inp;
+  return inputForm(inp, () => {
+    if (!inp.value.trim()) return;
+    const v = inp.value.trim();
+    inp.value = '';
+    post(isLog ? { op: 'log', text: v } : { op: 'add', section, text: v }, v);
+  });
 }
 
 const renameSection = (head, title) =>
@@ -1397,17 +1415,17 @@ function renderOutline(b) {
     for (const it of sec.items || []) list.append(itemNode(sec.title, it));
     main.append(head, list, addInput(sec.title, isLog));
   }
-  const addSec = el('input', { class: 'addsec', 'data-section': ' new-section', placeholder: '+ add section (A)' });
+  const addSec = el('input', { class: 'addsec', 'data-section': ' new-section', enterkeyhint: 'done', placeholder: '+ add section (A)' });
   addSec.addEventListener('keydown', e => {
     e.stopPropagation();
-    if (e.key === 'Enter' && addSec.value.trim()) {
-      const v = addSec.value.trim();
-      addSec.value = '';
-      post({ op: 'add-section', text: v });
-    }
     if (e.key === 'Escape') addSec.blur();
   });
-  main.append(addSec);
+  main.append(inputForm(addSec, () => {
+    if (!addSec.value.trim()) return;
+    const v = addSec.value.trim();
+    addSec.value = '';
+    post({ op: 'add-section', text: v });
+  }));
 
   // Restore the cursor onto the same stop; if its raw line changed under it
   // (its own status/urgent/edit), follow by section + text; if it vanished
@@ -1473,6 +1491,7 @@ function addSectionOverlay() {
     box.classList.remove('open');
     document.removeEventListener('keydown', onKey, true);
     custom.onkeydown = null;
+    custom.form.onsubmit = null;
     if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
   };
   const confirm = () => {
@@ -1484,9 +1503,9 @@ function addSectionOverlay() {
   };
   custom.onkeydown = ev => {
     ev.stopPropagation();
-    if (ev.key === 'Enter') confirm();
-    else if (ev.key === 'Escape') close();
+    if (ev.key === 'Escape') close();
   };
+  custom.form.onsubmit = ev => { ev.preventDefault(); confirm(); };
   const onKey = ev => {
     if (document.activeElement === custom) return; // custom input owns its keys
     ev.stopPropagation(); ev.preventDefault();
@@ -2242,26 +2261,25 @@ function injectPending(full) {
 // mountMapInput hosts the text input inside the provisional/edited node box.
 function mountMapInput(d, node) {
   const p = mapState.pending;
-  const inp = el('input', { class: 'mapinput', spellcheck: 'false',
+  const inp = el('input', { class: 'mapinput', spellcheck: 'false', enterkeyhint: 'done',
     'aria-label': p.kind === 'edit' ? 'edit node' : 'add node' });
   inp.value = p.text || '';
   const sizeTo = () => { inp.size = Math.max(6, [...inp.value].length + 1); };
   sizeTo();
   d.classList.add('editing');
-  d.append(inp);
+  d.append(inputForm(inp, () => {
+    const v = inp.value.trim();
+    if (!v) { cancelMapPending(); return; }
+    const commit = p.commit;
+    finishMapPending();
+    commit(v);
+  }));
   inp.addEventListener('input', () => { p.text = inp.value; sizeTo(); });
   // Clicking away (onto another node / outside) cancels a still-open prompt.
   inp.addEventListener('blur', () => { if (mapState.pending && pendingInputEl === inp) cancelMapPending(); });
   inp.addEventListener('keydown', ev => {
     ev.stopPropagation();
-    if (ev.key === 'Enter') {
-      ev.preventDefault();
-      const v = inp.value.trim();
-      if (!v) { cancelMapPending(); return; }
-      const commit = p.commit;
-      finishMapPending();
-      commit(v);
-    } else if (ev.key === 'Escape') {
+    if (ev.key === 'Escape') {
       ev.preventDefault();
       cancelMapPending();
     } else if (p.kind === 'add' && ev.key.startsWith('Arrow') && inp.value === '') {
@@ -2960,8 +2978,11 @@ function startSearch() {
     // Up/Down (and ctrl+p/ctrl+n) move the panel selection; no board reveal.
     if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) { e.preventDefault(); movePanel(1); return; }
     if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) { e.preventDefault(); movePanel(-1); return; }
-    if (e.key === 'Enter') { const v = inp.value; closeSearchPrompt(); confirmSearch(v); }
-    else if (e.key === 'Escape') { closeSearchPrompt(); cancelSearch(); }
+    if (e.key === 'Escape') { closeSearchPrompt(); cancelSearch(); }
+  };
+  inp.form.onsubmit = e => {
+    e.preventDefault();
+    const v = inp.value; closeSearchPrompt(); confirmSearch(v);
   };
   inp.focus();
   inp.select(); // recalled term shows selected: typing replaces it wholesale
@@ -2972,7 +2993,7 @@ function closeSearchPrompt() {
   const box = document.getElementById('searchprompt');
   const inp = box.querySelector('input');
   box.classList.remove('open');
-  inp.oninput = null; inp.onkeydown = null;
+  inp.oninput = null; inp.onkeydown = null; inp.form.onsubmit = null;
   inputsOpen--;
   if (pendingRender && inputsOpen === 0) { pendingRender = false; render(cur); }
 }
