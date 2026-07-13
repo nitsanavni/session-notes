@@ -339,6 +339,12 @@ form { display: contents; }
   flex: none; font-size: .72em; color: var(--dim);
   border: 1px solid var(--border); border-radius: 999px; padding: .05rem .45rem;
 }
+/* Scoped-view badge: shown when the token is carved to a subtree (b.scope). */
+#scopebadge {
+  flex: none; font-size: .72em; color: var(--pin);
+  border: 1px solid var(--pin); border-radius: 999px; padding: .05rem .45rem;
+}
+#scopebadge[hidden] { display: none; }
 /* Fuzzy-ranked results panel: a scrollable list shown under the search prompt.
    It previews matches best-first WITHOUT revealing anything on the board — the
    board only jumps on Enter (or n/N). */
@@ -418,6 +424,7 @@ form { display: contents; }
   <span id="title" title="click to rename"></span>
   <span class="dim" id="sid"></span>
   <span class="dim" id="cwd"></span>
+  <span id="scopebadge" title="this token is scoped to a subtree — siblings are not visible" hidden>⊂ scoped view</span>
   <span class="dim" id="sessionstatus" title="live Claude Code session status"></span>
   <span class="tools">
     <button id="undo" title="undo last web edit (u)">↶</button>
@@ -1425,6 +1432,8 @@ function renderOutline(b) {
   document.getElementById('title').textContent = b.title || shortId(b.session || b.id);
   document.getElementById('sid').textContent = shortId(b.session || b.id);
   document.getElementById('cwd').textContent = b.cwd || '';
+  const scopeBadge = document.getElementById('scopebadge');
+  if (scopeBadge) scopeBadge.hidden = !b.scope;
   renderSessionStatus(b.status);
   document.getElementById('undo').disabled = !b.canUndo;
   document.getElementById('redo').disabled = !b.canRedo;
