@@ -345,3 +345,76 @@ loop is: edit as subject S, `watch --ignore-author S` — no own-echo wakeups.
 2. `watch --json` emits the documented line shape (local file + remote httptest).
 3. ignore-author end-to-end: the watcher's own edit is silent, another author's
    edit fires.
+
+## M7 (human affordances for the subtree/cloud product, in progress)
+
+M7 puts human hands on the M3–M6 subtree/cloud machinery through the web UI. No
+protocol/access-model change: it reuses the M4 grant endpoint and the shared
+zoom addressing. Two of the three planned features shipped; the third (TUI
+attaches to remote boards) is deferred — see "Cut" below.
+
+### Share a node from the web UI (cloud, admin only)
+
+From the board UI on a cloud server, an admin selects (or zooms to) a node and
+mints a scoped attach link — the browser path to the M4 carve-out handoff that
+was previously CLI-only (`remote grant --new-token`).
+
+- **Feature detection.** A new `GET /api/me` on the cloud server returns
+  `{subject, admin, cloud:true}`. The browser fetches it on load; the file-mode
+  `serve` UI has **no** such route (404), so `canShare` stays false and the
+  action is inert there. Only `cloud && admin` reveals it.
+- **Trigger.** Keyboard `s`, a header ⤴ button, and the map touch toolbar. The
+  target is the outline cursor's item/section or the map's focused node (by its
+  durable id).
+- **Endpoint reuse.** The action POSTs the existing `…/grants` (the M4
+  `newToken` flow) with `{newToken, root:<node id>, perm}` — no new grant
+  endpoint was needed. The server mints a non-admin token scoped to that node
+  and returns it.
+- **Output.** A copyable block: the attach command (`session-notes login <server>
+  --token <t> && session-notes link <server>/b/<board>#<node>`, the M6 link
+  flow) and a browser `?token=` URL. Revoke via `remote revoke --token-name`.
+- Keymap gains a web-only `s` (outline + map).
+
+### Outline re-root zoom (deferred from M4), shared with the map
+
+The outline gains a **true re-root zoom** (`f`): the chosen node renders as root
+with a breadcrumb back, everything else hidden — distinct from the retained
+fold-based `z` (which collapses, not re-roots).
+
+- **Shared zoom root.** The zoom root id is shared across views
+  (`mapState.rootId`) and mirrored to the `#<node-id>` URL fragment in **both
+  directions** (load seed + `hashchange`). A deep-link re-roots whichever view is
+  active; switching views preserves the zoom (exit map → zoomed outline; `m`
+  from a zoomed outline → zoomed map). The one-time fragment seed runs before the
+  first render so the outline's hash-sync can't wipe it.
+- **Breadcrumb / step-out.** Board › section › ancestors › root; each crumb
+  re-roots to it, the board crumb clears the zoom. `Escape` steps out one level
+  (a top-level item → its section → whole board).
+- **Edit integrity.** Stops keep each item's real owning section, so
+  status/urgent/edit/reply ops still address correctly inside a re-rooted item
+  view. The M4 scoped-token subtree view composes: the server already returns
+  only the subtree, and zoom then re-roots within it.
+
+### Exit criteria
+
+1. `/api/me` reports admin vs scoped vs 401; the share-grant path mints a
+   node-scoped token for an admin and 403s a non-admin (Go tests).
+2. Outline `f` re-roots with a breadcrumb and `#id`; `Escape`/crumb step out;
+   the `#id` fragment round-trips (load + hashchange); a view switch preserves
+   the zoom (e2e).
+3. gofmt/vet/`go test ./...` green; the web e2e suite green.
+
+### Cut: TUI attaches to remote boards
+
+The third planned feature — opening the bubbletea TUI on a `RemoteTree`-backed
+board (`--board https://host/b/<board>`) — was **cut** as disproportionately
+risky for this milestone. The TUI's mutation/reload path is file-path-centric at
+many seams (`board.SaveRebasing(m.path, m.lastDisk, …)`, `board.Undo(m.path)`,
+`os.ReadFile(m.path)`, an fsnotify directory watcher), and the rebase machinery
+is fundamentally file/flock-based, whereas a remote board conflict-resolves via
+`RemoteTree.Apply`'s version `base`. Bridging cleanly needs a `BoardStore`
+interface over load/save/watch threaded through the model plus SSE-driven
+refresh, remote-undo greying, and `$EDITOR`-merge disabling — a large change best
+done as its own milestone rather than forced in alongside the two web features.
+The remote read/edit/watch path itself already exists (`internal/cloud`,
+exercised by `edit`/`watch`); only the TUI front-end binding is deferred.

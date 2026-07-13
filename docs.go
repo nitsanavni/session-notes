@@ -359,6 +359,15 @@ Durability layers (details + a full VPS runbook in deploy/README.md):
       session-notes server export --dir ./boards          # against the db
       session-notes remote pull --all https://host ./boards   # over HTTP (admin)
 
+Share a node from the browser (cloud + admin token): open a board on the cloud
+server, select or zoom to a node, and press ` + "`s`" + ` (or the header ⤴ button / map
+touch toolbar) to mint a scoped attach link. It reuses the grant machinery — a
+token bound to that node's subtree — and shows a copyable attach command
+(` + "`session-notes login … && session-notes link …#node`" + `) plus a browser ?token=
+URL to hand a teammate or a sub-agent. The action is feature-detected via GET
+/api/me ({subject, admin, cloud}); the file-mode ` + "`serve`" + ` UI has no such route, so
+it stays hidden there. Revoke later with ` + "`remote revoke … --token-name`" + `.
+
 Operational surface: GET /healthz (no auth, 200 ok) for probes; one stderr log
 line per request (method path status duration); POST/PUT bodies over 1 MiB are
 refused 413; SIGTERM/SIGINT shut down gracefully (drain SSE, close the db).
