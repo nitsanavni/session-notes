@@ -35,6 +35,15 @@ func StripRawAnchor(line string) string {
 	return rest
 }
 
+// SplitRawAnchor separates a source line's trailing " ^id" node anchor from the
+// rest of the line, returning the line without the anchor and the id ("" when
+// there is no anchor). Unlike splitAnchor it operates on a raw source line
+// (indent + bullet + text), so callers that report line-level diffs (watch
+// --json) can surface a clean line plus its stable node id.
+func SplitRawAnchor(line string) (rest, id string) {
+	return splitAnchor(line)
+}
+
 // StripAnchors removes the trailing node anchor from every line of content —
 // the whole-document form of StripRawAnchor, used by surfaces that diff raw
 // board text (web delivery receipts) so the one-time id-assignment churn does

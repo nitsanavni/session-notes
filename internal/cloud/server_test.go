@@ -142,6 +142,43 @@ func TestRemoteWatchScoped(t *testing.T) {
 	}
 }
 
+// TestRemoteWatchIgnoreAuthor verifies server-side self-edit suppression: an
+// edit authored by the ignored name delivers NO event; an edit by another author
+// fires.
+func TestRemoteWatchIgnoreAuthor(t *testing.T) {
+	s, ts := testServer(t, false)
+	tok, _ := s.CreateToken("t")
+	tree := NewRemoteTree(ts.URL, "b1", tok)
+
+	ch, cancel, err := tree.WatchFiltered("", "scout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	// Let the SSE handler subscribe before we write.
+	time.Sleep(100 * time.Millisecond)
+
+	// Own edit (author "scout"): suppressed, no wakeup.
+	if _, err := tree.Apply(board.Op{Name: "add", Section: "Threads", Text: "mine", Author: "scout"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ch:
+		t.Fatal("own edit should be suppressed by --ignore-author")
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Another author's edit: fires.
+	if _, err := tree.Apply(board.Op{Name: "add", Section: "Threads", Text: "theirs", Author: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("edit by another author should fire an event")
+	}
+}
+
 func TestConflict409OverHTTP(t *testing.T) {
 	s, ts := testServer(t, true) // insecure: focus on conflict semantics
 	_ = s

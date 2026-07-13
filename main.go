@@ -97,6 +97,15 @@ func main() {
 		os.Exit(runRemote(args[1:]))
 	}
 
+	// Link/unlink subcommands: pin a default board ref per directory so
+	// edit/watch resolve it when --board is omitted. See link.go.
+	if len(args) >= 1 && args[0] == "link" {
+		os.Exit(runLink(false, args[1:]))
+	}
+	if len(args) >= 1 && args[0] == "unlink" {
+		os.Exit(runLink(true, args[1:]))
+	}
+
 	// The TUI surfaces the upgrade hint asynchronously off the UI thread; give
 	// it the installed version to compare against.
 	tui.Version = versionString()
@@ -339,6 +348,11 @@ Usage:
                                       bearer token (printed once)
   session-notes login <server-url>    store a bearer token for a cloud server
                                       (--token <t> or stdin), keyed by host
+  session-notes link <ref>            pin a default board for this directory so
+                                      edit/watch need no --board (a path or
+                                      http(s)://host/b/<board>[#<node>]); 'link
+                                      --show' prints the effective ref, 'unlink'
+                                      removes it. Walks up parent dirs
   session-notes remote new <url> <n>  create a board on a cloud server; also
                                       'remote push <local> <url> [name]' and
                                       'remote pull <url>/b/<board> <local>'
@@ -352,7 +366,10 @@ Usage:
                                       --session <id>; --once exits after the
                                       first change; --snapshot <p> shares the
                                       edit --refresh-snapshot file; --interval
-                                      <dur> default 2s; watches .notes/ too)
+                                      <dur> default 2s; watches .notes/ too;
+                                      --json emits one JSON line per change;
+                                      --ignore-author <n> drops a remote watch's
+                                      own edits)
   session-notes docs <topic>          print a protocol/recipe topic
                                       (protocol|monitor|conflicts|cli|headless|
                                       blurb); no topic lists them

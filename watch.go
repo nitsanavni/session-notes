@@ -29,9 +29,10 @@ import (
 // that same lock) is never seen as an external change. Pass the SAME path to
 // both `watch --snapshot` and `edit --refresh-snapshot`.
 func runWatch(args []string) int {
-	var boardPath, session, snapshot, node string
+	var boardPath, session, snapshot, node, ignoreAuthor string
 	once := false
 	notes := true
+	jsonOut := false
 	interval := 2 * time.Second
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -80,8 +81,16 @@ func runWatch(args []string) int {
 			} else {
 				return watchErr("--node needs a node id")
 			}
+		case "--ignore-author":
+			if v, ok := takeVal(); ok {
+				ignoreAuthor = v
+			} else {
+				return watchErr("--ignore-author needs a name")
+			}
 		case "--once":
 			once = true
+		case "--json":
+			jsonOut = true
 		case "--notes":
 			notes = true
 		case "--no-notes":
@@ -100,8 +109,18 @@ func runWatch(args []string) int {
 		node = node[i+1:]
 	}
 
+	// Per-directory link: when neither --board nor --session is given, fall back
+	// to the ref pinned for this cwd (explicit flag > link). A local linked ref's
+	// #<node> fragment becomes the default --node when --node is unset.
+	if lref, lnode := linkedBoard(boardPath, session); lref != "" {
+		boardPath = lref
+		if node == "" && lnode != "" {
+			node = lnode
+		}
+	}
+
 	if cloud.IsRemote(boardPath) {
-		return runWatchRemote(boardPath, node, once)
+		return runWatchRemote(boardPath, node, once, jsonOut, ignoreAuthor)
 	}
 
 	path, err := editBoardPath(boardPath, session)
@@ -112,8 +131,14 @@ func runWatch(args []string) int {
 		snapshot = defaultSnapshotPath(path)
 	}
 
-	w := &watcher{board: path, snapshot: snapshot, node: node}
-	if notes {
+	ref := boardPath
+	if ref == "" {
+		ref = path
+	}
+	w := &watcher{board: path, snapshot: snapshot, node: node, jsonOut: jsonOut, ref: ref}
+	// In --json mode emit only item changes (the JSON schema has no shape for
+	// note-file events); notes watching stays a human-format feature.
+	if notes && !jsonOut {
 		w.notesDir = notesDirFor(path)
 		w.notesState = snapshot + ".notes.json"
 	}
@@ -147,7 +172,7 @@ func runWatch(args []string) int {
 // events stream, printing the same unified item diff the file watcher emits. On
 // each "changed" event it refetches the board and diffs against the previous
 // content, scoped to --node when given so sibling-subtree edits stay invisible.
-func runWatchRemote(rawURL, node string, once bool) int {
+func runWatchRemote(rawURL, node string, once, jsonOut bool, ignoreAuthor string) int {
 	ref, err := cloud.ParseRef(rawURL)
 	if err != nil {
 		return watchErr(err.Error())
@@ -162,7 +187,9 @@ func runWatchRemote(rawURL, node string, once bool) int {
 	if err != nil {
 		return watchErr(err.Error())
 	}
-	ch, cancel, err := tree.Watch(node)
+	// Self-edit suppression: the server drops events whose ops are all authored
+	// by ignoreAuthor, so an agent editing as its own subject never wakes itself.
+	ch, cancel, err := tree.WatchFiltered(node, ignoreAuthor)
 	if err != nil {
 		return watchErr(err.Error())
 	}
@@ -181,13 +208,18 @@ func runWatchRemote(rawURL, node string, once bool) int {
 			after, hasNow = board.SubtreeSource(cur, node)
 			gone = hadBefore && !hasNow
 		}
-		out := diffItems(before, after)
+		var out string
+		if jsonOut {
+			out = jsonDiff(before, after, rawURL, node)
+		} else {
+			out = diffItems(before, after)
+		}
 		if out == "" && !gone {
 			prev = cur
 			continue
 		}
 		fmt.Print(out)
-		if gone {
+		if gone && !jsonOut {
 			fmt.Fprintf(os.Stdout, "node gone: %s\n", node)
 		}
 		prev = cur
@@ -208,6 +240,17 @@ type watcher struct {
 	node       string // "" watches the whole board; else only the subtree rooted here
 	notesDir   string // "" disables notes watching
 	notesState string // JSON sidecar of note path -> content hash
+	jsonOut    bool   // emit each change as a JSON line instead of a +/- diff
+	ref        string // board ref reported in the JSON "board" field
+}
+
+// fmtDiff renders an item-level change either as the human +/- diff or, in
+// --json mode, one JSON line per added/removed item.
+func (w *watcher) fmtDiff(before, after string) string {
+	if w.jsonOut {
+		return jsonDiff(before, after, w.ref, w.node)
+	}
+	return diffItems(before, after)
 }
 
 // init seeds any missing snapshot from the current state so the first poll does
@@ -260,14 +303,16 @@ func (w *watcher) poll() (string, bool, bool, error) {
 			// mode, exits nonzero).
 			before, hadBefore := board.SubtreeSource(string(snap), w.node)
 			after, hasNow := board.SubtreeSource(string(cur), w.node)
-			if d := diffItems(before, after); d != "" {
+			if d := w.fmtDiff(before, after); d != "" {
 				changed = true
 				out.WriteString(d)
 			}
 			if hadBefore && !hasNow {
 				changed = true
 				gone = true
-				fmt.Fprintf(&out, "node gone: %s\n", w.node)
+				if !w.jsonOut {
+					fmt.Fprintf(&out, "node gone: %s\n", w.node)
+				}
 			}
 			if changed {
 				if err := os.WriteFile(w.snapshot, cur, 0o644); err != nil {
@@ -276,7 +321,7 @@ func (w *watcher) poll() (string, bool, bool, error) {
 			}
 			return nil
 		}
-		if d := diffItems(string(snap), string(cur)); d != "" {
+		if d := w.fmtDiff(string(snap), string(cur)); d != "" {
 			changed = true
 			out.WriteString(d)
 			if err := os.WriteFile(w.snapshot, cur, 0o644); err != nil {
@@ -318,6 +363,43 @@ func diffItems(before, after string) string {
 	}
 	for _, l := range added {
 		fmt.Fprintf(&b, "+%s\n", l)
+	}
+	return b.String()
+}
+
+// jsonChange is one item add/remove reported by `watch --json`, one JSON object
+// per line. line is the item's source line with its trailing " ^id" anchor
+// stripped; id is that anchor ("" when the line has none); author is filled only
+// when known (empty for the file watcher and the SSE stream). board is the ref
+// being watched, node the watch root (empty for a whole-board watch).
+type jsonChange struct {
+	Op     string `json:"op"` // "add" | "remove"
+	Line   string `json:"line"`
+	ID     string `json:"id"`
+	Author string `json:"author"`
+	Board  string `json:"board"`
+	Node   string `json:"node"`
+}
+
+// jsonDiff renders the item-level change between two board contents as one JSON
+// line per added/removed item (removed first, then added — matching diffItems).
+func jsonDiff(before, after, ref, node string) string {
+	added, removed := board.DiffLines(before, after)
+	if len(added) == 0 && len(removed) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	emit := func(op, raw string) {
+		line, id := board.SplitRawAnchor(raw)
+		data, _ := json.Marshal(jsonChange{Op: op, Line: line, ID: id, Board: ref, Node: node})
+		b.Write(data)
+		b.WriteByte('\n')
+	}
+	for _, l := range removed {
+		emit("remove", l)
+	}
+	for _, l := range added {
+		emit("add", l)
 	}
 	return b.String()
 }
@@ -415,7 +497,8 @@ func watchUsage(w *os.File) {
 
 Usage:
   session-notes watch --board <path> [--node <id>] [--snapshot <path>]
-                      [--once] [--interval <dur>] [--no-notes]
+                      [--once] [--interval <dur>] [--no-notes] [--json]
+                      [--ignore-author <name>]
 
 Blocks, polling the board file on --interval (default 2s). On each external
 change it prints the changed items as a unified-style diff (removed "-",
@@ -434,5 +517,16 @@ added "+") to stdout and keeps watching. --once exits 0 after the first change
   --interval <dur>                  poll interval, Go duration (default 2s)
   --no-notes                        do not also watch the board's .notes/ sibling
                                     (watched by default when present)
+  --json                            emit each change as one JSON line
+                                    {"op":"add|remove","line":..,"id":..,
+                                    "author":..,"board":..,"node":..} instead of a
+                                    +/- diff (implies --no-notes)
+  --ignore-author <name>            (remote) drop events whose edits are all
+                                    authored by <name> — self-edit suppression for
+                                    a cloud watch (edit as subject S, watch
+                                    --ignore-author S). Local watch uses --snapshot
+
+With no --board/--session, the directory's linked board is used (session-notes
+link <ref>).
 `)
 }

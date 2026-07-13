@@ -582,6 +582,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if grant.Root != "" {
 		node = grant.Root // scoped tokens only ever see their subtree's events
 	}
+	// Self-edit suppression: drop a change whose journalled ops are ALL authored
+	// by ignoreAuthor, so an agent editing as its own subject never wakes itself.
+	ignoreAuthor := r.URL.Query().Get("ignoreAuthor")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	fmt.Fprint(w, ": connected\n\n")
@@ -590,7 +593,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch, cancel := s.store.Subscribe(id)
 	defer cancel()
 
-	prev, _, _ := s.store.Get(id)
+	prev, prevVer, _ := s.store.Get(id)
 	ping := time.NewTicker(15 * time.Second)
 	defer ping.Stop()
 	for {
@@ -601,19 +604,39 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, ": ping\n\n")
 			fl.Flush()
 		case <-ch:
-			cur, _, err := s.store.Get(id)
+			cur, curVer, err := s.store.Get(id)
 			if err != nil {
 				return
 			}
 			if node != "" && !subtreeChanged(prev, cur, node) {
-				prev = cur
+				prev, prevVer = cur, curVer
 				continue
 			}
-			prev = cur
+			if ignoreAuthor != "" && authorsAllEqual(s.store, id, prevVer, ignoreAuthor) {
+				prev, prevVer = cur, curVer
+				continue
+			}
+			prev, prevVer = cur, curVer
 			fmt.Fprint(w, "data: changed\n\n")
 			fl.Flush()
 		}
 	}
+}
+
+// authorsAllEqual reports whether every op that landed after sinceVersion was
+// authored by name (and there is at least one). A change with no matching ops,
+// or any op by a different author, is NOT suppressed.
+func authorsAllEqual(store *Store, id string, sinceVersion int, name string) bool {
+	authors, err := store.AuthorsSince(id, sinceVersion)
+	if err != nil || len(authors) == 0 {
+		return false
+	}
+	for _, a := range authors {
+		if a != name {
+			return false
+		}
+	}
+	return true
 }
 
 // subtreeChanged reports whether the subtree rooted at id differs between two

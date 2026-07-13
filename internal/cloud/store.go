@@ -334,6 +334,27 @@ func (s *Store) History(id string) ([]HistoryEntry, error) {
 	return out, rows.Err()
 }
 
+// AuthorsSince returns the authors of every journalled op with version greater
+// than sinceVersion, oldest first. It feeds the SSE ?ignoreAuthor filter: when
+// every author of the ops that produced a change equals the ignored name, the
+// change is the watcher's own and no event is delivered.
+func (s *Store) AuthorsSince(id string, sinceVersion int) ([]string, error) {
+	rows, err := s.db.Query(`SELECT author FROM ops WHERE board_id=? AND version>? ORDER BY version`, id, sinceVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // ---- version-bump pub/sub (SSE) ----
 
 // Subscribe returns a channel that receives the new version on every write to

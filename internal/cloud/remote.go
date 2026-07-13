@@ -243,9 +243,24 @@ func (t *RemoteTree) postEdit(req editReq, base int) (res board.OpResult, confli
 // Each server "changed" event becomes a board.Event. The cancel func closes the
 // stream.
 func (t *RemoteTree) Watch(id string) (<-chan board.Event, func(), error) {
+	return t.WatchFiltered(id, "")
+}
+
+// WatchFiltered is Watch with server-side self-edit suppression: ignoreAuthor, if
+// non-empty, is passed as ?ignoreAuthor and the server drops any change whose
+// journalled ops are all authored by that name — so an agent editing as its own
+// subject never wakes its own watch.
+func (t *RemoteTree) WatchFiltered(id, ignoreAuthor string) (<-chan board.Event, func(), error) {
 	path := "/api/board/" + t.board + "/events"
+	q := url.Values{}
 	if id != "" {
-		path += "?node=" + url.QueryEscape(id)
+		q.Set("node", id)
+	}
+	if ignoreAuthor != "" {
+		q.Set("ignoreAuthor", ignoreAuthor)
+	}
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	r, err := t.req("GET", path, nil)
 	if err != nil {

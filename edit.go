@@ -80,6 +80,16 @@ func runEdit(args []string) int {
 	sub := pos[0]
 	rest := pos[1:]
 
+	// Per-directory link: when neither --board nor --session is given, fall back
+	// to the ref pinned for this cwd (explicit flag > link). A local linked ref's
+	// #<node> fragment becomes the default --root.
+	if lref, lnode := linkedBoard(boardPath, session); lref != "" {
+		boardPath = lref
+		if root == "" && lnode != "" {
+			root = lnode
+		}
+	}
+
 	var path string
 	if cloud.IsRemote(boardPath) {
 		// Remote board: --board is an http(s) URL. A #<node> fragment supplies a
