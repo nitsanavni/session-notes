@@ -1730,7 +1730,10 @@ document.getElementById('histclose').addEventListener('click', () => toggleModal
 // ---- map view (port of the TUI's mm-style mindmap) ----
 // The board as a center-outward map: title at center, sections as the first
 // ring, items as subtrees. Same data, same op layer — a second projection.
-const mapState = { in: false, folds: {}, root: 'center', focus: 'center', showLog: false, expanded: {}, pending: null };
+// root is the transient positional key of the zoom root; rootId is its durable
+// node id (M2), the source of truth that survives edits and drives the URL
+// fragment deep-link (#<node-id>). '' rootId = the whole-board center.
+const mapState = { in: false, folds: {}, root: 'center', rootId: '', focus: 'center', showLog: false, expanded: {}, pending: null };
 let mapNodes = []; // visible nodes of the last renderMap, in placement order
 // When set, the next renderMap centers the focused node in the viewport (on
 // first entry and after f/b re-roots) instead of the minimal-scroll default.
@@ -1745,10 +1748,10 @@ const mapRealH = new Map();
 // mapBuild converts the board JSON into the full node tree. Keys match the
 // outline's stop keys exactly, so selection carries over both ways.
 function mapBuild(b) {
-  const center = { key: 'center', kind: 'center', text: b.title || shortId(b.session || b.id), children: [], parent: null };
+  const center = { key: 'center', kind: 'center', id: '', text: b.title || shortId(b.session || b.id), children: [], parent: null };
   for (const sec of b.sections || []) {
     if (sec.title === 'Log' && !mapState.showLog) continue;
-    const sn = { key: 'sec:' + sec.title, kind: 'section', title: sec.title, text: sec.title, children: [], parent: center };
+    const sn = { key: 'sec:' + sec.title, kind: 'section', id: sec.id || '', title: sec.title, text: sec.title, children: [], parent: center };
     center.children.push(sn);
     const add = (items, parent) => {
       for (const it of items || []) {
@@ -1756,7 +1759,7 @@ function mapBuild(b) {
         let label = it.text;
         if (it.urgent) label = '!! ' + label;
         if (it.status !== 'none') label = MARKERS[it.status] + ' ' + label;
-        const n = { key: `it:${sec.title}:${it.raw}`, kind: 'item', it, section: sec.title,
+        const n = { key: `it:${sec.title}:${it.raw}`, kind: 'item', id: it.id || '', it, section: sec.title,
           text: label, isReply: isReplyText(it.text), children: [], parent };
         parent.children.push(n);
         add(it.children, n);
@@ -1847,6 +1850,22 @@ const findNode = (root, key) => {
   for (const c of root.children) { const f = findNode(c, key); if (f) return f; }
   return null;
 };
+
+// findNodeById locates a map node by its durable node id (M2 zoom addressing).
+const findNodeById = (root, id) => {
+  if (!id) return null;
+  if (root.id === id) return root;
+  for (const c of root.children) { const f = findNodeById(c, id); if (f) return f; }
+  return null;
+};
+
+// syncMapHash reflects the current zoom root into the URL fragment so a zoomed
+// map is shareable/linkable (#<node-id>); the whole-board center clears it.
+// history.replaceState avoids spamming the back stack on every f/b.
+function syncMapHash() {
+  const want = mapState.in && mapState.rootId ? '#' + mapState.rootId : '';
+  if (location.hash !== want) history.replaceState(null, '', location.pathname + location.search + want);
+}
 
 // splitSides: mm's balancing, ported. Heaviest-first onto the lighter side;
 // the first (or lone) child claims the right; document order kept per side.
@@ -1961,8 +1980,12 @@ function renderMap(b) {
   if (!mapNodes.length) measureCharW();
   const full = mapBuild(b);
   injectPending(full);
-  let root = findNode(full, mapState.root) || full;
+  // The durable node id wins (survives edits that shifted positional keys); fall
+  // back to the positional key, then the whole board.
+  let root = (mapState.rootId && findNodeById(full, mapState.rootId)) || findNode(full, mapState.root) || full;
   mapState.root = root.key;
+  mapState.rootId = root.id || '';
+  syncMapHash();
 
   // Restore focus; if its raw line changed under it, follow by section+text.
   let focus = findNode(root, mapState.focus);
@@ -2204,6 +2227,7 @@ function mapFocusInto(n) {
   }
   if (visKids(n).length) {
     mapState.root = n.key;
+    mapState.rootId = n.id || '';
     mapState.focus = visKids(n)[0].key;
     mapRecenter = true;
     renderMap(cur);
@@ -2216,9 +2240,10 @@ function mapFocusOut() {
   if (mapState.root === 'center') { exitMap(); return; }
   const full = mapBuild(cur);
   const rootNode = findNode(full, mapState.root);
-  const out = rootNode && rootNode.parent ? rootNode.parent.key : 'center';
+  const parent = rootNode && rootNode.parent ? rootNode.parent : null;
   mapState.focus = mapState.root;
-  mapState.root = out;
+  mapState.root = parent ? parent.key : 'center';
+  mapState.rootId = parent ? (parent.id || '') : '';
   mapRecenter = true;
   renderMap(cur);
 }
@@ -2290,9 +2315,26 @@ function exitMap() {
   mapState.in = false;
   document.body.classList.remove('mapmode');
   document.getElementById('mapfoot').hidden = true;
+  syncMapHash(); // leaving the map clears the zoom fragment
   // Selection carries back: the map's focus becomes the outline cursor.
   if (mapState.focus !== 'center') cursorKey = mapState.focus;
   renderOutline(cur);
+}
+
+// applyZoomHash honours a #<node-id> fragment: enter the map (if needed) and
+// zoom to that node, so /b/{board}#<id> deep-links to a zoomed view. An empty
+// or unknown fragment while zoomed steps back to the whole board.
+function applyZoomHash() {
+  const id = decodeURIComponent((location.hash || '').replace(/^#/, ''));
+  if (!id) {
+    if (mapState.in && mapState.rootId) { mapState.rootId = ''; mapState.root = 'center'; renderMap(cur); }
+    return;
+  }
+  const full = mapBuild(cur);
+  const n = findNodeById(full, id);
+  if (!n || n.kind === 'center') return; // unknown id: leave the view as-is
+  if (!mapState.in) enterMap();
+  mapFocusInto(n);
 }
 
 // ---- inline add/edit (in-place, no detached overlay) ----
@@ -3259,18 +3301,23 @@ document.addEventListener('keydown', e => {
   }
 });
 
+let zoomHashApplied = false;
 async function refresh() {
   try {
     const b = await (await fetch(API)).json();
     computeNovelty(b); // flag out-of-band changes before the render paints them
     cur = b;
     render(cur); // render() itself defers when an input is open
+    // Honour a #<node-id> deep-link once the board is loaded (M2 zoom).
+    if (!zoomHashApplied) { zoomHashApplied = true; if (location.hash.length > 1) applyZoomHash(); }
   } catch { /* transient; SSE or next action will retry */ }
 }
 
 refresh();
 const es = new EventSource(`${API}/events`);
 es.onmessage = () => refresh();
+// Back/forward or an edited fragment re-applies the zoom.
+window.addEventListener('hashchange', () => { if (cur) applyZoomHash(); });
 
 // ---- outline width (draggable margins + preset modes) ----
 // The outline's content column can be narrowed/widened. `W` cycles the presets
@@ -3392,7 +3439,7 @@ window.__sn = {
   get cursorKey() { return cursorKey; },
   get inputsOpen() { return inputsOpen; },
   get board() { return cur; },
-  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded }, folds: { ...mapState.folds }, focusFolded: !!mapFoldPrev,
+  get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, rootId: mapState.rootId, hash: location.hash, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded }, folds: { ...mapState.folds }, focusFolded: !!mapFoldPrev,
     pending: mapState.pending ? { kind: mapState.pending.kind, parentKey: mapState.pending.parentKey || null, targetKey: mapState.pending.targetKey || null, text: mapState.pending.text } : null }; },
   get listExpanded() { return [...listExpanded]; },
   get collapsedSecs() { return { ...collapsedSecs }; },

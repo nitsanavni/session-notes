@@ -280,6 +280,31 @@ run({
     t.assert((await t.sn2()).map.nodes.includes(replyKey), 'reply node visible after one press');
   },
 
+  'map zoom writes a #node-id fragment and a reload deep-links back to it': async t => {
+    await t.open();
+    // Force lazy id assignment: one op stamps ids on every node, so the map
+    // zoom root has a durable id to key on (and to put in the URL fragment).
+    await t.key('3'); // Threads
+    await t.key('j'); // auth refactor (owns a reply child)
+    await t.key(' '); // cycle status -> save -> EnsureIDs
+    await t.settled();
+    await t.key('m'); // enter map, focus seeds on auth refactor
+    await t.page.waitForFunction(() => window.__sn.map.in);
+    await t.key('f'); // zoom into the focused node
+    // The zoom root now carries a durable id, reflected into the URL fragment.
+    await t.page.waitForFunction(() => window.__sn.map.rootId && location.hash === '#' + window.__sn.map.rootId);
+    const rootId = (await t.sn2()).map.rootId;
+    t.assert(rootId, 'zoom root has a durable node id');
+
+    // A fresh load of /b/{board}#<id> deep-links straight into the zoomed view.
+    const boardUrl = t.page.url().split('#')[0];
+    await t.page.goto(`${boardUrl}#${rootId}`);
+    await t.page.waitForFunction(() => window.__sn && window.__sn.board !== null);
+    await t.page.waitForFunction(id => window.__sn && window.__sn.map && window.__sn.map.in && window.__sn.map.rootId === id, rootId, { timeout: 4000 });
+    const m = (await t.sn2()).map;
+    t.assert(m.in && m.rootId === rootId, 'reload with #id deep-links into the zoomed map');
+  },
+
   'map: z focus-folds to the ancestor path, second z restores': async t => {
     await t.open();
     await t.key('3'); // Threads
