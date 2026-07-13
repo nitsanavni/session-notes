@@ -342,6 +342,11 @@ Usage:
   session-notes remote new <url> <n>  create a board on a cloud server; also
                                       'remote push <local> <url> [name]' and
                                       'remote pull <url>/b/<board> <local>'
+  session-notes remote grant …        grant access (admin): 'remote grant
+                                      <url>/b/<board>[#<node>] --new-token <n>
+                                      --perm read|write' mints a scoped token +
+                                      attach line; 'remote grants <url>/b/<board>'
+                                      lists; 'remote revoke … --token-name <n>'
   session-notes watch …               block and print the board's live edits as
                                       a unified item diff (--board <path> or
                                       --session <id>; --once exits after the

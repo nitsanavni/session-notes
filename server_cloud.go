@@ -34,6 +34,8 @@ func runServer(args []string) int {
 		case "-h", "--help":
 			fmt.Println("usage: session-notes server [--addr <host:port>] [--db <path>] [--insecure]")
 			fmt.Println("       session-notes server token create --name <name> [--db <path>]")
+			fmt.Println("  token create mints an all-boards ADMIN bootstrap token (printed once).")
+			fmt.Println("  Scoped, non-admin tokens are minted via `remote grant --new-token`.")
 			return 0
 		case "--addr":
 			if v, ok := takeVal(); ok {

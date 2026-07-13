@@ -99,6 +99,12 @@ func runRemote(args []string) int {
 			return remoteErr("usage: session-notes remote pull <server-url>/b/<board> <local-board>")
 		}
 		return remotePull(args[1], args[2])
+	case "grant":
+		return remoteGrant(args[1:])
+	case "grants":
+		return remoteGrants(args[1:])
+	case "revoke":
+		return remoteRevoke(args[1:])
 	default:
 		return remoteErr("unknown remote subcommand: " + args[0])
 	}
@@ -138,6 +144,134 @@ func remotePull(remoteURL, local string) int {
 		return remoteErr(err.Error())
 	}
 	fmt.Println(local)
+	return 0
+}
+
+// remoteGrant implements `session-notes remote grant <url>/b/<board>[#<node>]
+// --token-name <n> | --new-token <n> [--subject <who>] [--perm read|write]`.
+// With --new-token it mints a token + grant in one step and prints an attach
+// line the user can paste to a sub-agent: URL (with #node) + token, scoped to
+// the granted subtree. Admin token required.
+func remoteGrant(args []string) int {
+	if len(args) < 1 {
+		return remoteErr("usage: session-notes remote grant <url>/b/<board>[#<node>] [--new-token <n> | --token-name <n> | --subject <who>] [--perm read|write]")
+	}
+	target := args[0]
+	var tokenName, newToken, subject, perm string
+	perm = "read"
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--token-name":
+			i++
+			if i < len(args) {
+				tokenName = args[i]
+			}
+		case "--new-token":
+			i++
+			if i < len(args) {
+				newToken = args[i]
+			}
+		case "--subject":
+			i++
+			if i < len(args) {
+				subject = args[i]
+			}
+		case "--perm":
+			i++
+			if i < len(args) {
+				perm = args[i]
+			}
+		default:
+			return remoteErr("unknown flag: " + args[i])
+		}
+	}
+	ref, err := cloud.ParseRef(target)
+	if err != nil {
+		return remoteErr(err.Error())
+	}
+	res, err := cloud.AddGrant(ref.Server, cloud.TokenFor(ref.Host), ref.Board, subject, tokenName, newToken, ref.Node, perm)
+	if err != nil {
+		return remoteErr(err.Error())
+	}
+	boardURL := fmt.Sprintf("%s/b/%s", ref.Server, ref.Board)
+	if ref.Node != "" {
+		boardURL += "#" + ref.Node
+	}
+	if res.Token != "" {
+		// The headline carve-out handoff: one line to paste into a sub-agent.
+		fmt.Printf("granted %s (%s) to %q\n", scopeLabel(ref.Node), res.Perm, res.Subject)
+		fmt.Printf("attach: session-notes login %s --token %s && session-notes edit --board '%s'\n", ref.Server, res.Token, boardURL)
+		fmt.Printf("token: %s\n", res.Token)
+	} else {
+		fmt.Printf("granted %s (%s) to %q on %s\n", scopeLabel(ref.Node), res.Perm, res.Subject, boardURL)
+	}
+	return 0
+}
+
+func scopeLabel(node string) string {
+	if node == "" {
+		return "whole board"
+	}
+	return "subtree #" + node
+}
+
+// remoteGrants lists a board's grants: `remote grants <url>/b/<board>`.
+func remoteGrants(args []string) int {
+	if len(args) != 1 {
+		return remoteErr("usage: session-notes remote grants <url>/b/<board>")
+	}
+	ref, err := cloud.ParseRef(args[0])
+	if err != nil {
+		return remoteErr(err.Error())
+	}
+	grants, err := cloud.ListGrants(ref.Server, cloud.TokenFor(ref.Host), ref.Board)
+	if err != nil {
+		return remoteErr(err.Error())
+	}
+	if len(grants) == 0 {
+		fmt.Println("(no grants)")
+		return 0
+	}
+	for _, g := range grants {
+		fmt.Printf("%s\t%s\t%s\n", g.Subject, g.Perm, scopeLabel(g.Root))
+	}
+	return 0
+}
+
+// remoteRevoke removes a grant: `remote revoke <url>/b/<board> --subject <who>`
+// (or --token-name <n>).
+func remoteRevoke(args []string) int {
+	if len(args) < 1 {
+		return remoteErr("usage: session-notes remote revoke <url>/b/<board> --subject <who> | --token-name <n>")
+	}
+	ref, err := cloud.ParseRef(args[0])
+	if err != nil {
+		return remoteErr(err.Error())
+	}
+	var subject, tokenName string
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--subject":
+			i++
+			if i < len(args) {
+				subject = args[i]
+			}
+		case "--token-name":
+			i++
+			if i < len(args) {
+				tokenName = args[i]
+			}
+		default:
+			return remoteErr("unknown flag: " + args[i])
+		}
+	}
+	if subject == "" && tokenName == "" {
+		return remoteErr("revoke needs --subject <who> or --token-name <n>")
+	}
+	if err := cloud.RevokeGrant(ref.Server, cloud.TokenFor(ref.Host), ref.Board, subject, tokenName); err != nil {
+		return remoteErr(err.Error())
+	}
+	fmt.Println("revoked")
 	return 0
 }
 
