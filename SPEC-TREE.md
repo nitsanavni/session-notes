@@ -79,3 +79,82 @@ type Tree interface {
   node IDs, persisted, shared across views, and linkable (`/b/{id}#<node>`).
 - Carve-out: spawning a sub-agent with `--root <id>` is the permission
   boundary.
+
+## M3 (cloud-mode server, implemented)
+
+A `session-notes server` process lets any Claude session anywhere attach to a
+board (or subtree) with the companion CLI — login, watch, edit — using the same
+`Tree` semantics as a local file. The `board.Tree` interface is the seam: a
+`RemoteTree` (internal/cloud) implements Get/Apply/Watch over HTTP+SSE, so
+`edit`/`watch` treat an `http(s)://…/b/<board>#<id>` ref exactly like a path.
+
+### Storage
+
+One markdown blob per board in SQLite (`modernc.org/sqlite`, pure Go, no cgo),
+WAL mode. Boards are small, so this reuses Parse/Render/Apply/EnsureIDs
+wholesale. Node-granular storage is deferred — the Tree interface allows
+swapping later. Schema: `boards(id, content, version, created, updated)`,
+`tokens(token_hash, name, created)`, and an append-only `ops(board_id, version,
+author, before, after, ts)` journal (feeds `/history`). Writes to one board are
+serialized by an in-process per-board mutex, mirroring the file backend's flock.
+
+### Subcommands
+
+- `session-notes server [--addr host:port] [--db path] [--insecure]` — serves
+  the API + browser UI. Refuses to start without a token unless `--insecure`.
+- `session-notes server token create --name <n>` — mints a bearer token,
+  prints it once, stores only its SHA-256 hash.
+- `session-notes login <server-url> [--token t]` — stores a bearer token keyed
+  by host in `$CONFIG/session-notes/tokens.json` (0600); remote edit/watch read
+  it automatically.
+- `session-notes remote new <url> <name>` / `remote push <local> <url> [name]`
+  / `remote pull <url>/b/<board> <local>` — create/import/export boards.
+
+### Protocol (HTTP JSON + SSE)
+
+All routes require `Authorization: Bearer <token>` (or `?token=` / the cookie a
+tokened visit sets, for the browser) unless the server is `--insecure`.
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /b/{id}` | browser board UI (same `board.html` as file mode) |
+| `GET /api/boards` | board list |
+| `POST /api/boards` | create board `{id,name,content?}` → 201 |
+| `GET /api/board/{id}` | board JSON (adds a `version` field; `ETag`) |
+| `GET /api/board/{id}/raw` | `{content, version}` markdown blob |
+| `PUT /api/board/{id}/raw` | replace whole blob `{content,author}` (push) |
+| `POST /api/board/{id}/edit` | apply one op (see below) |
+| `GET /api/board/{id}/events[?node=<id>]` | SSE change stream |
+| `GET /api/board/{id}/history` | journaled edits as line-diffs |
+| `GET /api/keymap` | keybinding help JSON |
+
+**Edit body** is a superset of the file-mode web `editReq`: `op`, `id`, `root`,
+`section`, `raw`, `query`, `text`, `status`, `author`, `urgent`/`pinned`, and an
+optional `base` version. It maps to a `board.Op` (including ID and Root
+addressing) and is applied through `board.Apply` + `EnsureIDs`. `Op.Root`
+travels in the POST, so the subtree carve-out is enforced **server-side**: an op
+addressing a node outside its root is refused (400, `ErrOpInvalid`).
+
+**Versioning / conflict.** Every write bumps the board's integer version. A POST
+may carry `base`: if `base >= 0` and it no longer matches the stored version,
+the server returns **409** with the current version and does not apply — the
+client refetches and reapplies (ops are surgical, so retry is cheap). Omitting
+`base` (the RemoteTree default) relies on the server's per-board serialization
+alone. `ErrOpNotFound` also maps to 409.
+
+**SSE scoping.** `events?node=<id>` fires only when the subtree rooted at that
+node actually changed between the client's last-seen and current content (diffed
+via `board.SubtreeSource`), so sibling-subtree edits stay invisible — the remote
+equivalent of `watch --node`.
+
+### Exit criteria (met)
+
+1. SQLite store round-trips content, bumps versions, 409s on stale base, refuses
+   out-of-scope rooted ops.
+2. `RemoteTree` drives edit/watch/carve-out end-to-end against an httptest
+   server; token auth gates all routes (401 without, 200 with); login config
+   round-trips at 0600.
+3. Integration: real port, two clients editing sibling subtrees concurrently
+   lose no writes; a `--node`-scoped remote watch fires only for its subtree.
+4. `--board http(s)://…` routes `edit` and `watch` to the remote backend; a
+   `#<node>` fragment supplies a default `--root` / watch scope.

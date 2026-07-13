@@ -81,6 +81,22 @@ func main() {
 		os.Exit(runServe(args[1:]))
 	}
 
+	// Server subcommand: the M3 cloud-mode server (SQLite-backed, bearer auth).
+	// Distinct from `serve` (local file-backed web UI). See server_cloud.go.
+	if len(args) >= 1 && args[0] == "server" {
+		os.Exit(runServer(args[1:]))
+	}
+
+	// Login subcommand: store a bearer token for a cloud server. See remote_cli.go.
+	if len(args) >= 1 && args[0] == "login" {
+		os.Exit(runLogin(args[1:]))
+	}
+
+	// Remote subcommand: create/push/pull boards on a cloud server.
+	if len(args) >= 1 && args[0] == "remote" {
+		os.Exit(runRemote(args[1:]))
+	}
+
 	// The TUI surfaces the upgrade hint asynchronously off the UI thread; give
 	// it the installed version to compare against.
 	tui.Version = versionString()
@@ -315,6 +331,17 @@ Usage:
                                       Non-loopback binds need --token <t> (or
                                       $SESSION_NOTES_TOKEN; Bearer/?token=/
                                       cookie) or an explicit --insecure
+  session-notes server                cloud-mode server (SQLite-backed, bearer
+                                      auth) so remote sessions can attach: --addr
+                                      <host:port> (default 127.0.0.1:7099), --db
+                                      <path>, --insecure for local dev.
+                                      'server token create --name <n>' mints a
+                                      bearer token (printed once)
+  session-notes login <server-url>    store a bearer token for a cloud server
+                                      (--token <t> or stdin), keyed by host
+  session-notes remote new <url> <n>  create a board on a cloud server; also
+                                      'remote push <local> <url> [name]' and
+                                      'remote pull <url>/b/<board> <local>'
   session-notes watch …               block and print the board's live edits as
                                       a unified item diff (--board <path> or
                                       --session <id>; --once exits after the

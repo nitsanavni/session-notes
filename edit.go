@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nitsanavni/session-notes/internal/board"
+	"github.com/nitsanavni/session-notes/internal/cloud"
 )
 
 // runEdit implements `session-notes edit <sub> [flags] args…`: the first-class
@@ -79,9 +80,26 @@ func runEdit(args []string) int {
 	sub := pos[0]
 	rest := pos[1:]
 
-	path, err := editBoardPath(boardPath, session)
-	if err != nil {
-		return editErr(err.Error())
+	var path string
+	if cloud.IsRemote(boardPath) {
+		// Remote board: --board is an http(s) URL. A #<node> fragment supplies a
+		// default --root carve-out when --root/--id are not given, so
+		// `edit reply --board https://host/b/x#<id> <text>` scopes to that node.
+		ref, perr := cloud.ParseRef(boardPath)
+		if perr != nil {
+			return editErr(perr.Error())
+		}
+		path = boardPath
+		if root == "" && ref.Node != "" {
+			root = ref.Node
+		}
+		snapshot = "" // no self-edit snapshot for remote writes
+	} else {
+		var err error
+		path, err = editBoardPath(boardPath, session)
+		if err != nil {
+			return editErr(err.Error())
+		}
 	}
 
 	switch sub {
@@ -175,6 +193,9 @@ func runEdit(args []string) int {
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit replace <old> <new>")
 		}
+		if cloud.IsRemote(path) {
+			return remoteReplace(path, rest[0], rest[1])
+		}
 		err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
 			deliverPending(snapshot, content)
 			if !strings.Contains(content, rest[0]) {
@@ -192,6 +213,9 @@ func runEdit(args []string) int {
 		// changed through a non-journaling writer since the journaled edit.
 		if len(rest) != 0 {
 			return editErr("usage: session-notes edit " + sub)
+		}
+		if cloud.IsRemote(path) {
+			return editErr(sub + " is not supported for remote boards yet")
 		}
 		fn := board.Undo
 		if sub == "redo" {
@@ -230,6 +254,9 @@ func deliverPending(snapshot, content string) {
 // ("N items match; using the first") to stderr.
 func editApplyOp(path, snapshot, root string, op board.Op) int {
 	op.Root = root
+	if cloud.IsRemote(path) {
+		return remoteApplyOp(path, op)
+	}
 	err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
 		deliverPending(snapshot, content)
 		b := board.Parse(content)
@@ -247,6 +274,48 @@ func editApplyOp(path, snapshot, root string, op board.Op) int {
 		return b.Render(), nil
 	})
 	if err != nil {
+		return editErr(err.Error())
+	}
+	return 0
+}
+
+// remoteApplyOp routes one op to a remote server via the RemoteTree client,
+// resolving the stored login token by host. Op.Root travels in the POST so the
+// carve-out is enforced server-side.
+func remoteApplyOp(rawURL string, op board.Op) int {
+	ref, err := cloud.ParseRef(rawURL)
+	if err != nil {
+		return editErr(err.Error())
+	}
+	tree := cloud.NewRemoteTree(ref.Server, ref.Board, cloud.TokenFor(ref.Host))
+	res, err := tree.Apply(op)
+	if err != nil {
+		return editErr(err.Error())
+	}
+	if res.Note != "" {
+		fmt.Fprintln(os.Stderr, "session-notes:", res.Note)
+	}
+	return 0
+}
+
+// remoteReplace performs `edit replace` against a remote board: fetch the raw
+// blob, substitute the first occurrence, and push it back.
+func remoteReplace(rawURL, old, replacement string) int {
+	ref, err := cloud.ParseRef(rawURL)
+	if err != nil {
+		return editErr(err.Error())
+	}
+	token := cloud.TokenFor(ref.Host)
+	tree := cloud.NewRemoteTree(ref.Server, ref.Board, token)
+	content, _, err := tree.Raw()
+	if err != nil {
+		return editErr(err.Error())
+	}
+	if !strings.Contains(content, old) {
+		return editErr(fmt.Sprintf("string not found: %q", old))
+	}
+	updated := strings.Replace(content, old, replacement, 1)
+	if _, err := cloud.PushContent(ref.Server, token, ref.Board, updated, "claude"); err != nil {
 		return editErr(err.Error())
 	}
 	return 0

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
+	"github.com/nitsanavni/session-notes/internal/cloud"
 )
 
 // runWatch implements `session-notes watch --board <path> [--snapshot <path>]
@@ -99,6 +100,10 @@ func runWatch(args []string) int {
 		node = node[i+1:]
 	}
 
+	if cloud.IsRemote(boardPath) {
+		return runWatchRemote(boardPath, node, once)
+	}
+
 	path, err := editBoardPath(boardPath, session)
 	if err != nil {
 		return watchErr(err.Error())
@@ -136,6 +141,64 @@ func runWatch(args []string) int {
 		}
 		time.Sleep(interval)
 	}
+}
+
+// runWatchRemote watches a board (or subtree) on a cloud server via the SSE
+// events stream, printing the same unified item diff the file watcher emits. On
+// each "changed" event it refetches the board and diffs against the previous
+// content, scoped to --node when given so sibling-subtree edits stay invisible.
+func runWatchRemote(rawURL, node string, once bool) int {
+	ref, err := cloud.ParseRef(rawURL)
+	if err != nil {
+		return watchErr(err.Error())
+	}
+	// A #<node> fragment in the URL supplies the node scope when --node is unset.
+	if node == "" && ref.Node != "" {
+		node = ref.Node
+	}
+	tree := cloud.NewRemoteTree(ref.Server, ref.Board, cloud.TokenFor(ref.Host))
+
+	prev, _, err := tree.Raw()
+	if err != nil {
+		return watchErr(err.Error())
+	}
+	ch, cancel, err := tree.Watch(node)
+	if err != nil {
+		return watchErr(err.Error())
+	}
+	defer cancel()
+
+	for range ch {
+		cur, _, err := tree.Raw()
+		if err != nil {
+			return watchErr(err.Error())
+		}
+		before, after := prev, cur
+		gone := false
+		if node != "" {
+			var hadBefore, hasNow bool
+			before, hadBefore = board.SubtreeSource(prev, node)
+			after, hasNow = board.SubtreeSource(cur, node)
+			gone = hadBefore && !hasNow
+		}
+		out := diffItems(before, after)
+		if out == "" && !gone {
+			prev = cur
+			continue
+		}
+		fmt.Print(out)
+		if gone {
+			fmt.Fprintf(os.Stdout, "node gone: %s\n", node)
+		}
+		prev = cur
+		if once {
+			if gone {
+				return 1
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 // watcher holds the polling state for one board (and optionally its notes dir).
