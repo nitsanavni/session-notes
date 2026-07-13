@@ -49,12 +49,13 @@ run({
     await t.type('shipping it');
     await t.key('Enter');
     // Flat: sibling of "leaning yes", i.e. 2-space indent under the question.
-    await t.waitBoardContains('\n  - user: shipping it\n');
+    // (Programmatic saves append a " ^id" node anchor, so match up to it.)
+    await t.waitBoardContains('\n  - user: shipping it ^');
     await t.key('F');
     await t.type('forked aside');
     await t.key('Enter');
     // Fork target is the cursor item (the "leaning yes" reply): nests to 4.
-    await t.waitBoardContains('\n    - user: forked aside\n');
+    await t.waitBoardContains('\n    - user: forked aside ^');
   },
 
   'typed text survives an external write (deferred render)': async t => {
