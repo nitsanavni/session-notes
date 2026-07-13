@@ -68,6 +68,23 @@ type RemoteTree struct {
 	board  string
 	token  string
 	client *http.Client
+
+	mu       sync.Mutex
+	lastSeen int // last-seen board version, 0 = unknown (sent as base for optimistic concurrency)
+}
+
+func (t *RemoteTree) setSeen(v int) {
+	t.mu.Lock()
+	if v > t.lastSeen {
+		t.lastSeen = v
+	}
+	t.mu.Unlock()
+}
+
+func (t *RemoteTree) seen() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastSeen
 }
 
 // NewRemoteTree builds a client for a board on a server. token may be empty for
@@ -116,6 +133,7 @@ func (t *RemoteTree) Raw() (content string, version int, err error) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", 0, err
 	}
+	t.setSeen(out.Version)
 	return out.Content, out.Version, nil
 }
 
@@ -129,10 +147,11 @@ func (t *RemoteTree) Get(id string, depth int) (*board.Node, error) {
 	return board.Parse(content).Node(id, depth)
 }
 
-// Apply implements board.Tree by POSTing the op to the edit endpoint. It does
-// not send a base version, so the server's per-board lock serializes the write
-// (surgical ops need no optimistic guard here). Op.Root travels in the POST so
-// carve-out refusal is enforced server-side.
+// Apply implements board.Tree by POSTing the op to the edit endpoint. It sends
+// its last-seen version as the optimistic base so a racing writer can't be
+// silently clobbered: on a 409 it refetches the current version and retries the
+// (surgical) op once. Op.Root travels in the POST so carve-out refusal is
+// enforced server-side.
 func (t *RemoteTree) Apply(op board.Op) (board.OpResult, error) {
 	req := editReq{
 		Op:      op.Name,
@@ -153,21 +172,62 @@ func (t *RemoteTree) Apply(op board.Op) (board.OpResult, error) {
 		p := op.Pinned
 		req.Pinned = &p
 	}
+
+	res, conflict, err := t.postEdit(req, t.seen())
+	if err != nil {
+		return board.OpResult{}, err
+	}
+	// On a 409 (stale base) refetch the current version and retry the surgical
+	// op — last-writer-wins without silently dropping a write. Under heavy
+	// same-node contention two writers can ping-pong, so after a bounded set of
+	// optimistic retries fall back to an unconditional apply (base<0): the
+	// server serializes writes per board, so the op still lands exactly once.
+	for attempts := 0; conflict && attempts < 8; attempts++ {
+		_, v, rerr := t.Raw()
+		if rerr != nil {
+			return board.OpResult{}, rerr
+		}
+		res, conflict, err = t.postEdit(req, v)
+		if err != nil {
+			return board.OpResult{}, err
+		}
+	}
+	if conflict {
+		res, conflict, err = t.postEdit(req, -1)
+		if err != nil {
+			return board.OpResult{}, err
+		}
+	}
+	if conflict {
+		return board.OpResult{}, board.ErrOpNotFound
+	}
+	return res, nil
+}
+
+// postEdit POSTs one op with the given base version. conflict is true when the
+// server returned 409 (stale base); on success it advances the last-seen
+// version. base<0 disables the optimistic check server-side.
+func (t *RemoteTree) postEdit(req editReq, base int) (res board.OpResult, conflict bool, err error) {
+	b := base
+	if b <= 0 {
+		b = -1
+	}
+	req.Base = &b
 	buf, _ := json.Marshal(req)
 	r, err := t.req("POST", "/api/board/"+t.board+"/edit", bytes.NewReader(buf))
 	if err != nil {
-		return board.OpResult{}, err
+		return board.OpResult{}, false, err
 	}
 	resp, err := t.client.Do(r)
 	if err != nil {
-		return board.OpResult{}, err
+		return board.OpResult{}, false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusConflict {
-		return board.OpResult{}, board.ErrOpNotFound
+		return board.OpResult{}, true, nil
 	}
 	if resp.StatusCode >= 400 {
-		return board.OpResult{}, wrapOpError(resp)
+		return board.OpResult{}, false, wrapOpError(resp)
 	}
 	var out struct {
 		Version int    `json:"version"`
@@ -175,7 +235,8 @@ func (t *RemoteTree) Apply(op board.Op) (board.OpResult, error) {
 		ID      string `json:"id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return board.OpResult{Note: out.Note, ID: out.ID}, nil
+	t.setSeen(out.Version)
+	return board.OpResult{Note: out.Note, ID: out.ID}, false, nil
 }
 
 // Watch implements board.Tree by consuming the SSE events stream scoped to id.
@@ -271,6 +332,71 @@ func CreateBoard(server, token, id, name, content string) error {
 		return httpError(resp)
 	}
 	return nil
+}
+
+// doJSON runs an authenticated JSON request against a server and decodes the
+// response into out (may be nil). Non-2xx becomes an error.
+func doJSON(method, server, token, path string, body any, out any) error {
+	var rdr io.Reader
+	if body != nil {
+		buf, _ := json.Marshal(body)
+		rdr = bytes.NewReader(buf)
+	}
+	r, err := http.NewRequest(method, strings.TrimRight(server, "/")+path, rdr)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		r.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return httpError(resp)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
+// GrantResult is the server's reply to an AddGrant; Token is set only when a new
+// token was minted (--new-token), so the CLI can print an attach line.
+type GrantResult struct {
+	Subject string `json:"subject"`
+	Perm    string `json:"perm"`
+	Root    string `json:"root"`
+	Token   string `json:"token"`
+}
+
+// AddGrant creates/updates a grant on a board (admin token required). subject,
+// tokenName, or newToken selects the grantee; newToken mints a token in one step.
+func AddGrant(server, token, boardID, subject, tokenName, newToken, root, perm string) (GrantResult, error) {
+	var out GrantResult
+	body := map[string]string{"subject": subject, "tokenName": tokenName, "newToken": newToken, "root": root, "perm": perm}
+	err := doJSON("POST", server, token, "/api/board/"+boardID+"/grants", body, &out)
+	return out, err
+}
+
+// ListGrants returns a board's grants (admin token required).
+func ListGrants(server, token, boardID string) ([]Grant, error) {
+	var out struct {
+		Grants []Grant `json:"grants"`
+	}
+	err := doJSON("GET", server, token, "/api/board/"+boardID+"/grants", nil, &out)
+	return out.Grants, err
+}
+
+// RevokeGrant removes a grantee's grant on a board (admin token required).
+func RevokeGrant(server, token, boardID, subject, tokenName string) error {
+	body := map[string]string{"subject": subject, "tokenName": tokenName}
+	return doJSON("DELETE", server, token, "/api/board/"+boardID+"/grants", body, nil)
 }
 
 // PushContent uploads a whole markdown blob to a board (create-or-replace).

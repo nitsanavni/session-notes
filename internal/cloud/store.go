@@ -73,7 +73,17 @@ CREATE TABLE IF NOT EXISTS boards (
 CREATE TABLE IF NOT EXISTS tokens (
     token_hash TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
+    subject    TEXT NOT NULL DEFAULT '',
+    admin      INTEGER NOT NULL DEFAULT 0,
     created    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS grants (
+    subject      TEXT NOT NULL,
+    board_id     TEXT NOT NULL,
+    root_node_id TEXT NOT NULL DEFAULT '',
+    perms        TEXT NOT NULL,
+    created      INTEGER NOT NULL,
+    PRIMARY KEY (subject, board_id)
 );
 CREATE TABLE IF NOT EXISTS ops (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +99,15 @@ CREATE INDEX IF NOT EXISTS ops_board ON ops(board_id, id);
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	// Migrate pre-M4 tokens tables that predate the subject/admin columns.
+	// SQLite has no "ADD COLUMN IF NOT EXISTS"; a duplicate-column error is
+	// expected and benign on an already-migrated db.
+	for _, alter := range []string{
+		`ALTER TABLE tokens ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tokens ADD COLUMN admin INTEGER NOT NULL DEFAULT 0`,
+	} {
+		_, _ = db.Exec(alter)
 	}
 	return &Store{db: db, locks: map[string]*sync.Mutex{}, subs: map[string][]chan int64{}}, nil
 }
@@ -329,44 +348,152 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// CreateToken mints a fresh bearer token, stores only its hash under name, and
-// returns the plaintext token once (never recoverable afterward).
+// CreateToken mints an admin bootstrap token (subject = name). This is the
+// operator's own key: `session-notes server token create --name <n>`. Scoped,
+// non-admin identities are minted through CreateTokenAs (used by the grant
+// endpoint's --new-token path).
 func (s *Store) CreateToken(name string) (string, error) {
+	return s.CreateTokenAs(name, name, true)
+}
+
+// CreateTokenAs mints a bearer token bound to subject with the given admin flag,
+// stores only its hash, and returns the plaintext token once (never recoverable
+// afterward). A non-admin token with no grants can reach nothing.
+func (s *Store) CreateTokenAs(name, subject string, admin bool) (string, error) {
+	if subject == "" {
+		subject = name
+	}
 	buf := make([]byte, 24)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(buf)
-	if _, err := s.db.Exec(`INSERT INTO tokens(token_hash, name, created) VALUES(?,?,?)`,
-		hashToken(token), name, time.Now().UnixNano()); err != nil {
+	a := 0
+	if admin {
+		a = 1
+	}
+	if _, err := s.db.Exec(`INSERT INTO tokens(token_hash, name, subject, admin, created) VALUES(?,?,?,?,?)`,
+		hashToken(token), name, subject, a, time.Now().UnixNano()); err != nil {
 		return "", err
 	}
 	return token, nil
 }
 
+// Identity is the resolved principal behind a bearer token.
+type Identity struct {
+	Subject string
+	Admin   bool
+}
+
 // ValidToken reports whether token matches a stored token hash (constant-time
 // per candidate row).
 func (s *Store) ValidToken(token string) bool {
+	_, ok := s.TokenIdentity(token)
+	return ok
+}
+
+// TokenIdentity resolves a bearer token to its (subject, admin) identity,
+// comparing constant-time per candidate row. ok is false for an unknown token.
+func (s *Store) TokenIdentity(token string) (Identity, bool) {
 	if token == "" {
-		return false
+		return Identity{}, false
 	}
 	want := hashToken(token)
-	rows, err := s.db.Query(`SELECT token_hash FROM tokens`)
+	rows, err := s.db.Query(`SELECT token_hash, subject, admin FROM tokens`)
 	if err != nil {
-		return false
+		return Identity{}, false
 	}
 	defer rows.Close()
+	var found Identity
 	ok := false
 	for rows.Next() {
-		var h string
-		if err := rows.Scan(&h); err != nil {
-			return false
+		var h, subject string
+		var admin int
+		if err := rows.Scan(&h, &subject, &admin); err != nil {
+			return Identity{}, false
 		}
 		if subtle.ConstantTimeCompare([]byte(h), []byte(want)) == 1 {
+			found = Identity{Subject: subject, Admin: admin != 0}
 			ok = true
 		}
 	}
-	return ok
+	return found, ok
+}
+
+// SubjectForTokenName returns the subject bound to the most recent token minted
+// under name — used so `remote grant --token-name <n>` can target an existing
+// token's identity.
+func (s *Store) SubjectForTokenName(name string) (string, bool) {
+	var subject string
+	err := s.db.QueryRow(`SELECT subject FROM tokens WHERE name=? ORDER BY created DESC LIMIT 1`, name).Scan(&subject)
+	if err != nil {
+		return "", false
+	}
+	return subject, true
+}
+
+// ---- grants ----
+
+// Grant is one access-control row: subject may act on board_id (optionally
+// confined to the subtree rooted at Root) with perms read|write|admin.
+type Grant struct {
+	Subject string `json:"subject"`
+	BoardID string `json:"board_id"`
+	Root    string `json:"root,omitempty"`
+	Perm    string `json:"perm"`
+}
+
+// AddGrant upserts a grant for (subject, board). A subject holds at most one
+// grant per board, so re-granting updates root/perm in place.
+func (s *Store) AddGrant(subject, boardID, root, perm string) error {
+	if subject == "" || boardID == "" {
+		return errors.New("subject and board required")
+	}
+	switch perm {
+	case "read", "write", "admin":
+	default:
+		return fmt.Errorf("unknown perm %q", perm)
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO grants(subject, board_id, root_node_id, perms, created) VALUES(?,?,?,?,?)
+         ON CONFLICT(subject, board_id) DO UPDATE SET root_node_id=excluded.root_node_id, perms=excluded.perms`,
+		subject, boardID, root, perm, time.Now().UnixNano())
+	return err
+}
+
+// RemoveGrant deletes a subject's grant on a board. Missing is not an error.
+func (s *Store) RemoveGrant(subject, boardID string) error {
+	_, err := s.db.Exec(`DELETE FROM grants WHERE subject=? AND board_id=?`, subject, boardID)
+	return err
+}
+
+// GrantFor returns the subject's grant on a board, if any.
+func (s *Store) GrantFor(subject, boardID string) (Grant, bool) {
+	g := Grant{Subject: subject, BoardID: boardID}
+	err := s.db.QueryRow(`SELECT root_node_id, perms FROM grants WHERE subject=? AND board_id=?`,
+		subject, boardID).Scan(&g.Root, &g.Perm)
+	if err != nil {
+		return Grant{}, false
+	}
+	return g, true
+}
+
+// ListGrants returns every grant on a board, oldest first.
+func (s *Store) ListGrants(boardID string) ([]Grant, error) {
+	rows, err := s.db.Query(`SELECT subject, root_node_id, perms FROM grants WHERE board_id=? ORDER BY created`, boardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Grant
+	for rows.Next() {
+		g := Grant{BoardID: boardID}
+		if err := rows.Scan(&g.Subject, &g.Root, &g.Perm); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
 }
 
 // HasTokens reports whether any token is registered (a fresh db has none, so

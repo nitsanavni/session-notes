@@ -1,7 +1,7 @@
 package cloud
 
 import (
-	"crypto/subtle"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +41,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/board/{id}/edit", s.handleEdit)
 	mux.HandleFunc("GET /api/board/{id}/events", s.handleEvents)
 	mux.HandleFunc("GET /api/board/{id}/history", s.handleHistory)
+	mux.HandleFunc("POST /api/tokens", s.handleCreateToken)
+	mux.HandleFunc("GET /api/board/{id}/grants", s.handleListGrants)
+	mux.HandleFunc("POST /api/board/{id}/grants", s.handleAddGrant)
+	mux.HandleFunc("DELETE /api/board/{id}/grants", s.handleRevokeGrant)
 	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
 	if s.insecure {
 		return mux
@@ -50,18 +54,43 @@ func (s *Server) Handler() http.Handler {
 
 const authCookie = "session-notes-token"
 
+type ctxKey int
+
+const identityKey ctxKey = 0
+
+// identity returns the principal behind the request. In insecure mode every
+// request is an implicit all-boards admin; otherwise the identity was resolved
+// and stashed by authWrap.
+func (s *Server) identity(r *http.Request) Identity {
+	if s.insecure {
+		return Identity{Subject: "insecure", Admin: true}
+	}
+	if id, ok := r.Context().Value(identityKey).(Identity); ok {
+		return id
+	}
+	return Identity{}
+}
+
 // authWrap admits a request presenting a valid bearer token (Authorization:
-// Bearer, ?token=, or the cookie a tokened visit set). Everything else is 401.
+// Bearer, ?token=, or the cookie a tokened visit set) and stashes the resolved
+// identity in the request context for per-board grant checks. Everything else
+// is 401.
 func (s *Server) authWrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie(authCookie); err == nil && s.store.ValidToken(c.Value) {
-			next.ServeHTTP(w, r)
-			return
+		admit := func(id Identity) {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey, id)))
 		}
-		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") &&
-			s.store.ValidToken(strings.TrimPrefix(h, "Bearer ")) {
-			next.ServeHTTP(w, r)
-			return
+		if c, err := r.Cookie(authCookie); err == nil {
+			if id, ok := s.store.TokenIdentity(c.Value); ok {
+				admit(id)
+				return
+			}
+		}
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+			if id, ok := s.store.TokenIdentity(strings.TrimPrefix(h, "Bearer ")); ok {
+				admit(id)
+				return
+			}
 		}
 		if p := r.URL.Query().Get("token"); p != "" && s.store.ValidToken(p) {
 			http.SetCookie(w, &http.Cookie{
@@ -77,9 +106,58 @@ func (s *Server) authWrap(next http.Handler) http.Handler {
 			http.Redirect(w, r, clean, http.StatusFound)
 			return
 		}
-		_ = subtle.ConstantTimeCompare // constant-time compare happens in ValidToken
 		httpErr(w, http.StatusUnauthorized, "token required (Authorization: Bearer, ?token=, or cookie)")
 	})
+}
+
+// permRank orders the perm ladder so a check can require "at least" a level.
+func permRank(p string) int {
+	switch p {
+	case "read":
+		return 1
+	case "write":
+		return 2
+	case "admin":
+		return 3
+	}
+	return 0
+}
+
+// authorize resolves the caller's grant on a board and checks it meets need.
+// It returns the effective grant and an HTTP status: 200 authorized, 404 when
+// the caller has no grant at all (existence is not leaked), 403 when a grant
+// exists but is too weak. Admin identities get an implicit whole-board admin
+// grant on every board.
+func (s *Server) authorize(r *http.Request, boardID, need string) (Grant, int) {
+	id := s.identity(r)
+	if id.Admin {
+		return Grant{Subject: id.Subject, BoardID: boardID, Perm: "admin"}, http.StatusOK
+	}
+	if id.Subject == "" {
+		return Grant{}, http.StatusNotFound
+	}
+	g, ok := s.store.GrantFor(id.Subject, boardID)
+	if !ok {
+		return Grant{}, http.StatusNotFound
+	}
+	if permRank(g.Perm) < permRank(need) {
+		return g, http.StatusForbidden
+	}
+	return g, http.StatusOK
+}
+
+// denied writes the status authorize produced (404 hidden as not-found, 403 as
+// forbidden) and reports whether the request should stop.
+func denied(w http.ResponseWriter, status int) bool {
+	switch status {
+	case http.StatusOK:
+		return false
+	case http.StatusNotFound:
+		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		httpErr(w, http.StatusForbidden, "forbidden")
+	}
+	return true
 }
 
 // ---- pages ----
@@ -90,6 +168,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBoardPage(w http.ResponseWriter, r *http.Request) {
 	if !s.store.BoardExists(r.PathValue("id")) {
+		http.NotFound(w, r)
+		return
+	}
+	if _, status := s.authorize(r, r.PathValue("id"), "read"); status != http.StatusOK {
 		http.NotFound(w, r)
 		return
 	}
@@ -122,6 +204,9 @@ func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
 	}
 	cards := []card{}
 	for _, id := range ids {
+		if _, status := s.authorize(r, id, "read"); status != http.StatusOK {
+			continue // hide boards the caller has no grant on
+		}
 		content, _, err := s.store.Get(id)
 		if err != nil {
 			continue
@@ -144,6 +229,10 @@ type createReq struct {
 }
 
 func (s *Server) handleCreateBoard(w http.ResponseWriter, r *http.Request) {
+	if !s.identity(r).Admin {
+		httpErr(w, http.StatusForbidden, "admin required to create boards")
+		return
+	}
 	var req createReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
@@ -181,6 +270,10 @@ func (s *Server) handleCreateBoard(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	grant, status := s.authorize(r, id, "read")
+	if denied(w, status) {
+		return
+	}
 	content, version, err := s.store.Get(id)
 	if errors.Is(err, ErrNoBoard) {
 		http.NotFound(w, r)
@@ -191,6 +284,14 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b := board.Parse(content)
+	if grant.Root != "" {
+		scoped, ok := b.Scoped(grant.Root)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		b = scoped
+	}
 	model := web.BoardModel(id, b, false, false)
 	// Wrap so the version rides alongside the board JSON without disturbing the
 	// browser client (which ignores unknown fields). The CLI reads "version".
@@ -200,11 +301,19 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
 	m["version"] = version
+	if grant.Root != "" {
+		m["scope"] = grant.Root // browser shows a "scoped view" indicator
+	}
 	_ = json.NewEncoder(w).Encode(m)
 }
 
 func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
-	content, version, err := s.store.Get(r.PathValue("id"))
+	id := r.PathValue("id")
+	grant, status := s.authorize(r, id, "read")
+	if denied(w, status) {
+		return
+	}
+	content, version, err := s.store.Get(id)
 	if errors.Is(err, ErrNoBoard) {
 		http.NotFound(w, r)
 		return
@@ -213,11 +322,27 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if grant.Root != "" {
+		scoped, ok := board.Parse(content).Scoped(grant.Root)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		content = scoped.Render()
+	}
 	writeJSON(w, map[string]any{"content": content, "version": version})
 }
 
 func (s *Server) handlePutRaw(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// A whole-blob replace ignores the carve-out, so a subtree-scoped grant may
+	// not push; require write on the whole board.
+	if grant, status := s.authorize(r, id, "write"); denied(w, status) {
+		return
+	} else if grant.Root != "" {
+		httpErr(w, http.StatusForbidden, "subtree-scoped token cannot replace the whole board")
+		return
+	}
 	var req struct {
 		Content string `json:"content"`
 		Author  string `json:"author"`
@@ -258,6 +383,10 @@ type editReq struct {
 
 func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	grant, status := s.authorize(r, id, "write")
+	if denied(w, status) {
+		return
+	}
 	if !s.store.BoardExists(id) {
 		http.NotFound(w, r)
 		return
@@ -266,6 +395,16 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
+	}
+	// Mandatory carve-out: a subtree-scoped grant forces every op's Root to the
+	// granted node. A client-supplied Root that isn't the grant root (or empty)
+	// is refused — a scoped agent cannot address outside its subtree.
+	if grant.Root != "" {
+		if req.Root != "" && req.Root != grant.Root {
+			httpErr(w, http.StatusForbidden, "op root outside granted subtree")
+			return
+		}
+		req.Root = grant.Root
 	}
 	op, err := toOp(req)
 	if err != nil {
@@ -277,6 +416,9 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		base = *req.Base
 	}
 	author := req.Author
+	if author == "" {
+		author = s.identity(r).Subject // author defaults to the token subject
+	}
 	if author == "" {
 		author = "remote"
 	}
@@ -354,6 +496,10 @@ func parseStatus(s string) (board.Status, bool) {
 // content, so edits to sibling subtrees stay invisible (the remote carve-out).
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	grant, status := s.authorize(r, id, "read")
+	if denied(w, status) {
+		return
+	}
 	if !s.store.BoardExists(id) {
 		http.NotFound(w, r)
 		return
@@ -364,6 +510,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	node := r.URL.Query().Get("node")
+	if grant.Root != "" {
+		node = grant.Root // scoped tokens only ever see their subtree's events
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	fmt.Fprint(w, ": connected\n\n")
@@ -413,6 +562,16 @@ func subtreeChanged(before, after, id string) bool {
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	grant, status := s.authorize(r, id, "read")
+	if denied(w, status) {
+		return
+	}
+	if grant.Root != "" {
+		// History is whole-board line-diffs; a subtree-scoped grant would leak
+		// sibling edits, so it is refused rather than half-filtered.
+		httpErr(w, http.StatusForbidden, "history unavailable for subtree-scoped tokens")
+		return
+	}
 	if !s.store.BoardExists(id) {
 		http.NotFound(w, r)
 		return
@@ -439,6 +598,150 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleKeymap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, keymap.Web())
+}
+
+// ---- token + grant management (admin only) ----
+
+// handleCreateToken mints a bearer token over HTTP (admin only). Used by
+// `remote grant --new-token` to provision a sub-agent identity remotely.
+func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
+	if !s.identity(r).Admin {
+		httpErr(w, http.StatusForbidden, "admin required")
+		return
+	}
+	var req struct {
+		Name    string `json:"name"`
+		Subject string `json:"subject"`
+		Admin   bool   `json:"admin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		httpErr(w, http.StatusBadRequest, "name required")
+		return
+	}
+	subject := req.Subject
+	if subject == "" {
+		subject = req.Name
+	}
+	token, err := s.store.CreateTokenAs(req.Name, subject, req.Admin)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"token": token, "subject": subject})
+}
+
+func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
+	if !s.identity(r).Admin {
+		httpErr(w, http.StatusForbidden, "admin required")
+		return
+	}
+	grants, err := s.store.ListGrants(r.PathValue("id"))
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if grants == nil {
+		grants = []Grant{}
+	}
+	writeJSON(w, map[string]any{"grants": grants})
+}
+
+// grantReq addresses a grant by subject, by an existing token's name, or mints a
+// fresh token (newToken) whose subject is the grantee — the one-step carve-out
+// handoff.
+type grantReq struct {
+	Subject   string `json:"subject"`
+	TokenName string `json:"tokenName"`
+	NewToken  string `json:"newToken"`
+	Root      string `json:"root"`
+	Perm      string `json:"perm"`
+}
+
+func (s *Server) handleAddGrant(w http.ResponseWriter, r *http.Request) {
+	if !s.identity(r).Admin {
+		httpErr(w, http.StatusForbidden, "admin required")
+		return
+	}
+	id := r.PathValue("id")
+	if !s.store.BoardExists(id) {
+		http.NotFound(w, r)
+		return
+	}
+	var req grantReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
+		return
+	}
+	if req.Perm == "" {
+		req.Perm = "read"
+	}
+	subject := req.Subject
+	var minted string
+	switch {
+	case req.NewToken != "":
+		subject = req.NewToken
+		tok, err := s.store.CreateTokenAs(req.NewToken, subject, false)
+		if err != nil {
+			httpErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		minted = tok
+	case req.TokenName != "":
+		sub, ok := s.store.SubjectForTokenName(req.TokenName)
+		if !ok {
+			httpErr(w, http.StatusBadRequest, "no token named "+req.TokenName)
+			return
+		}
+		subject = sub
+	}
+	if subject == "" {
+		httpErr(w, http.StatusBadRequest, "subject, tokenName, or newToken required")
+		return
+	}
+	if err := s.store.AddGrant(subject, id, req.Root, req.Perm); err != nil {
+		httpErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out := map[string]any{"subject": subject, "perm": req.Perm, "root": req.Root}
+	if minted != "" {
+		out["token"] = minted
+	}
+	writeJSON(w, out)
+}
+
+func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
+	if !s.identity(r).Admin {
+		httpErr(w, http.StatusForbidden, "admin required")
+		return
+	}
+	id := r.PathValue("id")
+	var req struct {
+		Subject   string `json:"subject"`
+		TokenName string `json:"tokenName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
+		return
+	}
+	subject := req.Subject
+	if subject == "" && req.TokenName != "" {
+		if sub, ok := s.store.SubjectForTokenName(req.TokenName); ok {
+			subject = sub
+		}
+	}
+	if subject == "" {
+		httpErr(w, http.StatusBadRequest, "subject or tokenName required")
+		return
+	}
+	if err := s.store.RemoveGrant(subject, id); err != nil {
+		httpErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"revoked": subject})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

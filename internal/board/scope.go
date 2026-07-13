@@ -116,6 +116,29 @@ func (it *Item) rawLine() string {
 	return it.render()
 }
 
+// Scoped returns a projection of the board limited to the subtree rooted at
+// rootID, reusing the same Section/Item pointers (so raw/continuation fidelity
+// is preserved). An empty rootID returns the board unchanged. A section root
+// yields a one-section board; an item root becomes "zoom" — the node's text is
+// the board/section title and its children are the list. ok is false when
+// rootID matches nothing. This is the read-side of the carve-out: a scoped
+// principal literally cannot see sibling subtrees.
+func (b *Board) Scoped(rootID string) (*Board, bool) {
+	if rootID == "" {
+		return b, true
+	}
+	if s := b.SectionByID(rootID); s != nil {
+		return &Board{Frontmatter: b.Frontmatter, hadFrontmatter: b.hadFrontmatter, Sections: []*Section{s}}, true
+	}
+	if it := b.FindByID(rootID); it != nil {
+		fm := b.Frontmatter
+		fm.Title = it.Text
+		sec := &Section{Title: it.Text, ID: it.ID, Items: it.Children}
+		return &Board{Frontmatter: fm, hadFrontmatter: b.hadFrontmatter, Sections: []*Section{sec}}, true
+	}
+	return nil, false
+}
+
 // errOutsideScope is returned when an op addresses a node outside its --root
 // carve-out. It wraps ErrOpInvalid so callers already handling invalid ops keep
 // their exit codes.
