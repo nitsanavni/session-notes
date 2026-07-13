@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -13,6 +14,11 @@ import (
 	"github.com/nitsanavni/session-notes/internal/keymap"
 	"github.com/nitsanavni/session-notes/internal/web"
 )
+
+// maxBodyBytes caps request bodies (edits, pushes, grant/token JSON). Boards are
+// small, so a 1 MiB ceiling is generous while stopping a single POST from
+// exhausting memory. Over the limit is rejected 413 before any handler runs.
+const maxBodyBytes = 1 << 20
 
 // Server is the cloud-mode HTTP server: a superset of the file-mode web API
 // backed by the SQLite Store instead of on-disk board files. It speaks the same
@@ -46,10 +52,73 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/board/{id}/grants", s.handleAddGrant)
 	mux.HandleFunc("DELETE /api/board/{id}/grants", s.handleRevokeGrant)
 	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
-	if s.insecure {
-		return mux
+
+	var api http.Handler = mux
+	if !s.insecure {
+		api = s.authWrap(mux)
 	}
-	return s.authWrap(mux)
+
+	// /healthz is unauthenticated (load balancers, litestream sidecar, and
+	// uptime probes must reach it without a token) and bypasses the body guard.
+	outer := http.NewServeMux()
+	outer.HandleFunc("GET /healthz", s.handleHealthz)
+	outer.Handle("/", limitBody(api))
+	return logRequests(outer)
+}
+
+// handleHealthz is a no-auth liveness probe: 200 + "ok" whenever the process is
+// serving and the database answers a trivial query.
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.db.PingContext(r.Context()); err != nil {
+		httpErr(w, http.StatusServiceUnavailable, "db unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+// limitBody rejects an oversized POST/PUT up front (413) and caps the reader so a
+// lying Content-Length still can't stream past the ceiling into a handler.
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > maxBodyBytes {
+			httpErr(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// statusRecorder captures the status code for the access log while forwarding
+// http.Flusher so SSE streaming keeps working through the middleware.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// logRequests writes a minimal access line per request to stderr: method, path,
+// status, duration. Matches the server's existing stderr logging style.
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		fmt.Fprintf(os.Stderr, "%s %s %d %s\n", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
+	})
 }
 
 const authCookie = "session-notes-token"

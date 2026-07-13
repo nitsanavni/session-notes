@@ -95,6 +95,13 @@ func runRemote(args []string) int {
 		return remotePush(local, server, name)
 	case "pull":
 		// remote pull <server-url>/b/<board> <local-board>
+		// remote pull --all <server-url> <local-dir>
+		if len(args) >= 2 && args[1] == "--all" {
+			if len(args) != 4 {
+				return remoteErr("usage: session-notes remote pull --all <server-url> <local-dir>")
+			}
+			return remotePullAll(args[2], args[3])
+		}
 		if len(args) != 3 {
 			return remoteErr("usage: session-notes remote pull <server-url>/b/<board> <local-board>")
 		}
@@ -144,6 +151,35 @@ func remotePull(remoteURL, local string) int {
 		return remoteErr(err.Error())
 	}
 	fmt.Println(local)
+	return 0
+}
+
+// remotePullAll exports every board the caller can see to <dir>/<id>.md — the
+// remote counterpart of `server export`, wire-ready for an off-box backup cron.
+func remotePullAll(server, dir string) int {
+	server = strings.TrimRight(server, "/")
+	host := hostOf(server)
+	token := cloud.TokenFor(host)
+	cards, err := cloud.ListBoards(server, token)
+	if err != nil {
+		return remoteErr(err.Error())
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return remoteErr(err.Error())
+	}
+	n := 0
+	for _, c := range cards {
+		tree := cloud.NewRemoteTree(server, c.ID, token)
+		content, _, err := tree.Raw()
+		if err != nil {
+			return remoteErr(err.Error())
+		}
+		if err := os.WriteFile(dir+"/"+c.ID+".md", []byte(content), 0o644); err != nil {
+			return remoteErr(err.Error())
+		}
+		n++
+	}
+	fmt.Fprintf(os.Stderr, "pulled %d board(s) to %s\n", n, dir)
 	return 0
 }
 

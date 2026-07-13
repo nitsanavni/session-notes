@@ -399,6 +399,21 @@ func RevokeGrant(server, token, boardID, subject, tokenName string) error {
 	return doJSON("DELETE", server, token, "/api/board/"+boardID+"/grants", body, nil)
 }
 
+// BoardCard is one entry of the /api/boards list (the fields the CLI needs).
+type BoardCard struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ListBoards returns the boards the token can see (used by `remote pull --all`).
+func ListBoards(server, token string) ([]BoardCard, error) {
+	var out struct {
+		Boards []BoardCard `json:"boards"`
+	}
+	err := doJSON("GET", server, token, "/api/boards", nil, &out)
+	return out.Boards, err
+}
+
 // PushContent uploads a whole markdown blob to a board (create-or-replace).
 func PushContent(server, token, id, content, author string) (int, error) {
 	body, _ := json.Marshal(map[string]string{"content": content, "author": author})

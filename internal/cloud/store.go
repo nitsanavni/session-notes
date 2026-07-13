@@ -420,6 +420,51 @@ func (s *Store) TokenIdentity(token string) (Identity, bool) {
 	return found, ok
 }
 
+// TokenInfo is a token's metadata (never the secret or its hash): what `server
+// token list` shows so an operator can audit and revoke by name.
+type TokenInfo struct {
+	Name    string
+	Subject string
+	Admin   bool
+	Created time.Time
+}
+
+// ListTokens returns every registered token's metadata, oldest first. The token
+// secret is never stored (only its SHA-256 hash) so it cannot be listed — this
+// is purely for auditing and choosing what to revoke.
+func (s *Store) ListTokens() ([]TokenInfo, error) {
+	rows, err := s.db.Query(`SELECT name, subject, admin, created FROM tokens ORDER BY created`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TokenInfo
+	for rows.Next() {
+		var t TokenInfo
+		var admin int
+		var created int64
+		if err := rows.Scan(&t.Name, &t.Subject, &admin, &created); err != nil {
+			return nil, err
+		}
+		t.Admin = admin != 0
+		t.Created = time.Unix(0, created)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RevokeToken deletes every token registered under name and returns how many
+// rows were removed (0 = no such token). Revocation is immediate: the next
+// request bearing a revoked secret fails the ValidToken full-table scan and 401s.
+func (s *Store) RevokeToken(name string) (int, error) {
+	res, err := s.db.Exec(`DELETE FROM tokens WHERE name=?`, name)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // SubjectForTokenName returns the subject bound to the most recent token minted
 // under name — used so `remote grant --token-name <n>` can target an existing
 // token's identity.
