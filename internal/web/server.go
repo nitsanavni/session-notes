@@ -368,6 +368,29 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// Asset returns an embedded UI asset by base name ("board.html", "index.html").
+// Exported so the cloud (SQLite) backend serves the identical browser UI.
+func Asset(name string) ([]byte, error) { return assets.ReadFile("assets/" + name) }
+
+// BoardModel builds the wire JSON model for a parsed board — the exact shape
+// handleBoard emits — so the cloud backend serves byte-identical board JSON to
+// the same board.html client. Delivery-receipt markers (a file-mode concept)
+// are omitted.
+func BoardModel(id string, b *board.Board, canUndo, canRedo bool) any {
+	resp := boardJSON{
+		ID:      id,
+		Session: b.Frontmatter.Session,
+		Title:   b.Frontmatter.Title,
+		Cwd:     b.Frontmatter.Cwd,
+		CanUndo: canUndo,
+		CanRedo: canRedo,
+	}
+	for _, sec := range b.Sections {
+		resp.Sections = append(resp.Sections, sectionJSON{Title: sec.Title, ID: sec.ID, Items: itemsJSON(sec.Items)})
+	}
+	return resp
+}
+
 // ---- dashboard cards ----
 
 type cardJSON struct {

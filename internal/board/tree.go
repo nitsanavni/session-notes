@@ -73,6 +73,15 @@ func (t *FileTree) Get(id string, depth int) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	return b.Node(id, depth)
+}
+
+// Node builds the exported read model for the subtree rooted at id (empty id =
+// whole board root) from an in-memory board, limited to depth levels of
+// descendants (depth<0 = unlimited). It is the storage-agnostic core the file
+// backend's Get funnels through, reused by the SQLite backend so both produce
+// identical node JSON. Missing id yields ErrOpNotFound.
+func (b *Board) Node(id string, depth int) (*Node, error) {
 	if id == "" {
 		root := &Node{}
 		for _, s := range b.Sections {
