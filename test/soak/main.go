@@ -522,7 +522,7 @@ func (h *harness) agentStep(rng *rand.Rand, id int, author string, aa *agentAuth
 
 	// Bound board growth: once a scope holds too many ephemeral items, drain the
 	// overflow (batched, oldest-first) so board size converges to the cap and the
-	// full-snapshot ops journal stays modest over a long run.
+	// ops journal (line-diffs, M9) stays modest over a long run.
 	if len(ephIDs) > h.cfg.ephCap {
 		drain := len(ephIDs) - h.cfg.ephCap
 		if drain > 100 {
@@ -602,7 +602,7 @@ func (h *harness) recordAck(boardID, payload string) {
 func (h *harness) opAdd(rng *rand.Rand, id int, author string, aa *agentAuth) {
 	seq := payloadSeq.Add(1)
 	// Durable adds (tracked, never deleted) are capped per board so board size —
-	// and thus the full-snapshot ops journal — stays bounded over a long run.
+	// and thus the line-diff ops journal (M9) — stays bounded over a long run.
 	// Beyond the cap, adds are ephemeral churn that the delete path later reaps.
 	durable := h.ackedCount[aa.board.id].Load() < int64(h.cfg.durCap)
 	var payload string
@@ -924,25 +924,33 @@ func (h *harness) checkpoint(label string) {
 		if raw.Version < prev {
 			h.critical("checkpoint %s: board %s version regressed %d -> %d", label, b.id, prev, raw.Version)
 		}
-		// ops rows == version - 1 (board created at v1 with no ops row; each edit
-		// bumps version by 1 and journals exactly one row).
-		st, hd, herr := h.do("GET", "/api/board/"+b.id+"/history", h.admin, nil)
+		// Journal retention (M9): the ops journal is pruned to the newest
+		// journalKeep=500 rows per board and /history is paginated, so the old
+		// "ops rows == version-1" invariant no longer holds. The contract is now
+		// "the newest min(version-1, journalKeep) edits are retained": a page of
+		// up to journalKeep rows must not show a DEFICIT below that bound (a
+		// deficit would be a genuinely lost recent journal row).
+		const journalKeep = 500 // mirrors internal/cloud journalKeep
+		st, hd, herr := h.do("GET", "/api/board/"+b.id+"/history?limit=500", h.admin, nil)
 		if herr == nil && st == 200 {
 			var hist struct {
 				Entries []json.RawMessage `json:"entries"`
 			}
 			if json.Unmarshal(hd, &hist) == nil {
 				wantRows := raw.Version - 1
+				if wantRows > journalKeep {
+					wantRows = journalKeep
+				}
 				// Under live load /raw and /history are two separate reads, so a
-				// write can land between them and history legitimately shows MORE
-				// rows than version-1. A row DEFICIT (rows < version-1) would be a
-				// genuine lost journal row. Strict equality is only asserted at a
-				// quiescent checkpoint (agents stopped), where the two reads agree.
+				// write (or a prune) can land between them; history may show more or,
+				// once saturated, exactly journalKeep. A count BELOW wantRows is the
+				// only genuine fault. Exact equality is asserted only at a quiescent
+				// checkpoint (agents stopped) and only while under the keep cap.
 				quiescent := label != "periodic"
 				if len(hist.Entries) < wantRows {
-					h.critical("checkpoint %s: board %s ops-rows %d < version-1 %d (lost journal row)",
+					h.critical("checkpoint %s: board %s ops-rows %d < min(version-1,keep) %d (lost journal row)",
 						label, b.id, len(hist.Entries), wantRows)
-				} else if quiescent && len(hist.Entries) != wantRows {
+				} else if quiescent && raw.Version-1 < journalKeep && len(hist.Entries) != wantRows {
 					h.critical("checkpoint %s: board %s ops-rows %d != version-1 %d (quiescent)",
 						label, b.id, len(hist.Entries), wantRows)
 				}
