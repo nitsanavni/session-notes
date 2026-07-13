@@ -17,7 +17,7 @@ import (
 func runEdit(args []string) int {
 	// Pull recognized flags out of the argument list; the remainder are the
 	// subcommand's positional arguments. Flags may appear anywhere.
-	var boardPath, session, snapshot, author, id string
+	var boardPath, session, snapshot, author, id, root string
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -30,7 +30,7 @@ func runEdit(args []string) int {
 		}
 		switch a {
 		case "-h", "--help":
-			fmt.Println("usage: session-notes edit <add|reply|fork|set|status|log|title|replace|undo|redo> [--board <path> | --session <id>] [--refresh-snapshot <path>] [--as <author>] [--id <id>] args…")
+			fmt.Println("usage: session-notes edit <add|reply|fork|set|status|log|title|replace|undo|redo> [--board <path> | --session <id>] [--refresh-snapshot <path>] [--as <author>] [--id <id>] [--root <id>] args…")
 			return 0
 		case "--board":
 			if v, ok := takeVal(); ok {
@@ -62,6 +62,12 @@ func runEdit(args []string) int {
 			} else {
 				return editErr("--id needs a node id")
 			}
+		case "--root":
+			if v, ok := takeVal(); ok {
+				root = v
+			} else {
+				return editErr("--root needs a node id")
+			}
 		default:
 			pos = append(pos, a)
 		}
@@ -80,35 +86,50 @@ func runEdit(args []string) int {
 
 	switch sub {
 	case "add":
+		// With --root the target defaults to the root node (section root → that
+		// section; item root → a child of the item), so add takes just <text>.
+		if root != "" {
+			if len(rest) != 1 {
+				return editErr("usage: session-notes edit add --root <id> <text>")
+			}
+			return editApplyOp(path, snapshot, root, board.Op{Name: "add", Text: rest[0]})
+		}
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit add <section> <text>")
 		}
-		return editApplyOp(path, snapshot, board.Op{Name: "add", Section: rest[0], Text: rest[1]})
+		return editApplyOp(path, snapshot, root, board.Op{Name: "add", Section: rest[0], Text: rest[1]})
 	case "reply":
 		// In-thread semantics via the shared op layer: replying to a reply
 		// continues the conversation flat; use fork to nest deliberately.
 		// --id addresses the target node directly; otherwise a <query> substring.
+		// With --root and no --id/<query>, the parent defaults to the root node.
 		if id != "" {
 			if len(rest) != 1 {
 				return editErr("usage: session-notes edit reply --id <id> <text>")
 			}
-			return editApplyOp(path, snapshot, board.Op{Name: "reply", ID: id, Text: rest[0]})
+			return editApplyOp(path, snapshot, root, board.Op{Name: "reply", ID: id, Text: rest[0]})
+		}
+		if root != "" && len(rest) == 1 {
+			return editApplyOp(path, snapshot, root, board.Op{Name: "reply", ID: root, Text: rest[0]})
 		}
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit reply <query> <text>")
 		}
-		return editApplyOp(path, snapshot, board.Op{Name: "reply", Query: rest[0], Text: rest[1]})
+		return editApplyOp(path, snapshot, root, board.Op{Name: "reply", Query: rest[0], Text: rest[1]})
 	case "fork":
 		if id != "" {
 			if len(rest) != 1 {
 				return editErr("usage: session-notes edit fork --id <id> <text>")
 			}
-			return editApplyOp(path, snapshot, board.Op{Name: "fork", ID: id, Text: rest[0]})
+			return editApplyOp(path, snapshot, root, board.Op{Name: "fork", ID: id, Text: rest[0]})
+		}
+		if root != "" && len(rest) == 1 {
+			return editApplyOp(path, snapshot, root, board.Op{Name: "fork", ID: root, Text: rest[0]})
 		}
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit fork <query> <text>")
 		}
-		return editApplyOp(path, snapshot, board.Op{Name: "fork", Query: rest[0], Text: rest[1]})
+		return editApplyOp(path, snapshot, root, board.Op{Name: "fork", Query: rest[0], Text: rest[1]})
 	case "status":
 		if id != "" {
 			if len(rest) != 1 {
@@ -118,7 +139,7 @@ func runEdit(args []string) int {
 			if !ok {
 				return editErr(fmt.Sprintf("unknown status %q; use open|wip|done|blocked|none", rest[0]))
 			}
-			return editApplyOp(path, snapshot, board.Op{Name: "status", ID: id, Status: st})
+			return editApplyOp(path, snapshot, root, board.Op{Name: "status", ID: id, Status: st})
 		}
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit status <query> <open|wip|done|blocked|none>")
@@ -127,7 +148,7 @@ func runEdit(args []string) int {
 		if !ok {
 			return editErr(fmt.Sprintf("unknown status %q; use open|wip|done|blocked|none", rest[1]))
 		}
-		return editApplyOp(path, snapshot, board.Op{Name: "status", Query: rest[0], Status: st})
+		return editApplyOp(path, snapshot, root, board.Op{Name: "status", Query: rest[0], Status: st})
 	case "set":
 		// Replace an item's text, addressed by --id (the id-native "replace").
 		if id == "" {
@@ -136,7 +157,7 @@ func runEdit(args []string) int {
 		if len(rest) != 1 {
 			return editErr("usage: session-notes edit set --id <id> <text>")
 		}
-		return editApplyOp(path, snapshot, board.Op{Name: "edit", ID: id, Text: rest[0]})
+		return editApplyOp(path, snapshot, root, board.Op{Name: "edit", ID: id, Text: rest[0]})
 	case "log":
 		if len(rest) != 1 {
 			return editErr("usage: session-notes edit log <text>")
@@ -144,12 +165,12 @@ func runEdit(args []string) int {
 		if author == "" {
 			author = "claude"
 		}
-		return editApplyOp(path, snapshot, board.Op{Name: "log", Text: rest[0], Author: author})
+		return editApplyOp(path, snapshot, root, board.Op{Name: "log", Text: rest[0], Author: author})
 	case "title":
 		if len(rest) != 1 {
 			return editErr("usage: session-notes edit title <text>")
 		}
-		return editApplyOp(path, snapshot, board.Op{Name: "title", Text: rest[0]})
+		return editApplyOp(path, snapshot, root, board.Op{Name: "title", Text: rest[0]})
 	case "replace":
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit replace <old> <new>")
@@ -207,7 +228,8 @@ func deliverPending(snapshot, content string) {
 // editApplyOp runs one op through the shared board.Apply dispatcher inside a
 // journaled, locked write (author "claude"), printing any advisory note
 // ("N items match; using the first") to stderr.
-func editApplyOp(path, snapshot string, op board.Op) int {
+func editApplyOp(path, snapshot, root string, op board.Op) int {
+	op.Root = root
 	err := board.EditUnderLockJournaled(path, snapshot, "claude", func(content string) (string, error) {
 		deliverPending(snapshot, content)
 		b := board.Parse(content)

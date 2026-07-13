@@ -1,6 +1,9 @@
 package board
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Scope carve-out: a subtree rooted at a node id becomes a Claude session's (or
 // sub-agent's) whole world. Addressing resolves within the root only, and edits
@@ -69,6 +72,48 @@ func itemContains(root, target *Item) bool {
 		return false
 	}
 	return walk(root.Children)
+}
+
+// SubtreeSource renders the on-disk source lines of the subtree rooted at id
+// from content, in document order. ok is false when the node is absent (so a
+// watcher can report "node gone"). Empty id returns the whole board body. The
+// lines are the verbatim raw lines, so a multiset diff of two SubtreeSource
+// results yields exactly the watch +/- output scoped to the subtree.
+func SubtreeSource(content, id string) (string, bool) {
+	b := Parse(content)
+	var lines []string
+	var emit func(items []*Item)
+	emit = func(items []*Item) {
+		for _, it := range items {
+			lines = append(lines, it.rawLine())
+			emit(it.Children)
+		}
+	}
+	if id == "" {
+		for _, s := range b.Sections {
+			emit(s.Items)
+		}
+		return strings.Join(lines, "\n"), true
+	}
+	if s := b.SectionByID(id); s != nil {
+		emit(s.Items)
+		return strings.Join(lines, "\n"), true
+	}
+	if it := b.FindByID(id); it != nil {
+		lines = append(lines, it.rawLine())
+		emit(it.Children)
+		return strings.Join(lines, "\n"), true
+	}
+	return "", false
+}
+
+// rawLine returns the item's on-disk source line: the preserved raw for
+// continuation lines, or a re-rendered bullet for parsed items.
+func (it *Item) rawLine() string {
+	if !it.parsed {
+		return it.raw
+	}
+	return it.render()
 }
 
 // errOutsideScope is returned when an op addresses a node outside its --root

@@ -25,7 +25,7 @@ func TestWatchInitThenNoChange(t *testing.T) {
 	if err := w.init(); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, err := w.poll()
+	out, changed, _, err := w.poll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestWatchDetectsChangeAsDiff(t *testing.T) {
 	if err := os.WriteFile(boardPath, []byte("# board\n- [ ] one\n- [ ] two\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, err := w.poll()
+	out, changed, _, err := w.poll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestWatchDetectsChangeAsDiff(t *testing.T) {
 		t.Fatalf("expected added line in diff, got %q", out)
 	}
 	// Snapshot advanced: a second poll with no further edit reports nothing.
-	out2, changed2, err := w.poll()
+	out2, changed2, _, err := w.poll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestWatchRemovalDiff(t *testing.T) {
 	if err := os.WriteFile(boardPath, []byte("# board\n- [ ] one\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, _ := w.poll()
+	out, changed, _, _ := w.poll()
 	if !changed || !strings.Contains(out, "-- [ ] two") {
 		t.Fatalf("expected removed line in diff, got changed=%v out=%q", changed, out)
 	}
@@ -90,7 +90,7 @@ func TestWatchSnapshotFiltersSelfEdit(t *testing.T) {
 	if err := os.WriteFile(w.snapshot, []byte(selfEdit), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, err := w.poll()
+	out, changed, _, err := w.poll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestWatchInitPreservesPendingChange(t *testing.T) {
 	if err := w.init(); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, _ := w.poll()
+	out, changed, _, _ := w.poll()
 	if !changed || !strings.Contains(out, "+- [ ] pending") {
 		t.Fatalf("pending change should survive init, got changed=%v out=%q", changed, out)
 	}
@@ -135,7 +135,7 @@ func TestWatchNotesDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(notesDir, "design.md"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, err := w.poll()
+	out, changed, _, err := w.poll()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestWatchNotesDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(notesDir, "design.md"), []byte("hi there\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, _ = w.poll()
+	out, changed, _, _ = w.poll()
 	if !changed || !strings.Contains(out, "note changed: design.md") {
 		t.Fatalf("expected note-changed report, got %q", out)
 	}
@@ -154,7 +154,7 @@ func TestWatchNotesDir(t *testing.T) {
 	if err := os.Remove(filepath.Join(notesDir, "design.md")); err != nil {
 		t.Fatal(err)
 	}
-	out, changed, _ = w.poll()
+	out, changed, _, _ = w.poll()
 	if !changed || !strings.Contains(out, "note removed: design.md") {
 		t.Fatalf("expected note-removed report, got %q", out)
 	}
@@ -169,5 +169,63 @@ func TestDiffItemsEmptyWhenEqual(t *testing.T) {
 func TestNotesDirFor(t *testing.T) {
 	if got := notesDirFor("/x/y/sess.md"); got != "/x/y/sess.notes" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// TestWatchNodeScopeIgnoresOutside verifies --node reports only changes within
+// the watched subtree and stays silent for edits elsewhere on the board.
+func TestWatchNodeScopeIgnoresOutside(t *testing.T) {
+	content := "# board\n\n## Plan\n\n- [ ] alpha ^aaaaaa\n  - [ ] a-child ^aaaach\n- [ ] beta ^bbbbbb\n"
+	w, boardPath := newWatchFixture(t, content)
+	w.node = "aaaaaa"
+	if err := w.init(); err != nil {
+		t.Fatal(err)
+	}
+	// Edit a sibling subtree: the node watch must stay silent.
+	outside := "# board\n\n## Plan\n\n- [ ] alpha ^aaaaaa\n  - [ ] a-child ^aaaach\n- [ ] beta changed ^bbbbbb\n"
+	if err := os.WriteFile(boardPath, []byte(outside), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, changed, _, err := w.poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatalf("sibling edit should be invisible to node watch, got %q", out)
+	}
+	// Now edit inside the watched subtree.
+	inside := "# board\n\n## Plan\n\n- [ ] alpha ^aaaaaa\n  - [ ] a-child edited ^aaaach\n- [ ] beta changed ^bbbbbb\n"
+	if err := os.WriteFile(boardPath, []byte(inside), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, changed, _, err = w.poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || !strings.Contains(out, "a-child edited") {
+		t.Fatalf("in-subtree edit should be reported, got changed=%v out=%q", changed, out)
+	}
+}
+
+// TestWatchNodeGone verifies a deleted watched root is reported and flagged gone.
+func TestWatchNodeGone(t *testing.T) {
+	content := "# board\n\n## Plan\n\n- [ ] alpha ^aaaaaa\n- [ ] beta ^bbbbbb\n"
+	w, boardPath := newWatchFixture(t, content)
+	w.node = "aaaaaa"
+	if err := w.init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(boardPath, []byte("# board\n\n## Plan\n\n- [ ] beta ^bbbbbb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, changed, gone, err := w.poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || !gone {
+		t.Fatalf("deleted root should be changed+gone, got changed=%v gone=%v", changed, gone)
+	}
+	if !strings.Contains(out, "node gone: aaaaaa") {
+		t.Fatalf("expected node-gone report, got %q", out)
 	}
 }

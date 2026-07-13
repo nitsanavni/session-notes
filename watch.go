@@ -28,7 +28,7 @@ import (
 // that same lock) is never seen as an external change. Pass the SAME path to
 // both `watch --snapshot` and `edit --refresh-snapshot`.
 func runWatch(args []string) int {
-	var boardPath, session, snapshot string
+	var boardPath, session, snapshot, node string
 	once := false
 	notes := true
 	interval := 2 * time.Second
@@ -73,6 +73,12 @@ func runWatch(args []string) int {
 				return watchErr("--interval needs a positive duration (e.g. 2s)")
 			}
 			interval = d
+		case "--node":
+			if v, ok := takeVal(); ok {
+				node = v
+			} else {
+				return watchErr("--node needs a node id")
+			}
 		case "--once":
 			once = true
 		case "--notes":
@@ -84,6 +90,15 @@ func runWatch(args []string) int {
 		}
 	}
 
+	// --node accepts a bare id or the canonical <board>#<id> ref; the fragment
+	// after '#' is the node id, and a board part there overrides --board.
+	if i := strings.Index(node, "#"); i >= 0 {
+		if b := node[:i]; b != "" && boardPath == "" {
+			boardPath = b
+		}
+		node = node[i+1:]
+	}
+
 	path, err := editBoardPath(boardPath, session)
 	if err != nil {
 		return watchErr(err.Error())
@@ -92,7 +107,7 @@ func runWatch(args []string) int {
 		snapshot = defaultSnapshotPath(path)
 	}
 
-	w := &watcher{board: path, snapshot: snapshot}
+	w := &watcher{board: path, snapshot: snapshot, node: node}
 	if notes {
 		w.notesDir = notesDirFor(path)
 		w.notesState = snapshot + ".notes.json"
@@ -106,13 +121,16 @@ func runWatch(args []string) int {
 	}
 
 	for {
-		out, changed, err := w.poll()
+		out, changed, gone, err := w.poll()
 		if err != nil {
 			return watchErr(err.Error())
 		}
 		if changed {
 			fmt.Print(out)
 			if once {
+				if gone {
+					return 1
+				}
 				return 0
 			}
 		}
@@ -124,6 +142,7 @@ func runWatch(args []string) int {
 type watcher struct {
 	board      string
 	snapshot   string
+	node       string // "" watches the whole board; else only the subtree rooted here
 	notesDir   string // "" disables notes watching
 	notesState string // JSON sidecar of note path -> content hash
 }
@@ -158,9 +177,10 @@ func (w *watcher) init() error {
 // poll compares the board (and notes) to the snapshot under the board lock and,
 // on change, returns the formatted diff and advances the snapshot. It is the
 // testable core of the watch loop: no sleeping, no globals.
-func (w *watcher) poll() (string, bool, error) {
+func (w *watcher) poll() (string, bool, bool, error) {
 	var out strings.Builder
 	changed := false
+	gone := false
 	err := board.WithLock(w.board, func() error {
 		cur, err := os.ReadFile(w.board)
 		if err != nil {
@@ -169,6 +189,29 @@ func (w *watcher) poll() (string, bool, error) {
 		var snap []byte
 		if b, err := os.ReadFile(w.snapshot); err == nil {
 			snap = b
+		}
+		if w.node != "" {
+			// Subtree watch: diff only the node's source lines, so edits
+			// elsewhere on the board are invisible. A node that existed in the
+			// snapshot but is absent now is reported as gone (and, in --once
+			// mode, exits nonzero).
+			before, hadBefore := board.SubtreeSource(string(snap), w.node)
+			after, hasNow := board.SubtreeSource(string(cur), w.node)
+			if d := diffItems(before, after); d != "" {
+				changed = true
+				out.WriteString(d)
+			}
+			if hadBefore && !hasNow {
+				changed = true
+				gone = true
+				fmt.Fprintf(&out, "node gone: %s\n", w.node)
+			}
+			if changed {
+				if err := os.WriteFile(w.snapshot, cur, 0o644); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
 		if d := diffItems(string(snap), string(cur)); d != "" {
 			changed = true
@@ -194,7 +237,7 @@ func (w *watcher) poll() (string, bool, error) {
 		}
 		return nil
 	})
-	return out.String(), changed, err
+	return out.String(), changed, gone, err
 }
 
 // diffItems renders the item-level change between two board contents as a
@@ -308,8 +351,8 @@ func watchUsage(w *os.File) {
 	fmt.Fprint(w, `session-notes watch — block and emit the board's live edits as a diff
 
 Usage:
-  session-notes watch --board <path> [--snapshot <path>] [--once]
-                      [--interval <dur>] [--no-notes]
+  session-notes watch --board <path> [--node <id>] [--snapshot <path>]
+                      [--once] [--interval <dur>] [--no-notes]
 
 Blocks, polling the board file on --interval (default 2s). On each external
 change it prints the changed items as a unified-style diff (removed "-",
@@ -317,6 +360,10 @@ added "+") to stdout and keeps watching. --once exits 0 after the first change
 (the mode a background/Monitor task wants: react, then re-arm).
 
   --board <path> | --session <id>   the board to watch (exactly one)
+  --node <id>                       watch only the subtree rooted at this node
+                                    (accepts <board>#<id>); changes elsewhere are
+                                    ignored, a deleted root reports "node gone"
+                                    and exits nonzero in --once mode
   --snapshot <path>                 self-edit snapshot; pass the SAME path to
                                     'edit --refresh-snapshot' so your own writes
                                     stay invisible (default: <board>.watch)
