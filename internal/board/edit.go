@@ -77,6 +77,42 @@ func (b *Board) FindByQuery(query string) (*Item, int) {
 	return found, count
 }
 
+// FindByQueryScoped is FindByQuery confined to the subtree rooted at rootID
+// (empty rootID = whole board). Matches outside the carve-out are invisible, so
+// a sub-agent handed --root cannot even address a sibling by substring.
+func (b *Board) FindByQueryScoped(query, rootID string) (*Item, int) {
+	if rootID == "" {
+		return b.FindByQuery(query)
+	}
+	var found *Item
+	count := 0
+	var walk func(items []*Item)
+	walk = func(items []*Item) {
+		for _, it := range items {
+			if it.parsed && (strings.Contains(it.raw, query) || strings.Contains(it.Text, query)) {
+				if found == nil {
+					found = it
+				}
+				count++
+			}
+			walk(it.Children)
+		}
+	}
+	if sec, item, ok := b.ResolveRoot(rootID); ok {
+		switch {
+		case sec != nil:
+			walk(sec.Items)
+		case item != nil:
+			if strings.Contains(item.raw, query) || strings.Contains(item.Text, query) {
+				found = item
+				count++
+			}
+			walk(item.Children)
+		}
+	}
+	return found, count
+}
+
 // SetStatus sets a recognized item's checkbox state. Plain (raw, non-bullet)
 // lines are left untouched.
 func (it *Item) SetStatus(s Status) {

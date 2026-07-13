@@ -21,6 +21,7 @@ import (
 type Op struct {
 	Name    string // add | reply | fork | edit | status | urgent | pin | archive | delete | log | title | add-section | rename-section | archive-section | delete-section
 	ID      string // node-id addressing (preferred); falls back to Section+Raw / Query
+	Root    string // subtree carve-out: addressing resolves within this node only; edits outside it are refused
 	Section string
 	Raw     string
 	Query   string
@@ -44,30 +45,47 @@ var (
 // around it). note is a non-fatal advisory to surface to the user, e.g.
 // "3 items match; using the first" for Query addressing.
 func Apply(b *Board, op Op) (note string, err error) {
-	locate := func() (*Item, error) {
-		if op.ID != "" {
-			if it := b.FindByID(op.ID); it != nil {
-				return it, nil
-			}
-			return nil, fmt.Errorf("%w: no item with id %q", ErrOpNotFound, op.ID)
+	// Scope carve-out: a non-empty Root confines every addressing path to the
+	// subtree rooted at that node. Resolve it once so we can both refuse
+	// out-of-scope targets and default add/reply parents to the root.
+	var rootSec *Section
+	var rootItem *Item
+	if op.Root != "" {
+		s, it, ok := b.ResolveRoot(op.Root)
+		if !ok {
+			return "", fmt.Errorf("%w: no root node with id %q", ErrOpNotFound, op.Root)
 		}
-		if op.Query != "" {
-			it, n := b.FindByQuery(op.Query)
-			if n == 0 {
-				return nil, fmt.Errorf("%w: no item matching %q", ErrOpNotFound, op.Query)
+		rootSec, rootItem = s, it
+	}
+	inScope := func(it *Item) bool { return op.Root == "" || b.InScope(op.Root, it) }
+	locate := func() (*Item, error) {
+		var it *Item
+		switch {
+		case op.ID != "":
+			if it = b.FindByID(op.ID); it == nil {
+				return nil, fmt.Errorf("%w: no item with id %q", ErrOpNotFound, op.ID)
 			}
-			if n > 1 {
+		case op.Query != "":
+			var n int
+			if it, n = b.FindByQueryScoped(op.Query, op.Root); n == 0 {
+				return nil, fmt.Errorf("%w: no item matching %q", ErrOpNotFound, op.Query)
+			} else if n > 1 {
 				note = fmt.Sprintf("%d items match %q; using the first", n, op.Query)
 			}
-			return it, nil
+		default:
+			if it = b.FindByRawInSection(op.Section, op.Raw); it == nil {
+				if m, n := b.FindByTextInSection(op.Section, NormalizeItemText(op.Raw)); n == 1 {
+					it = m
+				}
+			}
+			if it == nil {
+				return nil, fmt.Errorf("%w: item not found (board changed?)", ErrOpNotFound)
+			}
 		}
-		if it := b.FindByRawInSection(op.Section, op.Raw); it != nil {
-			return it, nil
+		if !inScope(it) {
+			return nil, errOutsideScope(op.Root)
 		}
-		if it, n := b.FindByTextInSection(op.Section, NormalizeItemText(op.Raw)); n == 1 {
-			return it, nil
-		}
-		return nil, fmt.Errorf("%w: item not found (board changed?)", ErrOpNotFound)
+		return it, nil
 	}
 	needText := func() error {
 		if strings.TrimSpace(op.Text) == "" {
@@ -76,8 +94,38 @@ func Apply(b *Board, op Op) (note string, err error) {
 		return nil
 	}
 
+	// Whole-board ops (title, log, section creation/removal) have no meaning
+	// inside a carve-out: refuse them rather than silently escaping the boundary.
+	// A section rename/archive is allowed only when it targets the root section.
+	if op.Root != "" {
+		switch op.Name {
+		case "title", "log", "add-section", "delete-section":
+			return "", fmt.Errorf("%w: %q is a whole-board op, refused under root %q", ErrOpInvalid, op.Name, op.Root)
+		case "rename-section", "archive-section":
+			if rootSec == nil || op.Section != rootSec.Title {
+				return "", errOutsideScope(op.Root)
+			}
+		}
+	}
+
 	switch op.Name {
 	case "add":
+		// Under an item root, "add" appends a child to the root node; under a
+		// section root the target section is forced to that section.
+		if rootItem != nil {
+			if err := needText(); err != nil {
+				return "", err
+			}
+			it := b.AddReply(rootItem, op.Text)
+			if st, remainder, ok := LeadingStatus(op.Text); ok {
+				it.Status = st
+				it.Text = remainder
+			}
+			break
+		}
+		if rootSec != nil {
+			op.Section = rootSec.Title
+		}
 		if b.Section(op.Section) == nil {
 			return "", fmt.Errorf("%w: no section %q; sections: %s", ErrOpNotFound, op.Section, strings.Join(SectionTitles(b), ", "))
 		}
