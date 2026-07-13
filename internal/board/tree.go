@@ -35,6 +35,7 @@ type OpResult struct {
 type Event struct {
 	NodeID string
 	Kind   string // "changed"
+	Author string // author(s) of the change, comma-joined; "" when unknown (file backend)
 }
 
 // Tree is the storage-agnostic node interface. The file backend implements it

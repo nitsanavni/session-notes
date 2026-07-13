@@ -130,7 +130,7 @@ func TestWatchJSONRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := decodeChanges(t, jsonDiff(prev, cur, ref, ""))
+	got := decodeChanges(t, jsonDiff(prev, cur, ref, "", ""))
 	if len(got) != 1 {
 		t.Fatalf("expected 1 change, got %d", len(got))
 	}

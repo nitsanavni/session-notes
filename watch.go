@@ -195,7 +195,7 @@ func runWatchRemote(rawURL, node string, once, jsonOut bool, ignoreAuthor string
 	}
 	defer cancel()
 
-	for range ch {
+	for ev := range ch {
 		cur, _, err := tree.Raw()
 		if err != nil {
 			return watchErr(err.Error())
@@ -210,7 +210,7 @@ func runWatchRemote(rawURL, node string, once, jsonOut bool, ignoreAuthor string
 		}
 		var out string
 		if jsonOut {
-			out = jsonDiff(before, after, rawURL, node)
+			out = jsonDiff(before, after, rawURL, node, ev.Author)
 		} else {
 			out = diffItems(before, after)
 		}
@@ -248,7 +248,9 @@ type watcher struct {
 // --json mode, one JSON line per added/removed item.
 func (w *watcher) fmtDiff(before, after string) string {
 	if w.jsonOut {
-		return jsonDiff(before, after, w.ref, w.node)
+		// The file watcher has no author signal (self-edit suppression is snapshot
+		// based, not author based), so it emits an empty author.
+		return jsonDiff(before, after, w.ref, w.node, "")
 	}
 	return diffItems(before, after)
 }
@@ -369,8 +371,9 @@ func diffItems(before, after string) string {
 
 // jsonChange is one item add/remove reported by `watch --json`, one JSON object
 // per line. line is the item's source line with its trailing " ^id" anchor
-// stripped; id is that anchor ("" when the line has none); author is filled only
-// when known (empty for the file watcher and the SSE stream). board is the ref
+// stripped; id is that anchor ("" when the line has none); author is the
+// change's author(s) for a remote watch (comma-joined; from the SSE event) and
+// empty for the file watcher, which has no author signal. board is the ref
 // being watched, node the watch root (empty for a whole-board watch).
 type jsonChange struct {
 	Op     string `json:"op"` // "add" | "remove"
@@ -383,7 +386,7 @@ type jsonChange struct {
 
 // jsonDiff renders the item-level change between two board contents as one JSON
 // line per added/removed item (removed first, then added — matching diffItems).
-func jsonDiff(before, after, ref, node string) string {
+func jsonDiff(before, after, ref, node, author string) string {
 	added, removed := board.DiffLines(before, after)
 	if len(added) == 0 && len(removed) == 0 {
 		return ""
@@ -391,7 +394,7 @@ func jsonDiff(before, after, ref, node string) string {
 	var b strings.Builder
 	emit := func(op, raw string) {
 		line, id := board.SplitRawAnchor(raw)
-		data, _ := json.Marshal(jsonChange{Op: op, Line: line, ID: id, Board: ref, Node: node})
+		data, _ := json.Marshal(jsonChange{Op: op, Line: line, ID: id, Author: author, Board: ref, Node: node})
 		b.Write(data)
 		b.WriteByte('\n')
 	}

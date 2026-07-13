@@ -285,8 +285,18 @@ func (t *RemoteTree) WatchFiltered(id, ignoreAuthor string) (<-chan board.Event,
 		for sc.Scan() {
 			line := sc.Text()
 			if strings.HasPrefix(line, "data:") {
+				// The payload is JSON carrying the change's author(s); a bare
+				// "changed" (older servers) parses to no authors, leaving it empty.
+				data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				author := ""
+				var p struct {
+					Authors []string `json:"authors"`
+				}
+				if json.Unmarshal([]byte(data), &p) == nil {
+					author = strings.Join(p.Authors, ",")
+				}
 				select {
-				case ch <- board.Event{NodeID: id, Kind: "changed"}:
+				case ch <- board.Event{NodeID: id, Kind: "changed", Author: author}:
 				default:
 				}
 			}
