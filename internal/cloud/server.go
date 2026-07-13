@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -617,8 +618,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				prev, prevVer = cur, curVer
 				continue
 			}
+			// Plumb the author(s) of the change into the event so `watch --json`
+			// can report who edited (the server knows via the ops journal; the
+			// SSE payload previously carried an empty author).
+			authors, _ := s.store.AuthorsSince(id, prevVer)
 			prev, prevVer = cur, curVer
-			fmt.Fprint(w, "data: changed\n\n")
+			payload, _ := json.Marshal(map[string]any{"authors": dedupeAuthors(authors)})
+			fmt.Fprintf(w, "data: %s\n\n", payload)
 			fl.Flush()
 		}
 	}
@@ -638,6 +644,21 @@ func authorsAllEqual(store *Store, id string, sinceVersion int, name string) boo
 		}
 	}
 	return true
+}
+
+// dedupeAuthors collapses a change's author list to distinct names in first-seen
+// order — the SSE payload the `watch --json` client attributes items to.
+func dedupeAuthors(authors []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, a := range authors {
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	return out
 }
 
 // subtreeChanged reports whether the subtree rooted at id differs between two
@@ -669,7 +690,25 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	entries, err := s.store.History(id)
+	// Pagination bounds the query (the M8 fix for /history head-of-line blocking):
+	// ?limit (default 100, capped at journalKeep) rows, ?before=<op id> cursor to
+	// page backward. Entries come back newest-first already diffed.
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > journalKeep {
+		limit = journalKeep
+	}
+	before := 0
+	if v := r.URL.Query().Get("before"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			before = n
+		}
+	}
+	entries, err := s.store.History(id, limit, before)
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -681,12 +720,16 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		Removed []string `json:"removed,omitempty"`
 	}
 	out := make([]entryJSON, 0, len(entries))
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		added, removed := board.DiffLines(e.Before, e.After)
-		out = append(out, entryJSON{Time: e.TS.Format(time.RFC3339), Author: e.Author, Added: added, Removed: removed})
+	for _, e := range entries {
+		out = append(out, entryJSON{Time: e.TS.Format(time.RFC3339), Author: e.Author, Added: e.Added, Removed: e.Removed})
 	}
-	writeJSON(w, map[string]any{"entries": out})
+	resp := map[string]any{"entries": out}
+	// The cursor for the next (older) page is the oldest op id returned; the
+	// client passes it back as ?before. Absent when the page wasn't full.
+	if len(entries) == limit {
+		resp["before"] = entries[len(entries)-1].ID
+	}
+	writeJSON(w, resp)
 }
 
 func (s *Server) handleKeymap(w http.ResponseWriter, r *http.Request) {
@@ -717,7 +760,9 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		Subject string `json:"subject"`
 		Admin   bool   `json:"admin"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
 	}
@@ -775,7 +820,13 @@ func (s *Server) handleAddGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req grantReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Reject unknown fields: a typo like "node" instead of "root" would otherwise
+	// be silently ignored and mint a WHOLE-BOARD grant. Over-granting is a
+	// security failure, so the grant body is strict (unlike the forgiving edit
+	// body).
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
 	}
@@ -826,7 +877,9 @@ func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
 		Subject   string `json:"subject"`
 		TokenName string `json:"tokenName"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
 	}
