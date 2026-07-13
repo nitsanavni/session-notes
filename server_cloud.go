@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -65,6 +67,12 @@ func runServer(args []string) int {
 			insecure = true
 		default:
 			return serverErr("unknown argument: " + a)
+		}
+	}
+
+	if insecure {
+		if err := requireLoopbackAddr(addr); err != nil {
+			return serverErr(err.Error())
 		}
 	}
 
@@ -151,6 +159,9 @@ func runServerExport(args []string) int {
 	}
 	n := 0
 	for _, id := range ids {
+		if err := safeBoardID(id); err != nil {
+			return serverErr(err.Error())
+		}
 		content, _, err := store.Get(id)
 		if err != nil {
 			return serverErr(err.Error())
@@ -287,6 +298,38 @@ func runServerTokenRevoke(rest []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "revoked %d token(s) named %q\n", n, name)
 	return 0
+}
+
+// requireLoopbackAddr refuses --insecure (which disables auth entirely) unless
+// the listen address is loopback-only or a unix socket. Binding an
+// authentication-disabled server to a public/all-interfaces address would expose
+// every board to the network unauthenticated, so we fail fast with a fix.
+func requireLoopbackAddr(addr string) error {
+	fail := func() error {
+		return fmt.Errorf("--insecure disables auth and refuses non-loopback addr %q; "+
+			"bind 127.0.0.1/localhost (or a unix socket), or drop --insecure and mint a token "+
+			"(session-notes server token create --name <n>)", addr)
+	}
+	// Unix socket path (e.g. "/run/sn.sock" or "unix/...") — not network-exposed.
+	if strings.HasPrefix(addr, "/") || strings.HasPrefix(addr, "unix/") {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// No port present; treat the whole string as the host.
+		host = addr
+	}
+	if host == "" {
+		// ":7099" binds every interface — the dangerous case.
+		return fail()
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fail()
 }
 
 func defaultDBPath() string {

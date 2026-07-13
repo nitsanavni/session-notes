@@ -192,12 +192,16 @@ func (s *Store) SetContent(id, content, author string) (version int, err error) 
 	rendered := b.Render()
 	now := time.Now().UnixNano()
 	if errors.Is(gerr, ErrNoBoard) {
-		if _, err := s.db.Exec(
-			`INSERT INTO boards(id, content, version, created, updated) VALUES(?,?,?,?,?)`,
-			id, rendered, 1, now, now); err != nil {
+		if err := s.txWrite(func(tx *sql.Tx) error {
+			if _, err := tx.Exec(
+				`INSERT INTO boards(id, content, version, created, updated) VALUES(?,?,?,?,?)`,
+				id, rendered, 1, now, now); err != nil {
+				return err
+			}
+			return journalTx(tx, id, 1, author, "", rendered)
+		}); err != nil {
 			return 0, err
 		}
-		s.journal(id, 1, author, "", rendered)
 		s.notify(id, 1)
 		return 1, nil
 	}
@@ -205,11 +209,9 @@ func (s *Store) SetContent(id, content, author string) (version int, err error) 
 		return 0, gerr
 	}
 	version = cur + 1
-	if _, err := s.db.Exec(`UPDATE boards SET content=?, version=?, updated=? WHERE id=?`,
-		rendered, version, now, id); err != nil {
+	if err := s.writeAndJournal(id, rendered, version, now, author, before); err != nil {
 		return 0, err
 	}
-	s.journal(id, version, author, before, rendered)
 	s.notify(id, version)
 	return version, nil
 }
@@ -256,23 +258,51 @@ func (s *Store) ApplyOp(id string, op board.Op, base int, author string) (ApplyR
 	rendered := b.Render()
 	version := cur + 1
 	now := time.Now().UnixNano()
-	if _, err := s.db.Exec(`UPDATE boards SET content=?, version=?, updated=? WHERE id=?`,
-		rendered, version, now, id); err != nil {
+	if err := s.writeAndJournal(id, rendered, version, now, author, before); err != nil {
 		return ApplyResult{}, err
 	}
-	s.journal(id, version, author, before, rendered)
 	s.notify(id, version)
 	return ApplyResult{Note: note, NodeID: op.ID, Version: version}, nil
 }
 
 // ---- history / journal ----
 
-func (s *Store) journal(id string, version int, author, before, after string) {
+// txWrite runs fn inside a single transaction, committing on success and
+// rolling back on any error. It keeps a version bump and its journal row atomic:
+// either both land or neither does. Callers already hold the per-board lock, so
+// the tx never races another writer for the same board.
+func (s *Store) txWrite(fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// writeAndJournal atomically bumps an existing board's content/version and
+// appends the matching ops journal row in one transaction.
+func (s *Store) writeAndJournal(id, rendered string, version int, now int64, author, before string) error {
+	return s.txWrite(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE boards SET content=?, version=?, updated=? WHERE id=?`,
+			rendered, version, now, id); err != nil {
+			return err
+		}
+		return journalTx(tx, id, version, author, before, rendered)
+	})
+}
+
+// journalTx appends one ops journal row using the given transaction.
+func journalTx(tx *sql.Tx, id string, version int, author, before, after string) error {
 	if author == "" {
 		author = "remote"
 	}
-	_, _ = s.db.Exec(`INSERT INTO ops(board_id, version, author, before, after, ts) VALUES(?,?,?,?,?,?)`,
+	_, err := tx.Exec(`INSERT INTO ops(board_id, version, author, before, after, ts) VALUES(?,?,?,?,?,?)`,
 		id, version, author, before, after, time.Now().UnixNano())
+	return err
 }
 
 // HistoryEntry is one journaled write.

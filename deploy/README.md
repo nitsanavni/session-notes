@@ -176,6 +176,13 @@ session-notes server token revoke scout --db /var/lib/session-notes/server.db
 `token list` shows name / subject / admin / created — never the secret (it is
 not recoverable). Revoke is immediate: the next request bearing that token 401s.
 
+> **Treat `?token=` URLs as secrets.** The browser onboarding flow accepts the
+> bearer token as a `?token=` query parameter (it is exchanged for a cookie on
+> first hit). Anyone who sees such a URL holds the token — so never paste one
+> into a chat/ticket/log, and don't record it server-side. The bundled Caddy
+> config strips `?token=` from access logs; if you front the server differently,
+> replicate that. Revoke a token you suspect leaked.
+
 ---
 
 ## 5. Litestream setup
@@ -350,7 +357,8 @@ and restarting; the DB is backward-compatible (columns are only added).
 - **Graceful shutdown** — `SIGTERM`/`SIGINT` stops accepting, drains in-flight
   requests including SSE, then closes the DB (10s budget).
 - **Flags** — `--addr host:port` (default `127.0.0.1:7099`), `--db path`,
-  `--insecure` (disables auth — loopback dev only, never public).
+  `--insecure` (disables auth — loopback dev only, never public; the server
+  refuses to start when `--insecure` is combined with a non-loopback `--addr`).
 
 See the repo `README.md` "Cloud" section and `session-notes docs server` for the
 protocol and access model.

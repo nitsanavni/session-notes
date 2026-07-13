@@ -4,10 +4,25 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nitsanavni/session-notes/internal/cloud"
 )
+
+// safeBoardID rejects a server-supplied board id that would escape the target
+// directory when joined into a local file path. A malicious (or buggy) server
+// could return an id like "../../etc/foo" or "a/b"; pulling it must not write
+// outside <dir>. We require the id to be a single path segment with no
+// separators and no "..".
+func safeBoardID(id string) error {
+	if id == "" || id == "." || id == ".." ||
+		strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") ||
+		filepath.Base(id) != id {
+		return fmt.Errorf("refusing unsafe board id %q from server (path traversal)", id)
+	}
+	return nil
+}
 
 // runLogin implements `session-notes login <server-url>`: prompt for (or accept
 // via --token / stdin) a bearer token and store it keyed by host under the
@@ -169,12 +184,15 @@ func remotePullAll(server, dir string) int {
 	}
 	n := 0
 	for _, c := range cards {
+		if err := safeBoardID(c.ID); err != nil {
+			return remoteErr(err.Error())
+		}
 		tree := cloud.NewRemoteTree(server, c.ID, token)
 		content, _, err := tree.Raw()
 		if err != nil {
 			return remoteErr(err.Error())
 		}
-		if err := os.WriteFile(dir+"/"+c.ID+".md", []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, c.ID+".md"), []byte(content), 0o644); err != nil {
 			return remoteErr(err.Error())
 		}
 		n++

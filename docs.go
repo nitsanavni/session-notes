@@ -312,7 +312,8 @@ anywhere attaches to a board (or a granted subtree) with the same watch/edit
 protocol as a local file. Tokens carry identity; grants are the access model
 (see ` + "`docs subtree`" + ` for the carve-out handoff).
 
-Run it (refuses to start with no tokens unless --insecure = loopback dev only):
+Run it (refuses to start with no tokens unless --insecure; --insecure disables
+auth and is refused on any non-loopback --addr — loopback dev only):
 
   session-notes server --addr 127.0.0.1:7099 --db ./server.db
   session-notes server token create --name ops        # admin bootstrap token, printed once

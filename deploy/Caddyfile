@@ -17,9 +17,18 @@
 	}
 
 	# /healthz stays reachable for uptime checks (no auth on the app side).
+	#
+	# Strip the ?token= query param from logged URIs: onboarding URLs carry the
+	# bearer token as ?token=, and a token captured in a log line is a leaked
+	# credential. The filter encoder deletes it from the logged request URI.
 	log {
 		output stdout
-		format console
+		format filter {
+			wrap console
+			request>uri query {
+				delete token
+			}
+		}
 	}
 }
 

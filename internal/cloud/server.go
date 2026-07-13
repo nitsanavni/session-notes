@@ -164,7 +164,7 @@ func (s *Server) authWrap(next http.Handler) http.Handler {
 		if p := r.URL.Query().Get("token"); p != "" && s.store.ValidToken(p) {
 			http.SetCookie(w, &http.Cookie{
 				Name: authCookie, Value: p, Path: "/",
-				HttpOnly: true, SameSite: http.SameSiteLaxMode,
+				HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 			})
 			q := r.URL.Query()
 			q.Del("token")
