@@ -48,6 +48,10 @@ type feedbackState struct {
 	// FocusRoot is the stable key the map is re-rooted on (mm's `f` focus). ""
 	// (the default, and absent in pre-focus JSONL records) is the whole board.
 	FocusRoot string `json:"focusRoot,omitempty"`
+	// FocusRootID is the durable node id of the focus root (M2): stable across
+	// edits and shareable, unlike the positional FocusRoot key. Preferred on
+	// restore; FocusRoot remains for pre-M2 records.
+	FocusRootID string `json:"focusRootId,omitempty"`
 	// Fold is the unified per-node fold state, keyed by stable node key. Replaces
 	// the old Folded/RepliesShown pair; those are still read (see restoreMapModel)
 	// so pre-existing JSONL records replay unchanged.
@@ -128,12 +132,13 @@ func cloneFold(m map[string]foldState) map[string]foldState {
 func (m *model) captureMapState() feedbackState {
 	m.ensureMap()
 	return feedbackState{
-		Board:     m.board.Render(),
-		FocusKey:  m.mapFocusKey,
-		FocusText: mapFocusDetail(m.mp),
-		FocusRoot: m.mapFocusRoot,
-		Fold:      cloneFold(m.mapFold),
-		ShowLog:   m.mapShowLog,
+		Board:       m.board.Render(),
+		FocusKey:    m.mapFocusKey,
+		FocusText:   mapFocusDetail(m.mp),
+		FocusRoot:   m.mapFocusRoot,
+		FocusRootID: m.mapFocusRootID,
+		Fold:        cloneFold(m.mapFold),
+		ShowLog:     m.mapShowLog,
 	}
 }
 
@@ -344,6 +349,13 @@ func restoreMapModel(st feedbackState) *model {
 	}
 	m.mapFocusKey = st.FocusKey
 	m.mapFocusRoot = st.FocusRoot
+	// Durable id wins when present; else derive it from the positional key so a
+	// pre-M2 record still gets a stable, edit-surviving focus root.
+	if st.FocusRootID != "" {
+		m.mapFocusRootID = st.FocusRootID
+	} else {
+		m.mapFocusRootID = m.nodeIDForKey(st.FocusRoot)
+	}
 	m.rebuildPositions()
 	m.mp = nil
 	m.ensureMap()
@@ -447,6 +459,9 @@ func generateFeedbackTests(recs []feedbackRecord) string {
 		fmt.Fprintf(&b, "\tm.mapFocusKey = %s // %s\n", strconv.Quote(last.Before.FocusKey), oneLine(last.Before.FocusText))
 		if last.Before.FocusRoot != "" {
 			fmt.Fprintf(&b, "\tm.mapFocusRoot = %s\n", strconv.Quote(last.Before.FocusRoot))
+		}
+		if last.Before.FocusRootID != "" {
+			fmt.Fprintf(&b, "\tm.mapFocusRootID = %s\n", strconv.Quote(last.Before.FocusRootID))
 		}
 		b.WriteString("\tm.mp = nil\n\tm.ensureMap()\n\n")
 		fmt.Fprintf(&b, "\tm.handleMapKey(keyPress(%s)) // the surprising move\n\n", strconv.Quote(last.Key))

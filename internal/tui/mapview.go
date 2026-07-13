@@ -348,13 +348,24 @@ func (m *model) ensureMap() {
 		}
 	}
 	// Re-root on the focused subtree when set (mm's `f`); fall back to the whole
-	// board if the focus root no longer maps (e.g. its item was deleted).
+	// board if the focus root no longer maps (e.g. its item was deleted). The
+	// durable node id is the source of truth (M2): re-derive the positional key
+	// from it each rebuild so the zoom survives edits that shifted positions.
+	if m.mapFocusRootID != "" {
+		if k := m.keyForNodeID(m.mapFocusRootID); k != "" {
+			m.mapFocusRoot = k
+		} else {
+			m.mapFocusRoot = ""
+			m.mapFocusRootID = ""
+		}
+	}
 	layoutRoot := root
 	if m.mapFocusRoot != "" {
 		if fr, ok := nodeByKey[m.mapFocusRoot]; ok {
 			layoutRoot = fr
 		} else {
 			m.mapFocusRoot = ""
+			m.mapFocusRootID = ""
 		}
 	}
 	opts := mindmap.Options{MaxWidth: mapNodeMaxWidth, Expanded: expanded}
@@ -410,6 +421,7 @@ func (m *model) enterMap() {
 		// Drop a persisted focus root that would hide the seeded node.
 		if m.mapFocusRoot != "" && !keyWithin(seedKey, m.mapFocusRoot) {
 			m.mapFocusRoot = ""
+			m.mapFocusRootID = ""
 		}
 	}
 	m.mp = nil // rebuild so mp.focus reflects the seeded key
@@ -468,6 +480,44 @@ func (m *model) itemMapKey(target *board.Item) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// nodeIDForKey returns the durable node id of the node a positional map key
+// addresses (section id for a section key, item id for an item key), or "".
+func (m *model) nodeIDForKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if it := m.itemForKey(key); it != nil {
+		return it.ID
+	}
+	// Section key "sN": no slash.
+	if strings.HasPrefix(key, "s") && !strings.Contains(key, "/") {
+		if si, err := strconv.Atoi(key[1:]); err == nil && si >= 0 && si < len(m.board.Sections) {
+			return m.board.Sections[si].ID
+		}
+	}
+	return ""
+}
+
+// keyForNodeID resolves a durable node id back to its current positional map
+// key, recomputed from the live board so a zoom survives edits that moved the
+// node. Returns "" when the id is gone (the caller then unfocuses).
+func (m *model) keyForNodeID(id string) string {
+	if id == "" {
+		return ""
+	}
+	for si, s := range m.board.Sections {
+		if s.ID == id {
+			return "s" + strconv.Itoa(si)
+		}
+	}
+	if it := m.board.FindByID(id); it != nil {
+		if k, ok := m.itemMapKey(it); ok {
+			return k
+		}
+	}
+	return ""
 }
 
 func keyForItemIn(items []*board.Item, parentKey string, target *board.Item) (string, bool) {
@@ -587,6 +637,7 @@ func (m *model) focusIn() {
 		delete(m.mapFold, key)
 	}
 	m.mapFocusRoot = key
+	m.mapFocusRootID = m.nodeIDForKey(key)
 	m.mp = nil
 	m.ensureMap()
 	// Land on the first visible child of the new center.
@@ -607,6 +658,7 @@ func (m *model) focusOut() {
 	}
 	prev := m.mapFocusRoot
 	m.mapFocusRoot = parentKeyOf(prev)
+	m.mapFocusRootID = m.nodeIDForKey(m.mapFocusRoot)
 	m.mapFocusKey = prev // cursor rests on the node we just stepped out of
 	m.mp = nil
 	m.ensureMap()
@@ -1431,6 +1483,7 @@ func (m *model) mapDelete() {
 		m.board.RemoveSection(sec)
 		m.mapFocusKey = "" // focus falls back to the center
 		m.mapFocusRoot = ""
+		m.mapFocusRootID = ""
 		m.saveWithRebase(pendingOp{typ: opDeleteSection, section: title})
 		m.status = "deleted section " + title
 		m.mp = nil

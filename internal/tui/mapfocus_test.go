@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nitsanavni/session-notes/internal/board"
 	"github.com/nitsanavni/session-notes/internal/mindmap"
 )
 
@@ -166,5 +167,45 @@ func TestMapFocusRecorded(t *testing.T) {
 	// A recorded focus event is buffered.
 	if len(m.feedbackEvents) == 0 || m.feedbackEvents[len(m.feedbackEvents)-1].Key != "f" {
 		t.Errorf("f was not recorded as a feedback event")
+	}
+}
+
+// TestMapFocusSurvivesEdit verifies the zoom root is keyed by node id (M2): after
+// an edit that shifts positional keys (inserting a sibling above the focused
+// subtree), the map stays re-rooted on the same node.
+func TestMapFocusSurvivesEdit(t *testing.T) {
+	src := "## Threads\n- [ ] alpha\n  - [ ] a-child\n- [ ] beta\n  - [ ] b-child\n"
+	m := newMapModel(t, src, 120, 40)
+	m.board.EnsureIDs()
+	m.mp = nil
+	m.ensureMap()
+
+	focusMapItem(t, m, "beta")
+	m.handleMapKey(keyPress("f"))
+	m.ensureMap()
+	if got := m.mp.refs[m.mp.root]; got.kind != refItem || got.item.Text != "beta" {
+		t.Fatalf("re-rooted center is not beta: %+v", got)
+	}
+	betaID := m.mapFocusRootID
+	if betaID == "" {
+		t.Fatal("focus root id was not recorded")
+	}
+
+	// Insert a new item at the top of the section: every positional key below
+	// shifts, but the durable id must keep the zoom on beta.
+	sec := m.board.Section("Threads")
+	newItem := m.board.AddItem("Threads", "zzz-new-top")
+	// Move it to the front so keys below it shift.
+	sec.Items = append([]*board.Item{newItem}, sec.Items[:len(sec.Items)-1]...)
+	m.board.EnsureIDs()
+	m.rebuildPositions()
+	m.mp = nil
+	m.ensureMap()
+
+	if m.mapFocusRootID != betaID {
+		t.Errorf("focus root id changed across edit: %q -> %q", betaID, m.mapFocusRootID)
+	}
+	if got := m.mp.refs[m.mp.root]; got.kind != refItem || got.item.Text != "beta" {
+		t.Errorf("zoom did not survive edit; center is %+v, want beta", got)
 	}
 }

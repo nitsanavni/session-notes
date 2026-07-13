@@ -189,6 +189,11 @@ type model struct {
 	// center, with a breadcrumb trail back. "" is the whole board (unfocused).
 	// Persisted across rebuilds like mapFocusKey; folds/expansion still apply.
 	mapFocusRoot string
+	// mapFocusRootID is the durable node-id of the focus root (M2): positional
+	// keys drift when items above are inserted or deleted, but a node id is
+	// stable, so the zoom survives edits and is shareable (web `#<id>` deep-link).
+	// mapFocusRoot is re-derived from this id on each rebuild when set.
+	mapFocusRootID string
 	// mapFold holds, keyed by stable node key, each node's fold state in the
 	// unified three-state cycle (see foldState in mapview.go). Absent keys are
 	// foldDefault: non-reply children visible, reply children summarized into a
