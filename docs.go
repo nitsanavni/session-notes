@@ -159,8 +159,20 @@ Target the board with --board <path> (primary for an agent) or --session <id>
                                 timeline). Refuses if the board changed through
                                 a non-journaling writer (TUI, $EDITOR) since.
 
+Addressing by node id (stable across edits): every bullet carries a trailing
+" ^<id>" anchor once it has been saved through the CLI. Prefer it over <query>
+when you have it — it survives text edits and reparenting:
+  edit set --id <id> <text>     replace an item's text (id-native "replace")
+  edit reply|fork|status --id <id> …   address the exact node by id
+
 Flags (any subcommand):
   --board <path> | --session <id>   the target board (exactly one)
+  --id <id>                         address the target node by its ^<id> anchor
+  --root <id>                       CARVE-OUT: confine all addressing to the
+                                    subtree rooted at that node; edits targeting
+                                    anything outside it are refused. add/reply/
+                                    fork default their target/parent to the root.
+                                    See "docs subtree".
   --refresh-snapshot <path>         copy the new content over <path> inside the
                                     same lock (monitor self-edit suppression).
                                     First prints any external change the watch
@@ -232,6 +244,42 @@ Web UI in a sandbox:
   it yourself with a headless browser when you need the web surface, and
   point the human at running "serve" on their own machine instead (the UI is
   touch-friendly, so a phone on their network works).`,
+
+	"subtree": `Subtree attach — hand a sub-agent one node as its whole world
+
+Zoom is a first-class primitive: any node id (` + "`^<id>`" + ` anchor) is an
+addressable, watchable, editable root. Handing a sub-agent a single node as its
+carve-out gives it exactly that node's subtree to read, react to, and edit —
+and nothing else. This is the permission boundary: the parent keeps the rest of
+the board; the child cannot even see, let alone touch, a sibling subtree.
+
+Pick the root: any bullet's trailing " ^<id>" anchor (ids are stamped on the
+first CLI save; run any edit once if the board has none yet). A "## Heading
+^<id>" section anchor works as a root too.
+
+Watch just the subtree — only changes inside it are reported; a deleted root
+prints "node gone" and exits nonzero under --once so the child knows to stop:
+
+  session-notes watch --board BOARD --node <id> --once
+  session-notes watch --node BOARD#<id> --once     # canonical <board>#<id> ref
+
+Edit within the subtree — every addressing path (id, <query>, section+raw)
+resolves inside the root only; a query cannot match a sibling, and an --id
+outside the root is refused. add/reply/fork default their target to the root,
+so the child rarely needs to name it:
+
+  session-notes edit add   --board BOARD --root <id> "a child of the root"
+  session-notes edit reply --board BOARD --root <id> "reply under the root"
+  session-notes edit set   --board BOARD --root <id> --id <child-id> "new text"
+  # editing a node outside <id> exits non-zero: "target is outside the subtree"
+
+Whole-board ops (title, log, section add/delete) are refused under --root.
+
+Spawn pattern: give the sub-agent BOARD + the node id and these two commands.
+It watches --node to react to changes in its slice and edits --root to write
+back, exactly as the top-level agent uses the whole board — same protocol, one
+node deep. Views follow: the TUI map zoom (f/b) and the web #<node-id> URL
+fragment both re-root on the same node id, so a zoomed view is shareable.`,
 }
 
 // runDocs implements `session-notes docs [topic]`: print a topic's recipe, or
@@ -275,7 +323,7 @@ func runDocs(args []string) int {
 
 // docTopicNames returns the topic names in a stable, meaningful order.
 func docTopicNames() []string {
-	order := []string{"protocol", "monitor", "conflicts", "cli", "headless", "blurb"}
+	order := []string{"protocol", "monitor", "conflicts", "cli", "subtree", "headless", "blurb"}
 	// Guard against a topic being added to the map but not the order list.
 	seen := map[string]bool{}
 	for _, t := range order {

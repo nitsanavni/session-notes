@@ -653,11 +653,39 @@ from actual behavior). Topics:
 | `docs protocol` | Board conventions: sections, statuses, replies/threading, `[[links]]` (both forms), `!!`/`!pin`. |
 | `docs monitor` | The `session-notes watch` recipe with self-edit suppression via `edit --refresh-snapshot` (plus the old manual loop as an appendix). |
 | `docs conflicts` | Reconciling `<<<<<<<`/`=======`/`>>>>>>>` markers under the lock with `edit replace`. |
-| `docs cli` | The `session-notes edit` subcommand reference. |
+| `docs cli` | The `session-notes edit` subcommand reference (including `--id` node addressing and the `--root` carve-out). |
+| `docs subtree` | Subtree attach: handing a sub-agent one node as its whole world with `watch --node` + `edit --root`. |
 | `docs headless` | Bootstrapping in environments with no tmux, no hooks, and no inbound network (Claude Code on the web, CI, containers): `session-notes init`, the watch/edit loop, and what `serve` can and cannot do from inside a sandbox. |
 | `docs blurb` | The session-start blurb itself (with a placeholder board path) — the single source shared with the `session-start` hook injection. |
 
 Running `session-notes docs` with no topic (or an unknown one) lists the topics.
+
+## Subtree attach — zoom as a permission boundary
+
+Every bullet is a node with a stable id (a trailing `^<id>` anchor, stamped on
+the first CLI save). A node id is not just a durable address — it is a
+*carve-out*: you can hand a sub-agent one node as its whole world, and it can
+read, react to, and edit that subtree while being unable to see or touch the
+rest of the board.
+
+- **Watch a subtree:** `session-notes watch --board BOARD --node <id>` (or the
+  canonical `--node BOARD#<id>`) reports only changes inside the subtree rooted
+  at that node; edits elsewhere are invisible. If the root is deleted it prints
+  `node gone: <id>` and, under `--once`, exits non-zero so the child stops.
+- **Edit within a subtree:** `session-notes edit … --root <id>` confines *all*
+  addressing (`--id`, `<query>`, section+raw) to that subtree. A query cannot
+  match a sibling, an `--id` outside the root is refused with
+  `target is outside the subtree`, and whole-board ops (title, log, section
+  management) are refused. `add`/`reply`/`fork` default their target to the root,
+  so the child rarely needs to name it. Enforcement lives in one place (op
+  resolution), so the boundary holds for every subcommand and every client.
+
+Spawn a sub-agent with `BOARD` + a node id and those two commands and it runs the
+same board protocol the top-level agent does — watch to react, edit to write
+back — one node deep. The views follow the same node-id addressing: the TUI map
+zoom (`f`/`b`) re-roots on a node id (so a zoom survives edits), and the web UI
+deep-links a zoomed view as `/b/{board}#<node-id>` (the fragment updates as you
+zoom in and out, and the breadcrumb steps back out). See `docs subtree`.
 
 ## Footprint — what lives outside this repo
 
