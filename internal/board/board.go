@@ -52,7 +52,8 @@ type Item struct {
 	Status   Status
 	Urgent   bool    // leading "!!" in the text
 	Pinned   bool    // leading "!pin" in the text (re-injected on cadence)
-	Text     string  // item text with status marker and "!!"/"!pin" stripped
+	ID       string  // stable node id from a trailing " ^<id>" anchor (empty until assigned)
+	Text     string  // item text with status marker, "!!"/"!pin", and " ^id" anchor stripped
 	Children []*Item // nested items (replies), in document order
 	indent   string  // leading whitespace before the bullet
 	raw      string  // original line, used when the line is not a recognized item
@@ -73,6 +74,7 @@ func (it *Item) depth() int {
 // Section is a "## Heading" and the lines beneath it (until the next heading).
 type Section struct {
 	Title string
+	ID    string // stable node id from a trailing " ^<id>" anchor on the heading
 	Items []*Item
 }
 
@@ -150,6 +152,10 @@ func (it *Item) render() string {
 		b.WriteString("!pin ")
 	}
 	b.WriteString(it.Text)
+	if it.ID != "" {
+		b.WriteString(" ^")
+		b.WriteString(it.ID)
+	}
 	return b.String()
 }
 
@@ -221,6 +227,10 @@ func (b *Board) FindByRawInSection(sectionTitle, raw string) *Item {
 	if s == nil {
 		return nil
 	}
+	// Compare with node anchors stripped so a caller holding a pre-anchor raw
+	// line (e.g. the web client, or a TUI rebase across an id-assigning save)
+	// still matches the same line once it has grown a " ^id" anchor on disk.
+	want := StripRawAnchor(raw)
 	var found *Item
 	var walk func(items []*Item)
 	walk = func(items []*Item) {
@@ -228,7 +238,7 @@ func (b *Board) FindByRawInSection(sectionTitle, raw string) *Item {
 			if found != nil {
 				return
 			}
-			if it.Raw() == raw {
+			if StripRawAnchor(it.Raw()) == want {
 				found = it
 				return
 			}

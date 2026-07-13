@@ -8,6 +8,45 @@ import (
 
 var itemRe = regexp.MustCompile(`^(\s*)- (?:\[([ >xX?])\] )?(.*)$`)
 
+// anchorRe matches a trailing block-ref anchor " ^<id>" (Obsidian-style) at the
+// very end of a line: some visible text, whitespace, a caret, then the id. The
+// id alphabet is base36 (assignment) but parsing tolerates any [A-Za-z0-9]
+// hand-written id. A caret anywhere else in the line is plain text.
+var anchorRe = regexp.MustCompile(`^(.*\S)\s+\^([A-Za-z0-9]+)$`)
+
+// splitAnchor separates a trailing " ^id" anchor from text, returning the text
+// without it and the id ("" when there is no anchor).
+func splitAnchor(text string) (rest, id string) {
+	if m := anchorRe.FindStringSubmatch(text); m != nil {
+		return m[1], m[2]
+	}
+	return text, ""
+}
+
+// StripRawAnchor removes a trailing " ^id" node anchor from a source line,
+// leaving everything else (indent, bullet, marker, text) intact. It is the
+// anchor-insensitive form of a raw line: two lines that differ only by their
+// node id compare equal after stripping. A line with no anchor is unchanged.
+func StripRawAnchor(line string) string {
+	rest, id := splitAnchor(line)
+	if id == "" {
+		return line
+	}
+	return rest
+}
+
+// StripAnchors removes the trailing node anchor from every line of content —
+// the whole-document form of StripRawAnchor, used by surfaces that diff raw
+// board text (web delivery receipts) so the one-time id-assignment churn does
+// not read as a change on every line.
+func StripAnchors(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		lines[i] = StripRawAnchor(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // Parse parses board markdown. It never fails: anything it doesn't understand
 // is kept as raw lines and reproduced verbatim by Render.
 func Parse(src string) *Board {
@@ -63,7 +102,8 @@ func Parse(src string) *Board {
 	for ; i < len(lines); i++ {
 		line := lines[i]
 		if title, ok := strings.CutPrefix(line, "## "); ok {
-			cur = &Section{Title: strings.TrimSpace(title)}
+			t, id := splitAnchor(strings.TrimSpace(title))
+			cur = &Section{Title: t, ID: id}
 			b.Sections = append(b.Sections, cur)
 			continue
 		}
@@ -130,6 +170,11 @@ func parseLine(line string) *Item {
 		it.Status = StatusBlocked
 	}
 	text := m[3]
+	// A trailing " ^id" anchor is the item's stable node id; strip it (like the
+	// leading markers) so it survives save round-trips via render() but never
+	// pollutes the display Text. Stripped before the leading markers since it is
+	// at the opposite end of the line.
+	text, it.ID = splitAnchor(text)
 	// Leading item markers are mutually exclusive and analogous: "!!" is urgent
 	// (inject once), "!pin" is pinned (re-inject on cadence). Strip whichever is
 	// present so the marker survives save round-trips via render() but never
@@ -182,7 +227,11 @@ func (b *Board) Render() string {
 		sb.WriteString(l + "\n")
 	}
 	for _, s := range b.Sections {
-		sb.WriteString("## " + s.Title + "\n")
+		sb.WriteString("## " + s.Title)
+		if s.ID != "" {
+			sb.WriteString(" ^" + s.ID)
+		}
+		sb.WriteString("\n")
 		renderItems(&sb, s.Items)
 	}
 	return sb.String()

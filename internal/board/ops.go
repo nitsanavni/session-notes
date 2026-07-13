@@ -20,6 +20,7 @@ import (
 // CLI's form). Section ops address by Section alone.
 type Op struct {
 	Name    string // add | reply | fork | edit | status | urgent | pin | archive | delete | log | title | add-section | rename-section | archive-section | delete-section
+	ID      string // node-id addressing (preferred); falls back to Section+Raw / Query
 	Section string
 	Raw     string
 	Query   string
@@ -44,6 +45,12 @@ var (
 // "3 items match; using the first" for Query addressing.
 func Apply(b *Board, op Op) (note string, err error) {
 	locate := func() (*Item, error) {
+		if op.ID != "" {
+			if it := b.FindByID(op.ID); it != nil {
+				return it, nil
+			}
+			return nil, fmt.Errorf("%w: no item with id %q", ErrOpNotFound, op.ID)
+		}
 		if op.Query != "" {
 			it, n := b.FindByQuery(op.Query)
 			if n == 0 {
