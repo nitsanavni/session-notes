@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/board/{id}/grants", s.handleAddGrant)
 	mux.HandleFunc("DELETE /api/board/{id}/grants", s.handleRevokeGrant)
 	mux.HandleFunc("GET /api/keymap", s.handleKeymap)
+	mux.HandleFunc("GET /api/me", s.handleMe)
 
 	var api http.Handler = mux
 	if !s.insecure {
@@ -690,6 +691,16 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleKeymap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, keymap.Web())
+}
+
+// handleMe reports the caller's identity so the browser can feature-detect the
+// cloud, admin-only affordances (the "share node" action). The `cloud` field is
+// always true here — the file-mode web server (internal/web) has no /api/me
+// route at all, so a 404 there tells the browser it is not talking to a cloud
+// server and the share action stays hidden.
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	id := s.identity(r)
+	writeJSON(w, map[string]any{"subject": id.Subject, "admin": id.Admin, "cloud": true})
 }
 
 // ---- token + grant management (admin only) ----

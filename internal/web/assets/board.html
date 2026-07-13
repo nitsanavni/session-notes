@@ -236,6 +236,16 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
    than clip. The panel is already max-height:88vh; this body takes the slack. */
 #helpbody { overflow-y: auto; flex: 1; min-height: 0; outline: none; }
 #histmodal .panel { width: min(640px, 92vw); }
+#sharemodal .panel { width: min(680px, 94vw); }
+#sharebody { display: flex; flex-direction: column; gap: .7rem; }
+.sharerow { display: flex; align-items: center; gap: .6rem; }
+.sharerow label, .sharefield label { min-width: 5.5rem; color: var(--dim); font-size: .82em; }
+.sharefield { display: flex; flex-direction: column; gap: .25rem; }
+.sharefield label { min-width: 0; }
+.sharecopy { display: flex; align-items: stretch; gap: .4rem; }
+.sharecopy pre { flex: 1; margin: 0; padding: .4rem .5rem; background: var(--panel-bg, rgba(127,127,127,.12));
+  border: 1px solid var(--border); border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: .82em; }
+#shareperm { background: none; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: .15rem .4rem; font: inherit; font-size: .85em; }
 #histlist { overflow-y: auto; font-size: .88em; }
 #histlist .hentry { margin-bottom: .55rem; }
 #histlist .hwho { color: var(--dim); }
@@ -432,6 +442,7 @@ form { display: contents; }
     <button id="searchbtn" title="search (/)">⌕</button>
     <button id="mapbtn" title="toggle map view (m)">◈</button>
     <button id="rawedit" title="edit board markdown (E)">✎</button>
+    <button id="sharebtn" title="share this node — mint a scoped attach link (s)" hidden>⤴</button>
     <button id="histbtn" title="history — what changed, by whom (H)">⌚</button>
     <button id="copypath" title="copy board file path (y)">⧉</button>
     <button id="helpbtn" title="keyboard help (?)">?</button>
@@ -470,6 +481,27 @@ form { display: contents; }
 <div class="modal" id="histmodal"><div class="panel">
   <div class="bar"><b>history</b><span class="dim">newest first · journaled edits only</span><button id="histclose">close</button></div>
   <div id="histlist"></div>
+</div></div>
+
+<div class="modal" id="sharemodal"><div class="panel">
+  <div class="bar"><b>share node</b><span class="dim">mint a scoped attach link · esc closes</span><button id="shareclose">close</button></div>
+  <div id="sharebody">
+    <div class="sharerow">
+      <label>node</label><span id="sharenode" class="dim"></span>
+    </div>
+    <div class="sharerow">
+      <label>access</label>
+      <select id="shareperm"><option value="write">write</option><option value="read">read</option></select>
+      <button id="sharemint">mint link</button>
+    </div>
+    <div id="shareout" hidden>
+      <div class="sharefield"><label>attach command (paste into a sub-agent)</label>
+        <div class="sharecopy"><pre id="sharecmd"></pre><button data-copy="sharecmd">copy</button></div></div>
+      <div class="sharefield"><label>browser URL</label>
+        <div class="sharecopy"><pre id="shareurl"></pre><button data-copy="shareurl">copy</button></div></div>
+      <div class="sharefield dim">Anyone with the link can access this node with the granted permission until the grant is revoked (<code>remote revoke</code>).</div>
+    </div>
+  </div>
 </div></div>
 
 <div class="modal" id="recentsmodal"><div class="panel">
@@ -1619,6 +1651,90 @@ async function copyPath() {
 }
 document.getElementById('copypath').addEventListener('click', copyPath);
 
+// ---- share node (cloud, admin only) ----
+// Feature-detected via GET /api/me: only a cloud server exposes that route, and
+// only an admin token reports admin:true. The file-mode web server (which has no
+// /api/me route) 404s, so canShare stays false and the ⤴ button + `s` key are
+// inert there. The action mints a scoped token bound to the selected node
+// (reusing the M4 grant endpoint, newToken flow) and shows a copyable attach
+// command + browser URL.
+let canShare = false;
+(async () => {
+  try {
+    const r = await fetch('/api/me');
+    if (!r.ok) return;
+    const me = await r.json();
+    canShare = !!(me && me.cloud && me.admin);
+    if (canShare) document.getElementById('sharebtn').hidden = false;
+    window.__sn && (window.__sn.canShare = canShare);
+  } catch {}
+})();
+
+// shareTarget resolves the node the share action addresses: the map's focused
+// node, else the outline cursor's item (or section). Returns {id,label} or null
+// when nothing addressable (no node id yet, or the center/whole board).
+function shareTarget() {
+  if (mapState.in) {
+    const n = (mapNodes || []).find(x => x.key === mapState.focus);
+    if (n && n.id) return { id: n.id, label: n.kind === 'section' ? n.title : (n.it ? n.it.text : n.title) };
+    return null;
+  }
+  const s = cursorStop();
+  if (!s) return null;
+  if (s.type === 'item' && s.it && s.it.id) return { id: s.it.id, label: s.it.text };
+  if (s.type === 'section' && cur) {
+    const sec = (cur.sections || []).find(x => x.title === s.title);
+    if (sec && sec.id) return { id: sec.id, label: sec.title };
+  }
+  return null;
+}
+
+let shareTargetInfo = null;
+function openShare() {
+  if (!canShare) { toast('sharing needs a cloud server and an admin token'); return; }
+  const t = shareTarget();
+  if (!t) { toast('select a node with an id to share'); return; }
+  shareTargetInfo = t;
+  document.getElementById('sharenode').textContent = `${t.label}  (${t.id})`;
+  document.getElementById('shareout').hidden = true;
+  toggleModal('sharemodal', true);
+}
+
+async function mintShare() {
+  if (!shareTargetInfo) return;
+  const perm = document.getElementById('shareperm').value;
+  const name = `share-${shareTargetInfo.id}-${Math.random().toString(36).slice(2, 7)}`;
+  let out;
+  try {
+    const r = await fetch(`${API}/grants`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newToken: name, root: shareTargetInfo.id, perm }),
+    });
+    if (!r.ok) { toast(`mint failed (${r.status})`); return; }
+    out = await r.json();
+  } catch { toast('mint failed'); return; }
+  const origin = location.origin;
+  const boardRef = `${origin}/b/${encodeURIComponent(ID)}#${shareTargetInfo.id}`;
+  const cmd = `session-notes login ${origin} --token ${out.token} && \\\n  session-notes link ${boardRef}`;
+  const url = `${origin}/b/${encodeURIComponent(ID)}?token=${encodeURIComponent(out.token)}#${shareTargetInfo.id}`;
+  document.getElementById('sharecmd').textContent = cmd;
+  document.getElementById('shareurl').textContent = url;
+  document.getElementById('shareout').hidden = false;
+  window.__sn && (window.__sn.lastShare = { token: out.token, root: out.root, perm: out.perm, cmd, url });
+}
+
+document.getElementById('sharebtn').addEventListener('click', openShare);
+document.getElementById('shareclose').addEventListener('click', () => toggleModal('sharemodal', false));
+document.getElementById('sharemint').addEventListener('click', mintShare);
+for (const btn of document.querySelectorAll('#sharemodal button[data-copy]')) {
+  btn.addEventListener('click', async () => {
+    const txt = document.getElementById(btn.dataset.copy).textContent;
+    try { await navigator.clipboard.writeText(txt); } catch {}
+    const was = btn.textContent; btn.textContent = 'copied!';
+    setTimeout(() => { btn.textContent = was; }, 1200);
+  });
+}
+
 // ---- modals ----
 function toggleModal(id, open) { document.getElementById(id).classList.toggle('open', open); }
 const modalOpen = () => !!document.querySelector('.modal.open');
@@ -2273,6 +2389,7 @@ function renderMapTools(n) {
   // keyboard-only): ⌖ re-roots on the focused node, ‹ steps back out.
   if (mapState.root !== 'center') btn('‹', 'focus out one level (esc)', () => mapFocusOut());
   if (n.kind !== 'center' && n.children.length) btn('⌖', 'focus into the subtree (f)', () => mapFocusInto(n));
+  if (canShare && n.id) btn('⤴', 'share this node (s)', () => openShare());
   if (n.kind === 'item') {
     btn('✎', 'edit (e)', () => mapEdit(n));
     btn('＋', 'add child (a)', () => mapAdd(n));
@@ -2600,7 +2717,7 @@ function handleMapKey(e) {
   const n = mapFocused();
   const HANDLED = new Set(['j', 'k', 'h', 'l', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight',
     'Enter', 'f', 'b', 'e', 'a', 'A', 'w', 'z', ' ', '!', 'p', 'd', 'D', 'o', 'M', 'm', 'q', 'u', '?', 'y', 'Escape',
-    '/', 'n', 'N', 'V', 'g', 'G', 'Tab', 'H', 'E', 'L', 'T']);
+    '/', 'n', 'N', 'V', 'g', 'G', 'Tab', 'H', 'E', 'L', 'T', 's']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   const refocus = key => { mapState.focus = key; renderMap(cur); };
   // 1-9 jump to the Nth section's node (document order) — outline parity.
@@ -2651,6 +2768,7 @@ function handleMapKey(e) {
     }
     case 'Enter': if (n) cycleFold(n); break;
     case 'f': mapFocusInto(n); break;
+    case 's': openShare(); break;
     // b toggles blocked [?] on the focused item — outline muscle memory beats
     // the old map-only "step out" binding, which lives on unambiguously as
     // Escape (it always shared the handler). Sections/center: no-op.
@@ -3251,7 +3369,7 @@ document.addEventListener('keydown', e => {
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
     ' ', 'b', '!', 'p', 'e', 'w', 'W', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'T', 'B', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
-    '/', 'n', 'N', 'z', 'V']);
+    '/', 'n', 'N', 'z', 'V', 's']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
@@ -3300,6 +3418,7 @@ document.addEventListener('keydown', e => {
     case 'm': enterMap(); break;
     case 'W': cycleWidth(); break;
     case 'z': focusFold(); break;
+    case 's': openShare(); break;
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
     case 'y': copyPath(); break;
