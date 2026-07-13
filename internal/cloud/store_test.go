@@ -55,7 +55,7 @@ func TestApplyBumpsVersion(t *testing.T) {
 	if version != 2 || !strings.Contains(content, "second") {
 		t.Fatalf("apply not persisted: v=%d\n%s", version, content)
 	}
-	hist, _ := s.History("b1")
+	hist, _ := s.History("b1", 0, 0)
 	if len(hist) != 1 || hist[0].Author != "tester" {
 		t.Fatalf("history=%+v", hist)
 	}

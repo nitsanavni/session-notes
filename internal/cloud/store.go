@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,14 +45,42 @@ type Store struct {
 // Open opens (creating if needed) the SQLite database at path, enables WAL, and
 // ensures the schema. Pass ":memory:" for tests.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	memory := path == ":memory:" || strings.Contains(path, ":memory:") || strings.Contains(path, "mode=memory")
+	dsn := path
+	if !memory {
+		// _txlock=immediate makes every write tx take the WAL write lock up front,
+		// so two writers to different boards contend deterministically (waiting out
+		// busy_timeout) instead of one hitting SQLITE_BUSY mid-transaction after a
+		// deferred read. Writes still serialize per board via the lock map.
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		// Pragmas ride in the DSN so EVERY pooled connection applies them (an
+		// Exec after Open only touches one connection of the pool). busy_timeout
+		// makes readers/writers wait out a held write lock instead of erroring.
+		dsn = path + sep + "_txlock=immediate" +
+			"&_pragma=busy_timeout(5000)" +
+			"&_pragma=journal_mode(WAL)" +
+			"&_pragma=foreign_keys(ON)"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	// modernc.org/sqlite is a single connection-pool; a memory db must not be
-	// closed/reopened between statements, so cap to one open connection which
-	// also keeps WAL writes serialized at the driver level.
-	db.SetMaxOpenConns(1)
+	if memory {
+		// modernc.org/sqlite is a single connection-pool; a memory db must not be
+		// closed/reopened between statements, so cap to one open connection which
+		// also keeps WAL writes serialized at the driver level. Each connection to
+		// ":memory:" is a *separate* database, so a pool would fracture the data.
+		db.SetMaxOpenConns(1)
+	} else {
+		// WAL supports one writer + many concurrent readers. A small read pool lets
+		// /history (and /healthz, and every other read) run alongside a write
+		// instead of queuing behind the single connection — the M8 head-of-line
+		// blocking fix. Writers still serialize (per-board lock + immediate txlock).
+		db.SetMaxOpenConns(8)
+	}
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA foreign_keys=ON",
@@ -90,8 +119,10 @@ CREATE TABLE IF NOT EXISTS ops (
     board_id TEXT NOT NULL,
     version  INTEGER NOT NULL,
     author   TEXT NOT NULL,
-    before   TEXT NOT NULL,
-    after    TEXT NOT NULL,
+    before   TEXT NOT NULL DEFAULT '',
+    after    TEXT NOT NULL DEFAULT '',
+    added    TEXT NOT NULL DEFAULT '',
+    removed  TEXT NOT NULL DEFAULT '',
     ts       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ops_board ON ops(board_id, id);
@@ -106,10 +137,140 @@ CREATE INDEX IF NOT EXISTS ops_board ON ops(board_id, id);
 	for _, alter := range []string{
 		`ALTER TABLE tokens ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tokens ADD COLUMN admin INTEGER NOT NULL DEFAULT 0`,
+		// M9: the ops journal moved from full before/after snapshots to stored
+		// line-diffs. Old dbs lack the added/removed columns; add them (benign
+		// duplicate error on an already-migrated db).
+		`ALTER TABLE ops ADD COLUMN added TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ops ADD COLUMN removed TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(alter)
 	}
-	return &Store{db: db, locks: map[string]*sync.Mutex{}, subs: map[string][]chan int64{}}, nil
+	s := &Store{db: db, locks: map[string]*sync.Mutex{}, subs: map[string][]chan int64{}}
+	// M9: convert any fat full-snapshot journal rows (pre-M9) to line-diffs and
+	// prune each board to journalKeep rows. Guarded by user_version so it runs at
+	// most once per db; a fresh db already writes the diff format.
+	if err := s.migrateJournal(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// journalKeep caps how many ops rows are retained per board — the /history
+// window. Diffs are small, so this bounds both disk and the unbounded row
+// growth the M8 soak surfaced (208k rows for 154KB of live board).
+const journalKeep = 500
+
+// pruneEvery amortizes journal pruning: writers prune once every pruneEvery
+// versions rather than on each write, so at most journalKeep+pruneEvery rows
+// accumulate per board between prunes.
+const pruneEvery = 64
+
+// migrateJournal is the one-time (per db) M9 conversion of the ops journal from
+// full before/after snapshots to stored line-diffs, plus a prune to journalKeep
+// rows per board. It is idempotent via PRAGMA user_version: a fresh db and an
+// already-migrated db skip the work.
+func (s *Store) migrateJournal() error {
+	var uv int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&uv); err != nil {
+		return err
+	}
+	if uv >= journalSchemaVersion {
+		return nil
+	}
+	// Convert legacy rows (those still carrying a full snapshot) to diffs.
+	rows, err := s.db.Query(`SELECT id, before, after FROM ops WHERE before<>'' OR after<>''`)
+	if err != nil {
+		return err
+	}
+	type conv struct {
+		id             int64
+		added, removed string
+	}
+	var todo []conv
+	for rows.Next() {
+		var id int64
+		var before, after string
+		if err := rows.Scan(&id, &before, &after); err != nil {
+			rows.Close()
+			return err
+		}
+		added, removed := board.DiffLines(before, after)
+		todo = append(todo, conv{id: id, added: joinLines(added), removed: joinLines(removed)})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, c := range todo {
+		if _, err := tx.Exec(`UPDATE ops SET added=?, removed=?, before='', after='' WHERE id=?`,
+			c.added, c.removed, c.id); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Prune every board down to journalKeep rows.
+	boardIDs, err := s.opsBoardIDs()
+	if err != nil {
+		return err
+	}
+	for _, id := range boardIDs {
+		if _, err := s.db.Exec(pruneSQL, id, id, journalKeep); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, journalSchemaVersion)); err != nil {
+		return err
+	}
+	// Reclaim the space the fat snapshots occupied.
+	_, _ = s.db.Exec(`VACUUM`)
+	return nil
+}
+
+// journalSchemaVersion marks the diff-journal format in PRAGMA user_version.
+const journalSchemaVersion = 1
+
+// pruneSQL keeps only the journalKeep newest ops rows for one board.
+const pruneSQL = `DELETE FROM ops WHERE board_id=? AND id NOT IN (
+    SELECT id FROM ops WHERE board_id=? ORDER BY id DESC LIMIT ?)`
+
+// opsBoardIDs returns the distinct board ids present in the ops journal.
+func (s *Store) opsBoardIDs() ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT board_id FROM ops`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// joinLines encodes a diff line list for storage. Diff lines are never blank
+// (DiffLines skips whitespace-only lines) so a newline join round-trips exactly;
+// the empty string encodes "no lines".
+func joinLines(lines []string) string { return strings.Join(lines, "\n") }
+
+// splitLines decodes a stored diff line list. Empty string decodes to nil.
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }
 
 // Close closes the underlying database.
@@ -295,28 +456,56 @@ func (s *Store) writeAndJournal(id, rendered string, version int, now int64, aut
 	})
 }
 
-// journalTx appends one ops journal row using the given transaction.
+// journalTx appends one ops journal row using the given transaction. It stores
+// the edit as a line-diff (added/removed) rather than full before/after
+// snapshots — the M9 fix for the O(ops × board_size) journal bloat the M8 soak
+// found (943 MB journal for 154 KB of live board). /history renders exactly
+// these line-diffs, so no fidelity is lost. Every pruneEvery-th version it also
+// prunes the board's journal to journalKeep rows.
 func journalTx(tx *sql.Tx, id string, version int, author, before, after string) error {
 	if author == "" {
 		author = "remote"
 	}
-	_, err := tx.Exec(`INSERT INTO ops(board_id, version, author, before, after, ts) VALUES(?,?,?,?,?,?)`,
-		id, version, author, before, after, time.Now().UnixNano())
-	return err
+	added, removed := board.DiffLines(before, after)
+	if _, err := tx.Exec(`INSERT INTO ops(board_id, version, author, added, removed, ts) VALUES(?,?,?,?,?,?)`,
+		id, version, author, joinLines(added), joinLines(removed), time.Now().UnixNano()); err != nil {
+		return err
+	}
+	if version%pruneEvery == 0 {
+		if _, err := tx.Exec(pruneSQL, id, id, journalKeep); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// HistoryEntry is one journaled write.
+// HistoryEntry is one journaled write, stored as a line-diff.
 type HistoryEntry struct {
+	ID      int64
 	Version int
 	Author  string
-	Before  string
-	After   string
+	Added   []string
+	Removed []string
 	TS      time.Time
 }
 
-// History returns a board's journaled writes, oldest first.
-func (s *Store) History(id string) ([]HistoryEntry, error) {
-	rows, err := s.db.Query(`SELECT version, author, before, after, ts FROM ops WHERE board_id=? ORDER BY id`, id)
+// History returns a board's journaled writes, newest first, capped at limit
+// (limit<=0 = journalKeep). When before>0 only rows with a smaller op id are
+// returned — the pagination cursor, so /history can page backward without
+// scanning the whole journal.
+func (s *Store) History(id string, limit, before int) ([]HistoryEntry, error) {
+	if limit <= 0 {
+		limit = journalKeep
+	}
+	query := `SELECT id, version, author, added, removed, ts FROM ops WHERE board_id=?`
+	args := []any{id}
+	if before > 0 {
+		query += ` AND id<?`
+		args = append(args, before)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -324,10 +513,13 @@ func (s *Store) History(id string) ([]HistoryEntry, error) {
 	var out []HistoryEntry
 	for rows.Next() {
 		var e HistoryEntry
+		var added, removed string
 		var ts int64
-		if err := rows.Scan(&e.Version, &e.Author, &e.Before, &e.After, &ts); err != nil {
+		if err := rows.Scan(&e.ID, &e.Version, &e.Author, &added, &removed, &ts); err != nil {
 			return nil, err
 		}
+		e.Added = splitLines(added)
+		e.Removed = splitLines(removed)
 		e.TS = time.Unix(0, ts)
 		out = append(out, e)
 	}
