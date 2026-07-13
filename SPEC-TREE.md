@@ -297,3 +297,51 @@ and the upgrade procedure (idempotent `ADD COLUMN` migrations = forward-only).
 3. `/healthz` returns 200 with no auth on a secured server.
 4. An oversized POST body is refused 413.
 5. Graceful shutdown drains and closes the DB on SIGTERM.
+
+## M6 (CLI ergonomics for humans + agents, implemented)
+
+Three dogfood-born conveniences; no protocol/access-model change beyond one SSE
+query param.
+
+### Per-directory board link (`link`/`unlink`/`link --show`)
+
+`session-notes link <ref>` pins a default board for the cwd (railway-style), so
+`edit`/`watch` need no `--board`. `<ref>` is anything `--board` accepts: a local
+path (stored absolute) or `http(s)://host/b/<board>[#<node>]`. Storage is a
+map of absolute-dir → ref in `links.json` (config dir, 0600, beside
+`tokens.json`); lookups walk up parent dirs, git-style. `unlink` drops the cwd's
+entry; `link --show` prints the effective ref and the directory it came from.
+
+**Resolution priority** (edit + watch): explicit `--board`/`--session` > the
+directory's link > error. An explicit flag always wins. A `#<node>` in a *local*
+linked ref becomes the default `--root` (edit) / `--node` (watch); a remote ref
+keeps its fragment for `ParseRef`, same as `--board`. The TUI's session/pane
+resolution is unchanged (link scopes to the `--board`-taking commands).
+
+### `watch --json`
+
+Each reported change is one JSON line — `{"op":"add"|"remove","line","id",
+"author","board","node"}` — for agents that parse instead of scraping `+/-`
+lines. `line` is the item's source with its `^id` anchor stripped, `id` that
+anchor, `board` the ref, `node` the watch root. Works for the local file watch
+and the remote SSE watch; implies `--no-notes` (no JSON shape for note events).
+`author` is filled only when known (empty for the file watcher and SSE). The
+human `+/-` diff stays the default.
+
+### Self-edit suppression for remote watch (`watch --ignore-author`)
+
+Local watch already suppresses self-edits via the shared `--snapshot`; the
+remote SSE path had nothing. `watch --ignore-author <name>` passes
+`?ignoreAuthor=<name>` to the events stream; the server drops any change whose
+journalled ops (the `ops` table already records author per version) are **all**
+authored by that name — filtering lives server-side at the SSE handler via
+`Store.AuthorsSince`. A remote `edit` already sends a stable author: the client
+sends no author, and the server defaults it to the token subject. So an agent
+loop is: edit as subject S, `watch --ignore-author S` — no own-echo wakeups.
+
+### Exit criteria (met)
+
+1. link/unlink round-trip incl. parent-dir walk; explicit `--board` beats a link.
+2. `watch --json` emits the documented line shape (local file + remote httptest).
+3. ignore-author end-to-end: the watcher's own edit is silent, another author's
+   edit fires.

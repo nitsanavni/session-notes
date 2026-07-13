@@ -134,7 +134,23 @@ TUI uses), so your write never clobbers the user's concurrent edit and you never
 reinvent an flock script.
 
 Target the board with --board <path> (primary for an agent) or --session <id>
-(resolved to <boards-dir>/<id>.md). Every write is SILENT on success — unless
+(resolved to <boards-dir>/<id>.md). --board also accepts a remote board URL
+(http(s)://host/b/<board>[#<node>]) — edit/watch treat it like a local file.
+
+Board resolution priority (edit + watch), highest first:
+  1. explicit --board <ref> (or --session <id>)
+  2. the directory's linked board: "session-notes link <ref>" pins a default
+     board for the cwd (walks up parent dirs, git-style). A #<node> in a local
+     linked ref becomes the default --root (edit) / --node (watch).
+  3. otherwise the command errors "a board is required".
+An explicit flag ALWAYS wins over a link. Link once, then run bare commands:
+  session-notes link ./board.md          # or a remote URL, or …/b/board#<node>
+  session-notes edit add Threads "hi"    # no --board needed
+  session-notes watch --once             # ditto
+  session-notes link --show              # print the effective ref + its source
+  session-notes unlink                   # drop the cwd's link
+
+Every write is SILENT on success — unless
 --refresh-snapshot finds external changes the monitor has not delivered yet
 (see below) — and exits non-zero with a one-line reason on failure.
 
@@ -303,7 +319,21 @@ Paste the attach line into the sub-agent. It now watches and edits that node as
 its whole world with real auth behind it — hand an agent one node, nothing else
 reachable. Manage grants with ` + "`remote grants <url>/b/BOARD`" + ` (list) and
 ` + "`remote revoke <url>/b/BOARD --token-name scout`" + `. Grant an existing token's
-identity instead of minting with ` + "`--token-name`" + `.`,
+identity instead of minting with ` + "`--token-name`" + `.
+
+Simpler sub-agent loop — link once, then bare commands. After login, pin the
+scoped ref for the working dir so every command drops --board:
+
+  session-notes login https://host --token <T>
+  session-notes link 'https://host/b/BOARD#<id>'   # #<id> becomes the default node
+  session-notes watch --once --ignore-author scout  # react to OTHERS' edits only
+  session-notes edit reply "…" "scout: done"        # writes as subject "scout"
+
+The edit's author defaults to the token's subject server-side (here "scout"), so
+` + "`watch --ignore-author scout`" + ` suppresses the agent's own echo: the server drops
+any change whose journalled ops are all authored by that name. Edit as subject
+S, watch --ignore-author S — no more own-echo wakeups. (Local file watch uses
+--snapshot self-edit suppression instead; --ignore-author is the remote path.)`,
 
 	"server": `Cloud server — run session-notes for agents anywhere
 
