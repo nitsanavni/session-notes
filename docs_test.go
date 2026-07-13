@@ -26,7 +26,7 @@ func TestDocTopicsNonEmpty(t *testing.T) {
 
 func TestDocTopicNamesOrder(t *testing.T) {
 	got := docTopicNames()
-	want := []string{"protocol", "monitor", "conflicts", "cli", "subtree", "headless", "blurb"}
+	want := []string{"protocol", "monitor", "conflicts", "cli", "subtree", "server", "headless", "blurb"}
 	if len(got) != len(want) {
 		t.Fatalf("topics = %v, want %v", got, want)
 	}

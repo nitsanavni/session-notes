@@ -241,3 +241,59 @@ the final landing).
 3. Two remote writers racing on the same node lose no writes and never 5xx.
 4. CLI grant/list/revoke round-trip against an httptest server; a revoked token
    drops to 404.
+
+## M5 (deployable + durable, implemented)
+
+M5 makes the M3/M4 server operable in production: token lifecycle, layered
+durability, deploy artifacts, and operational hardening. No protocol changes —
+the wire contract and access model are unchanged.
+
+### Token lifecycle
+
+- `server token list` — audit table (name, subject, admin, created) from the
+  local `--db`; never the secret (only the SHA-256 hash is stored).
+- `server token revoke <name>` — deletes every token under a name; the next
+  request bearing a revoked secret 401s (the `ValidToken` full-table scan no
+  longer matches). Same local-`--db` model as `token create`.
+
+### Durability (three independent layers)
+
+- **Bytes / point-in-time** — Litestream (`deploy/litestream.yml`) streams the
+  SQLite db to S3-compatible storage, env-driven credentials, ~1s lag.
+- **Second provider** — `deploy/backup.sh`: nightly `sqlite3 VACUUM INTO`
+  (consistent, no downtime) + retention ladder pushed via restic *or* rclone
+  (`BACKUP_TOOL` selects; provider-agnostic env). Cron-ready.
+- **Format** — `server export --dir <dir>` writes each board as a re-parseable
+  `<id>.md`; `remote pull --all <url> <dir>` is the HTTP-side equivalent (admin
+  token). Boards outlive the engine as plain markdown.
+
+### Operational hardening (code)
+
+- Graceful shutdown: `SIGTERM`/`SIGINT` stops accepting, drains in-flight
+  requests (SSE streams end on request-context cancel), then closes the DB
+  (10s budget) via `http.Server.Shutdown`.
+- `GET /healthz` — unauthenticated liveness (200 `ok`; 503 if the DB ping
+  fails), outside the auth wrap and the body guard.
+- Access log: one stderr line per request (method, path, status, duration),
+  via a status-recording, `Flusher`-preserving middleware.
+- Body guard: POST/PUT over 1 MiB refused `413` before any handler (Content-
+  Length check + `http.MaxBytesReader`).
+
+### Deploy artifacts (`deploy/`)
+
+Multi-stage static `Dockerfile` (`CGO_ENABLED=0`, distroless runtime) +
+`docker-compose.yml` (server + litestream sidecar + Caddy TLS, named volumes);
+`Caddyfile` (automatic HTTPS, SSE-friendly proxy); `session-notes.service`
+(bare-systemd route, hardened, SIGTERM stop); `backup.sh`; and `README.md` — a
+runbook: Hetzner from zero, both install routes, token bootstrap, litestream,
+backup cron, restore drill (litestream restore + integrity/export verification),
+and the upgrade procedure (idempotent `ADD COLUMN` migrations = forward-only).
+
+### Exit criteria (met)
+
+1. Token list/revoke round-trip in the store; a revoked token stops validating.
+2. `server export` (and the render round-trip) produces boards that re-parse
+   with their sections/items intact.
+3. `/healthz` returns 200 with no auth on a secured server.
+4. An oversized POST body is refused 413.
+5. Graceful shutdown drains and closes the DB on SIGTERM.

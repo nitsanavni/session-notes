@@ -687,6 +687,36 @@ zoom (`f`/`b`) re-roots on a node id (so a zoom survives edits), and the web UI
 deep-links a zoomed view as `/b/{board}#<node-id>` (the fragment updates as you
 zoom in and out, and the breadcrumb steps back out). See `docs subtree`.
 
+## Cloud — run a server for agents anywhere
+
+`session-notes server` is the cloud backend: a SQLite-backed (WAL, pure-Go, no
+cgo) HTTP+SSE server that lets any Claude session anywhere attach to a board — or
+a single granted subtree — with the same watch/edit protocol as a local file.
+Tokens carry identity; grants bind a token to a board (or node) at
+`read|write|admin`, and the subtree carve-out above becomes a *server-enforced*
+permission (see [Subtree attach](#subtree-attach--zoom-as-a-permission-boundary)
+and `session-notes docs subtree`).
+
+```sh
+session-notes server --db ./server.db                 # refuses to start with no tokens
+session-notes server token create --name ops          # admin bootstrap token (printed once)
+session-notes server token list                        # audit; revoke <name> to kill a token
+session-notes login https://host --token <ops-token>
+session-notes remote new https://host myboard
+session-notes remote grant https://host/b/myboard#<node> --new-token scout --perm write
+```
+
+Operational surface: `GET /healthz` (no auth), one stderr access-log line per
+request, a 1 MiB POST body guard (`413`), and graceful `SIGTERM` shutdown.
+Durability is layered — Litestream continuous S3 replication, a nightly
+`VACUUM INTO` backup to a second provider, and a markdown export
+(`server export --dir` / `remote pull --all`) for format durability.
+
+The full deployment runbook — Hetzner VPS from zero, Docker Compose **and** bare
+systemd, Caddy automatic TLS, litestream, backup cron, restore drill, and
+upgrades — lives in [`deploy/README.md`](deploy/README.md). Quick reference:
+`session-notes docs server`.
+
 ## Footprint — what lives outside this repo
 
 Everything the tool creates or touches outside the repo, and why:

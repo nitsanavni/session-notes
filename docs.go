@@ -304,6 +304,37 @@ its whole world with real auth behind it — hand an agent one node, nothing els
 reachable. Manage grants with ` + "`remote grants <url>/b/BOARD`" + ` (list) and
 ` + "`remote revoke <url>/b/BOARD --token-name scout`" + `. Grant an existing token's
 identity instead of minting with ` + "`--token-name`" + `.`,
+
+	"server": `Cloud server — run session-notes for agents anywhere
+
+` + "`session-notes server`" + ` is the SQLite-backed cloud backend: any Claude session
+anywhere attaches to a board (or a granted subtree) with the same watch/edit
+protocol as a local file. Tokens carry identity; grants are the access model
+(see ` + "`docs subtree`" + ` for the carve-out handoff).
+
+Run it (refuses to start with no tokens unless --insecure = loopback dev only):
+
+  session-notes server --addr 127.0.0.1:7099 --db ./server.db
+  session-notes server token create --name ops        # admin bootstrap token, printed once
+  session-notes server token list                     # audit: name/subject/admin/created
+  session-notes server token revoke <name>            # immediate; next request 401s
+
+Durability layers (details + a full VPS runbook in deploy/README.md):
+
+  - Litestream streams the SQLite db to S3 (deploy/litestream.yml).
+  - Nightly sqlite3 VACUUM INTO + retention ladder to a 2nd provider
+    (deploy/backup.sh, restic or rclone).
+  - Format durability — export every board as re-parseable <id>.md:
+      session-notes server export --dir ./boards          # against the db
+      session-notes remote pull --all https://host ./boards   # over HTTP (admin)
+
+Operational surface: GET /healthz (no auth, 200 ok) for probes; one stderr log
+line per request (method path status duration); POST/PUT bodies over 1 MiB are
+refused 413; SIGTERM/SIGINT shut down gracefully (drain SSE, close the db).
+
+Deploy artifacts live in deploy/: Dockerfile + docker-compose.yml (server +
+litestream + Caddy TLS), a session-notes.service systemd unit, a Caddyfile, and
+the runbook (Hetzner from zero, restore drill, upgrades).`,
 }
 
 // runDocs implements `session-notes docs [topic]`: print a topic's recipe, or
@@ -347,7 +378,7 @@ func runDocs(args []string) int {
 
 // docTopicNames returns the topic names in a stable, meaningful order.
 func docTopicNames() []string {
-	order := []string{"protocol", "monitor", "conflicts", "cli", "subtree", "headless", "blurb"}
+	order := []string{"protocol", "monitor", "conflicts", "cli", "subtree", "server", "headless", "blurb"}
 	// Guard against a topic being added to the map but not the order list.
 	seen := map[string]bool{}
 	for _, t := range order {
