@@ -17,7 +17,7 @@ import (
 func runEdit(args []string) int {
 	// Pull recognized flags out of the argument list; the remainder are the
 	// subcommand's positional arguments. Flags may appear anywhere.
-	var boardPath, session, snapshot, author string
+	var boardPath, session, snapshot, author, id string
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -30,7 +30,7 @@ func runEdit(args []string) int {
 		}
 		switch a {
 		case "-h", "--help":
-			fmt.Println("usage: session-notes edit <add|reply|fork|status|log|title|replace|undo|redo> [--board <path> | --session <id>] [--refresh-snapshot <path>] [--as <author>] args…")
+			fmt.Println("usage: session-notes edit <add|reply|fork|set|status|log|title|replace|undo|redo> [--board <path> | --session <id>] [--refresh-snapshot <path>] [--as <author>] [--id <id>] args…")
 			return 0
 		case "--board":
 			if v, ok := takeVal(); ok {
@@ -56,13 +56,19 @@ func runEdit(args []string) int {
 			} else {
 				return editErr("--as needs an author")
 			}
+		case "--id":
+			if v, ok := takeVal(); ok {
+				id = v
+			} else {
+				return editErr("--id needs a node id")
+			}
 		default:
 			pos = append(pos, a)
 		}
 	}
 
 	if len(pos) == 0 {
-		return editErr("usage: session-notes edit <add|reply|fork|status|log|title|replace|undo|redo> [flags] args…")
+		return editErr("usage: session-notes edit <add|reply|fork|set|status|log|title|replace|undo|redo> [flags] args…")
 	}
 	sub := pos[0]
 	rest := pos[1:]
@@ -81,16 +87,39 @@ func runEdit(args []string) int {
 	case "reply":
 		// In-thread semantics via the shared op layer: replying to a reply
 		// continues the conversation flat; use fork to nest deliberately.
+		// --id addresses the target node directly; otherwise a <query> substring.
+		if id != "" {
+			if len(rest) != 1 {
+				return editErr("usage: session-notes edit reply --id <id> <text>")
+			}
+			return editApplyOp(path, snapshot, board.Op{Name: "reply", ID: id, Text: rest[0]})
+		}
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit reply <query> <text>")
 		}
 		return editApplyOp(path, snapshot, board.Op{Name: "reply", Query: rest[0], Text: rest[1]})
 	case "fork":
+		if id != "" {
+			if len(rest) != 1 {
+				return editErr("usage: session-notes edit fork --id <id> <text>")
+			}
+			return editApplyOp(path, snapshot, board.Op{Name: "fork", ID: id, Text: rest[0]})
+		}
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit fork <query> <text>")
 		}
 		return editApplyOp(path, snapshot, board.Op{Name: "fork", Query: rest[0], Text: rest[1]})
 	case "status":
+		if id != "" {
+			if len(rest) != 1 {
+				return editErr("usage: session-notes edit status --id <id> <open|wip|done|blocked|none>")
+			}
+			st, ok := parseState(rest[0])
+			if !ok {
+				return editErr(fmt.Sprintf("unknown status %q; use open|wip|done|blocked|none", rest[0]))
+			}
+			return editApplyOp(path, snapshot, board.Op{Name: "status", ID: id, Status: st})
+		}
 		if len(rest) != 2 {
 			return editErr("usage: session-notes edit status <query> <open|wip|done|blocked|none>")
 		}
@@ -99,6 +128,15 @@ func runEdit(args []string) int {
 			return editErr(fmt.Sprintf("unknown status %q; use open|wip|done|blocked|none", rest[1]))
 		}
 		return editApplyOp(path, snapshot, board.Op{Name: "status", Query: rest[0], Status: st})
+	case "set":
+		// Replace an item's text, addressed by --id (the id-native "replace").
+		if id == "" {
+			return editErr("usage: session-notes edit set --id <id> <text>")
+		}
+		if len(rest) != 1 {
+			return editErr("usage: session-notes edit set --id <id> <text>")
+		}
+		return editApplyOp(path, snapshot, board.Op{Name: "edit", ID: id, Text: rest[0]})
 	case "log":
 		if len(rest) != 1 {
 			return editErr("usage: session-notes edit log <text>")
@@ -181,6 +219,9 @@ func editApplyOp(path, snapshot string, op board.Op) int {
 		if aerr != nil {
 			return "", aerr
 		}
+		// Lazy, write-driven id assignment: any save through the op layer stamps
+		// ids on every node still lacking one (one-time churn per board).
+		b.EnsureIDs()
 		return b.Render(), nil
 	})
 	if err != nil {

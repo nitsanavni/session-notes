@@ -139,6 +139,50 @@ func TestEditSubcommands(t *testing.T) {
 	}
 }
 
+// TestEditByID exercises --id addressing: a first op stamps node ids, then a
+// subsequent op targets an item by its stable id (status/reply/set).
+func TestEditByID(t *testing.T) {
+	p := writeSample(t)
+	// First op-layer save assigns ids to the whole board.
+	if code := runEdit([]string{"add", "Plan", "id target", "--board", p}); code != 0 {
+		t.Fatalf("seed add code=%d", code)
+	}
+	b, err := board.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, _ := b.FindByQuery("id target")
+	if it == nil || it.ID == "" {
+		t.Fatalf("seed item has no id: %+v", it)
+	}
+	id := it.ID
+
+	// status by id
+	if code := runEdit([]string{"status", "--id", id, "done", "--board", p}); code != 0 {
+		t.Fatalf("status --id code=%d", code)
+	}
+	// set (text replace) by id
+	if code := runEdit([]string{"set", "--id", id, "renamed target", "--board", p}); code != 0 {
+		t.Fatalf("set --id code=%d", code)
+	}
+	// reply by id
+	if code := runEdit([]string{"reply", "--id", id, "claude: on it", "--board", p}); code != 0 {
+		t.Fatalf("reply --id code=%d", code)
+	}
+	got := read(t, p)
+	if !strings.Contains(got, "- [x] renamed target ^"+id) {
+		t.Errorf("status/set by id not applied:\n%s", got)
+	}
+	if !strings.Contains(got, "  - claude: on it ^") {
+		t.Errorf("reply by id not applied:\n%s", got)
+	}
+
+	// Unknown id fails.
+	if code := runEdit([]string{"status", "--id", "nope99", "done", "--board", p}); code != 2 {
+		t.Errorf("unknown id: want code 2, got %d", code)
+	}
+}
+
 // TestEditResolveBySession checks --session resolves via the boards dir.
 func TestEditUndoRedo(t *testing.T) {
 	p := writeSample(t)
