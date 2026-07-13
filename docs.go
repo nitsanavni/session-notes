@@ -279,7 +279,31 @@ Spawn pattern: give the sub-agent BOARD + the node id and these two commands.
 It watches --node to react to changes in its slice and edits --root to write
 back, exactly as the top-level agent uses the whole board — same protocol, one
 node deep. Views follow: the TUI map zoom (f/b) and the web #<node-id> URL
-fragment both re-root on the same node id, so a zoomed view is shareable.`,
+fragment both re-root on the same node id, so a zoomed view is shareable.
+
+Authenticated carve-out (cloud) — real auth, one node as the world
+
+On a ` + "`session-notes server`" + ` the carve-out becomes an enforced permission,
+not a convention. A grant binds a token to (board, node, read|write): a
+subtree-scoped token literally cannot fetch, watch, or edit a sibling — the
+server forces every op's root to the granted node, scopes the SSE stream, and
+serves a board view containing only that subtree.
+
+Mint a scoped token and print an attach line in one step (admin token required,
+stored by ` + "`session-notes login`" + `):
+
+  session-notes remote grant https://host/b/BOARD#<id> --new-token scout --perm write
+  # prints:
+  #   granted subtree #<id> (write) to "scout"
+  #   attach: session-notes login https://host --token <T> && \
+  #           session-notes edit --board 'https://host/b/BOARD#<id>'
+  #   token: <T>
+
+Paste the attach line into the sub-agent. It now watches and edits that node as
+its whole world with real auth behind it — hand an agent one node, nothing else
+reachable. Manage grants with ` + "`remote grants <url>/b/BOARD`" + ` (list) and
+` + "`remote revoke <url>/b/BOARD --token-name scout`" + `. Grant an existing token's
+identity instead of minting with ` + "`--token-name`" + `.`,
 }
 
 // runDocs implements `session-notes docs [topic]`: print a topic's recipe, or

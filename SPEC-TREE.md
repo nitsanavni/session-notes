@@ -158,3 +158,86 @@ equivalent of `watch --node`.
    lose no writes; a `--node`-scoped remote watch fires only for its subtree.
 4. `--board http(s)://…` routes `edit` and `watch` to the remote backend; a
    `#<node>` fragment supplies a default `--root` / watch scope.
+
+## M4 (multi-user attach as the permission model, implemented)
+
+M4 turns the M2/M3 subtree carve-out into the product's real access-control
+model: tokens carry identity, grants bind a token to a board (or a node within
+it) with a permission level, and a subtree-scoped token literally cannot see or
+touch anything outside its granted node — enforced server-side at the same op
+choke point the local carve-out uses.
+
+### Identity + grants
+
+- **Tokens** gain `subject` and `admin` columns. Every authenticated request
+  resolves to an `Identity{Subject, Admin}` (stashed in the request context by
+  the auth middleware). The journalled `author` defaults to the token subject
+  when the client sends none. `server token create --name <n>` mints an
+  **all-boards admin bootstrap token** (the operator's own key) — the sane
+  default so a fresh server is usable; scoped, non-admin tokens are minted only
+  through grants. Existing (pre-M4) dbs are migrated with `ALTER TABLE ADD
+  COLUMN` (idempotent).
+- **`grants`** table: `(subject, board_id, root_node_id, perms, created)`, one
+  row per `(subject, board)` (re-granting upserts). `root_node_id` empty = whole
+  board. `perms` ∈ `read|write|admin` (ranked; a check requires "at least").
+
+### Enforcement (single `authorize(board, need)` per handler)
+
+- **No grant → 404** on that board (existence is not leaked; admin identities
+  get an implicit whole-board admin grant on every board).
+- **read** → `GET` board/raw/events/page allowed; `POST edit` refused **403**.
+- **write + root_node_id** → the carve-out is **mandatory**: the server forces
+  every op's `Op.Root` to the granted node and refuses a client-supplied root
+  that isn't the grant root (**403**); ID/query/section addressing outside the
+  subtree is then refused by the existing op-layer scope check (**400**). SSE is
+  forced to `?node=<grant root>`; `GET /api/board` returns only the granted
+  subtree via `Board.Scoped` (reuses the same Section/Item pointers, so a scoped
+  agent's board JSON has no siblings) plus a `scope` field the browser shows as
+  a "scoped view" badge. Whole-blob `PUT …/raw` and `history` are refused for a
+  subtree-scoped token (they'd bypass or leak the carve-out).
+- **admin** → manage boards + grants; `POST /api/boards` and all grant/token
+  endpoints require admin.
+
+### Endpoint additions
+
+| Method & path | Purpose (admin-only) |
+| --- | --- |
+| `POST /api/tokens` | mint a token `{name,subject?,admin?}` → `{token,subject}` |
+| `GET /api/board/{id}/grants` | list a board's grants |
+| `POST /api/board/{id}/grants` | grant `{perm,root,subject\|tokenName\|newToken}`; `newToken` mints a token + grant in one step → `{subject,perm,root,token?}` |
+| `DELETE /api/board/{id}/grants` | revoke `{subject\|tokenName}` |
+
+### CLI
+
+- `remote grant <url>/b/<board>[#<node>] --new-token <n> --perm read|write` —
+  mint a scoped token + grant and print an **attach line** (login + edit,
+  scoped to the subtree) to paste into a sub-agent: the headline carve-out
+  handoff. `--token-name <n>` grants an existing token's subject instead.
+- `remote grants <url>/b/<board>` lists; `remote revoke … --token-name/--subject`
+  removes. All use the caller's stored admin token (`session-notes login`).
+
+### Concurrency hardening
+
+`RemoteTree.Apply` sends its last-seen version as an optimistic `base` and, on
+409, refetches and retries the surgical op (bounded), then falls back to an
+unconditional apply. Two writers racing on the **same** node get last-writer-
+wins with **no dropped write and no 5xx** (the per-board write lock serializes
+the final landing).
+
+### Bootstrap flow
+
+1. `session-notes server token create --name ops` → admin token (printed once).
+2. `session-notes login https://host --token <ops-token>`.
+3. `session-notes remote new https://host myboard` (admin).
+4. `session-notes remote grant https://host/b/myboard#<node> --new-token scout
+   --perm write` → paste the printed attach line to a sub-agent.
+
+### Exit criteria (met)
+
+1. Grants CRUD + token identity round-trip; perm matrix enforced
+   (none/read/write-scoped/admin × GET/POST/SSE).
+2. A subtree-scoped token's board view and SSE contain only the granted subtree;
+   a write addressing outside the granted root is refused (403/400) end-to-end.
+3. Two remote writers racing on the same node lose no writes and never 5xx.
+4. CLI grant/list/revoke round-trip against an httptest server; a revoked token
+   drops to 404.
