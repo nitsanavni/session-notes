@@ -186,6 +186,7 @@ func servePage(w http.ResponseWriter, name string) {
 // ---- JSON model ----
 
 type itemJSON struct {
+	ID           string     `json:"id,omitempty"`
 	Text         string     `json:"text"`
 	Raw          string     `json:"raw"`
 	Status       string     `json:"status"`
@@ -198,6 +199,7 @@ type itemJSON struct {
 
 type sectionJSON struct {
 	Title string     `json:"title"`
+	ID    string     `json:"id,omitempty"`
 	Items []itemJSON `json:"items"`
 }
 
@@ -267,6 +269,13 @@ func itemsJSON(items []*board.Item) []itemJSON {
 			Children:     itemsJSON(it.Children),
 		}
 		if it.IsItem() {
+			j.ID = it.ID
+			// The " ^id" node anchor is an addressing detail, not user text: the
+			// client keys, diffs, and displays items by their anchor-free raw so
+			// the one-time id-assignment churn is invisible. Server-side raw
+			// addressing is anchor-insensitive (FindByRawInSection), and the id
+			// travels separately, so nothing is lost.
+			j.Raw = board.StripRawAnchor(it.Raw())
 			j.Status = statusString(it.Status)
 			j.Urgent = it.Urgent
 			j.Pinned = it.Pinned
@@ -332,7 +341,7 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		CanRedo: canRedo,
 	}
 	for _, sec := range b.Sections {
-		resp.Sections = append(resp.Sections, sectionJSON{Title: sec.Title, Items: itemsJSON(sec.Items)})
+		resp.Sections = append(resp.Sections, sectionJSON{Title: sec.Title, ID: sec.ID, Items: itemsJSON(sec.Items)})
 	}
 	// Delivery receipts: lines the watch snapshot does not contain yet are
 	// changes not delivered to the watching agent (watch and edit
@@ -340,7 +349,11 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	// printed to it). No snapshot sidecar → no watcher → no markers.
 	if snap, err := os.ReadFile(board.WatchSnapshotPath(path)); err == nil {
 		if cur, err := os.ReadFile(path); err == nil {
-			added, _ := board.DiffLines(string(snap), string(cur))
+			// Diff with node anchors stripped so the one-time id-assignment churn
+			// (every line grows a " ^id" on the first op-layer save) is not read
+			// as an undelivered change on every item; the added lines then match
+			// the anchor-free itemJSON.Raw markUndelivered walks.
+			added, _ := board.DiffLines(board.StripAnchors(string(snap)), board.StripAnchors(string(cur)))
 			markUndelivered(resp.Sections, added)
 		}
 	}
@@ -497,6 +510,7 @@ type editReq struct {
 	// log | title | add-section | rename-section | archive-section |
 	// delete-section | set-content | undo | redo
 	Op      string `json:"op"`
+	ID      string `json:"id"`
 	Section string `json:"section"`
 	Raw     string `json:"raw"`
 	Text    string `json:"text"`
@@ -558,6 +572,8 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 			if aerr := applyEdit(b, req); aerr != nil {
 				return "", aerr
 			}
+			// Lazy id assignment on the op-layer save path (see board.EnsureIDs).
+			b.EnsureIDs()
 			return b.Render(), nil
 		})
 	}
@@ -578,7 +594,7 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 // the shared op layer — the same dispatcher the edit CLI uses, so every verb
 // means one thing everywhere.
 func applyEdit(b *board.Board, req editReq) error {
-	op := board.Op{Name: req.Op, Section: req.Section, Raw: req.Raw, Text: req.Text, Author: req.Author}
+	op := board.Op{Name: req.Op, ID: req.ID, Section: req.Section, Raw: req.Raw, Text: req.Text, Author: req.Author}
 	switch req.Op {
 	case "status":
 		st, ok := parseStatus(req.Status)

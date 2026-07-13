@@ -1160,28 +1160,28 @@ function followAfterRemoval(s, target) {
 
 // ---- item actions, shared by hover buttons and keys ----
 const act = {
-  cycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: NEXT[it.status] || 'open' }); },
+  cycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, id: it.id, raw: it.raw, status: NEXT[it.status] || 'open' }); },
   // Map-view cycle: 5-state (none→open→wip→done→blocked→none), so a plain
   // bullet can be marked and a marker cleared from the map (TUI mapNextStatus).
-  mapCycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: MAP_NEXT[it.status] || 'open' }); },
-  pin: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'pin', section: s, raw: it.raw, pinned: !it.pinned }); },
-  blocked: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, raw: it.raw, status: it.status === 'blocked' ? 'open' : 'blocked' }); },
-  urgent: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'urgent', section: s, raw: it.raw, urgent: !it.urgent }); },
+  mapCycle: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, id: it.id, raw: it.raw, status: MAP_NEXT[it.status] || 'open' }); },
+  pin: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'pin', section: s, id: it.id, raw: it.raw, pinned: !it.pinned }); },
+  blocked: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'status', section: s, id: it.id, raw: it.raw, status: it.status === 'blocked' ? 'open' : 'blocked' }); },
+  urgent: (s, it) => { cursorFollow = { section: s, text: it.text }; return post({ op: 'urgent', section: s, id: it.id, raw: it.raw, urgent: !it.urgent }); },
   // Archive/delete keep the selection close: the next sibling in document
   // order takes the removed item's place; the last item falls to the previous
   // one; only an emptied section drops back to its head (followAfterRemoval).
-  archive: (s, it) => { cursorFollow = followAfterRemoval(s, it); return post({ op: 'archive', section: s, raw: it.raw }); },
+  archive: (s, it) => { cursorFollow = followAfterRemoval(s, it); return post({ op: 'archive', section: s, id: it.id, raw: it.raw }); },
   // Hard-delete with no confirm, matching the TUI's D (both share the undo
   // journal, so the prompt is redundant friction).
-  del: (s, it) => { cursorFollow = followAfterRemoval(s, it); return post({ op: 'delete', section: s, raw: it.raw }); },
-  edit: (s, it, row) => inlineInput(row, it.text, v => { cursorFollow = { section: s, text: v }; post({ op: 'edit', section: s, raw: it.raw, text: v }, v); }),
+  del: (s, it) => { cursorFollow = followAfterRemoval(s, it); return post({ op: 'delete', section: s, id: it.id, raw: it.raw }); },
+  edit: (s, it, row) => inlineInput(row, it.text, v => { cursorFollow = { section: s, text: v }; post({ op: 'edit', section: s, id: it.id, raw: it.raw, text: v }, v); }),
   reply: (s, it, row, li, op) => {
     const holder = el('li');
     li.after(holder);
     inlineInput(holder, '',
       // The TUI stamps replies with the author turn tag (tui.go AddReply
       // callers); mirror it here so web replies get the user: tint too.
-      v => post({ op, section: s, raw: it.raw, text: 'user: ' + v }, v).then(() => holder.remove()),
+      v => post({ op, section: s, id: it.id, raw: it.raw, text: 'user: ' + v }, v).then(() => holder.remove()),
       () => holder.remove());
   },
   open: (s, it) => {
@@ -2406,7 +2406,7 @@ function cancelMapPending() {
 
 function mapEdit(n) {
   if (n.kind === 'item') {
-    mapBeginEdit(n.key, n.it.text, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'edit', section: n.section, raw: n.it.raw, text: v }, v); });
+    mapBeginEdit(n.key, n.it.text, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'edit', section: n.section, id: n.it.id, raw: n.it.raw, text: v }, v); });
   } else if (n.kind === 'section') {
     mapBeginEdit(n.key, n.title, v => { cursorFollow = { section: v }; mapState.focus = 'sec:' + v; post({ op: 'rename-section', section: n.title, text: v }); });
   } else {
@@ -2416,7 +2416,7 @@ function mapEdit(n) {
 
 function mapAdd(n) {
   if (n.kind === 'item') {
-    mapBeginAdd(n.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: n.it.raw, text: 'user: ' + v }, v); });
+    mapBeginAdd(n.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, id: n.it.id, raw: n.it.raw, text: 'user: ' + v }, v); });
   } else if (n.kind === 'section') {
     mapBeginAdd(n.key, v => { cursorFollow = { section: n.title, text: v }; post({ op: 'add', section: n.title, text: v }, v); });
   } else {
@@ -2432,7 +2432,7 @@ function mapAddSibling(n) {
   if (n.kind === 'item') {
     const p = n.parent;
     if (p && p.kind === 'item') {
-      mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, raw: p.it.raw, text: 'user: ' + v }, v); });
+      mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'fork', section: n.section, id: p.it.id, raw: p.it.raw, text: 'user: ' + v }, v); });
     } else if (p) {
       mapBeginAdd(p.key, v => { cursorFollow = { section: n.section, text: v }; post({ op: 'add', section: n.section, text: v }, v); });
     }

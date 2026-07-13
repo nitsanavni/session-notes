@@ -6,12 +6,18 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nitsanavni/session-notes/internal/board"
 )
+
+// anchorStripRe drops a trailing " ^<id>" node anchor for test comparisons.
+var anchorStripRe = regexp.MustCompile(` \^[A-Za-z0-9]+$`)
+
+func stripAnchor(s string) string { return anchorStripRe.ReplaceAllString(s, "") }
 
 // newTestServer points the boards dir at a temp dir, writes one board there,
 // and returns the handler plus the board's path.
@@ -444,7 +450,7 @@ started: 2026-07-09T10:00:00Z
 	if w.Code != 204 {
 		t.Fatalf("reply: %d %s", w.Code, w.Body)
 	}
-	if !strings.Contains(boardFile(t, path), "\n  - claude: second\n") {
+	if !strings.Contains(boardFile(t, path), "\n  - claude: second ^") {
 		t.Fatalf("flat reply missing:\n%s", boardFile(t, path))
 	}
 
@@ -454,7 +460,7 @@ started: 2026-07-09T10:00:00Z
 	if w.Code != 204 {
 		t.Fatalf("fork: %d %s", w.Code, w.Body)
 	}
-	if !strings.Contains(boardFile(t, path), "\n    - claude: aside\n") {
+	if !strings.Contains(boardFile(t, path), "\n    - claude: aside ^") {
 		t.Fatalf("fork not nested:\n%s", boardFile(t, path))
 	}
 }
@@ -674,7 +680,16 @@ func TestRawAndSetContent(t *testing.T) {
 }
 
 func TestHistoryEndpoint(t *testing.T) {
-	h, _ := newTestServer(t)
+	h, path := newTestServer(t)
+
+	// Pre-assign node ids so the two measured adds below each diff to exactly
+	// their own new line, not the one-time anchor churn a first op-layer save
+	// stamps across the whole board.
+	pre := board.Parse(boardFile(t, path))
+	pre.EnsureIDs()
+	if err := os.WriteFile(path, []byte(pre.Render()), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Empty journal: empty list, not an error.
 	w := do(t, h, "GET", "/api/board/abc-123/history", "")
@@ -705,10 +720,10 @@ func TestHistoryEndpoint(t *testing.T) {
 	}
 	// Newest first, authored "web", diffed to the added line.
 	if resp.Entries[0].Author != "web" || len(resp.Entries[0].Added) != 1 ||
-		resp.Entries[0].Added[0] != "- [ ] second" || len(resp.Entries[0].Removed) != 0 {
+		stripAnchor(resp.Entries[0].Added[0]) != "- [ ] second" || len(resp.Entries[0].Removed) != 0 {
 		t.Fatalf("newest entry: %+v", resp.Entries[0])
 	}
-	if resp.Entries[1].Added[0] != "- [ ] first" {
+	if stripAnchor(resp.Entries[1].Added[0]) != "- [ ] first" {
 		t.Fatalf("oldest entry: %+v", resp.Entries[1])
 	}
 }
