@@ -418,3 +418,79 @@ refresh, remote-undo greying, and `$EDITOR`-merge disabling — a large change b
 done as its own milestone rather than forced in alongside the two web features.
 The remote read/edit/watch path itself already exists (`internal/cloud`,
 exercised by `edit`/`watch`); only the TUI front-end binding is deferred.
+
+## M9 (soak-driven robustness fixes, implemented)
+
+The M8 overnight soak (45m, 20 agents, 208k writes) found **zero correctness
+bugs** but three performance/robustness issues plus two API footguns. M9 fixes
+exactly those — no protocol or access-model change beyond the SSE payload and
+`/history` query params.
+
+### Journal format: stored line-diffs, not snapshots (+ pruning)
+
+The `ops` journal stored the full `before` AND `after` board text per op —
+O(ops × board_size) disk (943 MB journal for 154 KB of live board). `journalTx`
+now stores only the **line-diff** (`added`/`removed`, newline-joined) computed by
+`board.DiffLines` — exactly what `/history` renders, so no user-visible fidelity
+is lost. `before`/`after` columns are retained (default `''`) but written empty.
+Two extra bounds keep the table small: each board's journal is **pruned to the
+newest `journalKeep=500` rows** (amortized every `pruneEvery=64` versions), and
+diffs are tiny to begin with.
+
+**Migration.** A one-time, idempotent conversion guarded by `PRAGMA
+user_version` (`journalSchemaVersion=1`): on `Open`, any legacy row still
+carrying a full snapshot is converted to a diff, its snapshot cleared, every
+board pruned to `journalKeep`, and the db `VACUUM`ed to reclaim space. A fresh or
+already-migrated db skips the work.
+
+**Undo/journal consumers.** The cloud journal is read only by `/history` (via the
+diff) and `AuthorsSince` (author only); remote undo was refused in M3, and
+nothing reads `before`/`after` for state reconstruction — so dropping the
+snapshots breaks no consumer.
+
+### `/history` pagination + WAL read pool
+
+`GET …/history` now takes `?limit` (default 100, capped at `journalKeep`) and
+`?before=<op id>` cursor; the response carries a `before` cursor for the next
+(older) page when the page is full. `Store.History(id, limit, before)` applies a
+bounded `LIMIT` and `id < before` filter server-side (newest-first), so a GET no
+longer loads and diffs the entire journal. Separately, `SetMaxOpenConns(1)` is
+lifted to **8 for file dbs** (kept at 1 for `:memory:`, whose per-connection
+databases can't be pooled): WAL supports one writer + many concurrent readers, so
+`/history`/`/healthz`/edits no longer queue head-of-line behind one connection.
+Writes stay single-writer via the per-board lock plus `_txlock=immediate` (write
+lock taken up front, contention waits out `busy_timeout` instead of erroring);
+per-connection pragmas ride in the DSN so every pooled connection applies them.
+
+### Unknown-field policy on POST bodies
+
+The **grant, revoke-grant, and create-token** handlers now set
+`DisallowUnknownFields` — a typo'd field (e.g. `"node"` instead of `"root"`)
+400s instead of being silently ignored and minting a broader grant than intended
+(over-granting is security-adjacent). The **edit** and **raw-push** bodies stay
+deliberately lenient: `editReq` is a large optional-field superset shared with
+the file-mode web client and meant to be forward-compatible, and an unknown edit
+field cannot escalate access (the op is still scope-checked). This split is
+intentional: strict where a typo widens access, forgiving where it cannot.
+
+### SSE event carries the change author
+
+The events stream payload changed from a bare `data: changed` to
+`data: {"authors":[…]}` (distinct authors of the ops since the client's last-seen
+version, via `AuthorsSince`). `board.Event` gains an `Author` field
+(comma-joined); the `watch --json` client fills the previously-empty `author` on
+each emitted change. The browser board UI polls (`setInterval`), never consumed
+SSE, so the payload change affects only the CLI watcher; an older server's bare
+`changed` parses to an empty author (back-compatible).
+
+### Exit criteria (met)
+
+1. Journal round-trips diffs and `/history` renders the same added/removed lines
+   the old full-snapshot path did; the fat-journal migration converts + prunes an
+   existing db (Go tests).
+2. `/history` honors `?limit`/`?before` and returns a paging cursor; the read
+   pool + immediate txlock hold single-writer semantics under load.
+3. Grant/token bodies 400 on unknown fields; no stray grant is minted.
+4. A remote `watch --json` event carries the editing author.
+5. A short validation soak shows sub-linear journal growth, flat-ish `/history`
+   latency, stable edit p99, and zero criticals.
