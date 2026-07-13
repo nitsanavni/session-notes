@@ -1,0 +1,28 @@
+# Litestream configuration: continuously replicate the SQLite database to
+# S3-compatible object storage. Credentials come from the environment so nothing
+# secret is checked in. See https://litestream.io/reference/config/
+#
+# Required env vars (set in docker-compose.yml or the systemd unit):
+#   LITESTREAM_ACCESS_KEY_ID       - S3 access key
+#   LITESTREAM_SECRET_ACCESS_KEY   - S3 secret key
+#   LITESTREAM_BUCKET              - target bucket, e.g. session-notes-backups
+#   LITESTREAM_ENDPOINT            - S3 endpoint (e.g. https://s3.eu-central-1.amazonaws.com
+#                                    or a Backblaze B2 / MinIO / Hetzner endpoint)
+#   LITESTREAM_REGION              - region, e.g. eu-central-1
+#   LITESTREAM_PATH                - key prefix, e.g. server.db (default below)
+
+dbs:
+  - path: /data/server.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: ${LITESTREAM_PATH:-server.db}
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: ${LITESTREAM_REGION}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        # Retain 72h of WAL history; a full snapshot every 24h.
+        retention: 72h
+        snapshot-interval: 24h
+        # Sync every second so at most ~1s of writes can be lost on a hard crash.
+        sync-interval: 1s

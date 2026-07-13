@@ -5,3 +5,6 @@
 /test/e2e/artifacts/
 /test/e2e/session-notes-e2e-bin
 /test/e2e/package-lock.json
+
+# Deploy secrets (see deploy/README.md).
+/deploy/.env

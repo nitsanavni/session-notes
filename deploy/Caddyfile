@@ -1,0 +1,27 @@
+# Caddy reverse proxy for session-notes with automatic HTTPS.
+#
+# {$SN_DOMAIN} is read from the environment (docker-compose passes it; for the
+# bare systemd route, export it or hard-code your domain here). Caddy obtains
+# and renews a Let's Encrypt certificate automatically on first request.
+
+{$SN_DOMAIN} {
+	encode gzip
+
+	# SSE needs unbuffered, long-lived connections; disable response buffering
+	# and use a generous timeout so /api/board/{id}/events streams cleanly.
+	reverse_proxy server:7099 {
+		flush_interval -1
+		transport http {
+			read_timeout 0
+		}
+	}
+
+	# /healthz stays reachable for uptime checks (no auth on the app side).
+	log {
+		output stdout
+		format console
+	}
+}
+
+# For the bare-systemd route (server on 127.0.0.1:7099, Caddy on the host),
+# replace `server:7099` above with `127.0.0.1:7099`.

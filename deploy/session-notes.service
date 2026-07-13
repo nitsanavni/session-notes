@@ -1,0 +1,40 @@
+# systemd unit for the bare-metal (non-Docker) deploy route.
+# Install to /etc/systemd/system/session-notes.service, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now session-notes
+#
+# Assumes:
+#   - the binary at /usr/local/bin/session-notes
+#   - a dedicated unprivileged user `session-notes`
+#   - the DB under /var/lib/session-notes/server.db
+#   - a bootstrap token already created (see deploy/README.md)
+
+[Unit]
+Description=session-notes cloud server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=session-notes
+Group=session-notes
+# Bind to loopback; Caddy on the host terminates TLS and proxies in.
+ExecStart=/usr/local/bin/session-notes server --addr 127.0.0.1:7099 --db /var/lib/session-notes/server.db
+Restart=on-failure
+RestartSec=2s
+
+# Graceful shutdown: the server drains SSE and closes the DB on SIGTERM (the
+# default stop signal). Give it room before systemd escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+# Hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StateDirectory=session-notes
+ReadWritePaths=/var/lib/session-notes
+
+[Install]
+WantedBy=multi-user.target
