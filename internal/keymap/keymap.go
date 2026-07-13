@@ -56,6 +56,7 @@ var Outline = []Binding{
 	{Keys: "l / →", Short: "l expand/descend", Long: "on a section: expand and land on the first (or last-visited) item; on an item: unfold if folded, else descend to the first child", Group: "fold", TUI: true, Web: true, TUIFooter: true},
 	{Keys: "h / ←", Short: "h ascend", Long: "on a section: collapse it; on an item: step out to the parent (top-level item → section header) — never folds", Group: "fold", TUI: true, Web: true, TUIFooter: true},
 	{Keys: "z", Short: "z zoom", Long: "focus-fold (zoom): collapse everything except the path to the cursor; z again restores", Group: "fold", TUI: true, Web: true, TUIFooter: true, WebFooter: true},
+	{Keys: "f", Short: "f re-root", Long: "re-root the outline on the selected node (true zoom): renders it as root with a breadcrumb; esc or a breadcrumb steps back out. Shares the zoom root with the map view and the #node-id URL (web only)", Group: "fold", Web: true},
 	{Keys: "w", Short: "w wrap", Long: "wrap the item at the cursor (toggle single truncated line ↔ full multi-line block, session-only)", Group: "fold", TUI: true, Web: true, TUIFooter: true, WebFooter: true},
 	{Keys: "e", Short: "e edit", Long: "edit item inline (the bullet line only); on a section header, rename it", Group: "edit", TUI: true, Web: true, TUIFooter: true, WebFooter: true},
 	{Keys: "E", Short: "E editor", Long: "open the whole board in $EDITOR / raw markdown (3-way merged on save)", Group: "edit", TUI: true, Web: true, TUIFooter: true, WebFooter: true},

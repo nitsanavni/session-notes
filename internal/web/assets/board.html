@@ -237,6 +237,12 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 #helpbody { overflow-y: auto; flex: 1; min-height: 0; outline: none; }
 #histmodal .panel { width: min(640px, 92vw); }
 #sharemodal .panel { width: min(680px, 94vw); }
+#outlinecrumb { max-width: var(--outline-width, 960px); margin: 0 auto; padding: .3rem .2rem .1rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; font-size: .82em; }
+#outlinecrumb .crumb { color: var(--accent); cursor: pointer; background: none; border: 0; font: inherit; padding: .05rem .2rem; border-radius: 4px; }
+#outlinecrumb .crumb:hover { text-decoration: underline; }
+#outlinecrumb .sep { color: var(--dim); }
+#outlinecrumb .cur { color: var(--dim); padding: .05rem .2rem; }
 #sharebody { display: flex; flex-direction: column; gap: .7rem; }
 .sharerow { display: flex; align-items: center; gap: .6rem; }
 .sharerow label, .sharefield label { min-width: 5.5rem; color: var(--dim); font-size: .82em; }
@@ -448,6 +454,7 @@ form { display: contents; }
     <button id="helpbtn" title="keyboard help (?)">?</button>
   </span>
 </header>
+<nav id="outlinecrumb" aria-label="zoom breadcrumb" hidden></nav>
 <main id="board"></main>
 <div id="mapwrap">
   <div id="mapcrumb"></div>
@@ -1459,6 +1466,89 @@ function renderSessionStatus(st) {
   el.textContent = parts.join('  ·  ');
 }
 
+// findBoardNode locates a node (section or item) by its durable id in the board
+// model, returning { kind, section, item, path } where path is the ancestor
+// item chain above an item root (nearest-last), or null if not found.
+function findBoardNode(b, id) {
+  for (const sec of b.sections || []) {
+    if (sec.id === id) return { kind: 'section', section: sec, item: null, path: [] };
+    const stack = [];
+    const dive = items => {
+      for (const it of items || []) {
+        if (it.id === id) return it;
+        stack.push(it);
+        const f = dive(it.children);
+        if (f) return f;
+        stack.pop();
+      }
+      return null;
+    };
+    const found = dive(sec.items);
+    if (found) return { kind: 'item', section: sec, item: found, path: [...stack] };
+  }
+  return null;
+}
+
+// syncZoomHash mirrors the shared zoom root into the URL fragment (#<node-id>),
+// so a zoomed outline OR map is linkable and a view switch keeps the fragment.
+// The whole-board view clears it. Named apart from the map's historical helper
+// but used by both views.
+function syncZoomHash() {
+  const want = mapState.rootId ? '#' + mapState.rootId : '';
+  if (location.hash !== want) history.replaceState(null, '', location.pathname + location.search + want);
+}
+
+// renderOutlineCrumb fills the breadcrumb above a zoomed outline: board → section
+// → ancestor items → (current root). Each crumb re-roots to that node; the board
+// crumb clears the zoom. Hidden entirely when not zoomed.
+function renderOutlineCrumb(b, zoom) {
+  const bar = document.getElementById('outlinecrumb');
+  if (!bar) return;
+  bar.textContent = '';
+  if (!zoom) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const crumb = (label, id, isCur) => {
+    if (isCur) return el('span', { class: 'cur', title: 'current zoom root' }, label);
+    const b2 = el('button', { class: 'crumb' }, label);
+    b2.addEventListener('click', () => { mapState.rootId = id || ''; renderOutline(cur); });
+    return b2;
+  };
+  const sep = () => el('span', { class: 'sep' }, '›');
+  const parts = [crumb(b.title || shortId(b.session || b.id) || 'board', '', false)];
+  if (zoom.kind === 'section') {
+    parts.push(sep(), crumb(zoom.section.title, zoom.section.id, true));
+  } else {
+    parts.push(sep(), crumb(zoom.section.title, zoom.section.id, false));
+    for (const anc of zoom.path) parts.push(sep(), crumb(anc.text || anc.raw || '…', anc.id, false));
+    parts.push(sep(), crumb(zoom.item.text || zoom.item.raw || '…', zoom.item.id, true));
+  }
+  for (const p of parts) bar.append(p);
+}
+
+// outlineZoomIn re-roots the outline on the cursor's node (the `f` key / mirror
+// of the map's focus-in); shares the root with the map + URL fragment.
+function outlineZoomIn() {
+  const s = cursorStop();
+  if (!s || !cur) return;
+  let id = null;
+  if (s.type === 'item' && s.it && s.it.id) id = s.it.id;
+  else if (s.type === 'section') { const sec = (cur.sections || []).find(x => x.title === s.title); if (sec) id = sec.id; }
+  if (!id) { toast('nothing to zoom into here'); return; }
+  mapState.rootId = id;
+  renderOutline(cur);
+}
+
+// outlineZoomOut steps the zoom root out one level (esc / a breadcrumb tap):
+// an item root → its parent item, else its section; a section root → whole board.
+function outlineZoomOut() {
+  if (!mapState.rootId || !cur) return;
+  const z = findBoardNode(cur, mapState.rootId);
+  if (!z) { mapState.rootId = ''; }
+  else if (z.kind === 'item') mapState.rootId = z.path.length ? z.path[z.path.length - 1].id : z.section.id;
+  else mapState.rootId = '';
+  renderOutline(cur);
+}
+
 function renderOutline(b) {
   document.title = (b.title || shortId(b.session || b.id)) + ' — session-notes';
   document.getElementById('title').textContent = b.title || shortId(b.session || b.id);
@@ -1475,8 +1565,36 @@ function renderOutline(b) {
   const keep = focused && focused.classList && (focused.classList.contains('add') || focused.classList.contains('addsec'))
     ? { sec: focused.dataset.section, val: focused.value } : null;
 
+  // Shared zoom (re-root): when a zoom root id is set and we're in the outline,
+  // render only that subtree with a breadcrumb to step back out. The root id is
+  // shared with the map view (mapState.rootId) and mirrored to the #<id> URL
+  // fragment, so a zoom survives a view switch and is linkable. A stale id (the
+  // node was deleted) clears the zoom.
+  const zoom = mapState.rootId ? findBoardNode(b, mapState.rootId) : null;
+  if (mapState.rootId && !zoom) mapState.rootId = '';
+  syncZoomHash();
+  renderOutlineCrumb(b, zoom);
+
   stops = [];
   main.textContent = '';
+  if (zoom) {
+    if (zoom.kind === 'section') {
+      const sec = zoom.section;
+      const isLog = sec.title === 'Log';
+      const head = sectionHead(sec.title, false, countItems(sec.items), 0);
+      const list = el('ul', isLog ? { id: 'log' } : {});
+      for (const it of sec.items || []) list.append(itemNode(sec.title, it));
+      main.append(head, list, addInput(sec.title, isLog));
+    } else {
+      // Item root: render the item's own subtree, forced unfolded so its
+      // children show. Stops keep the item's REAL owning section title, so
+      // status/urgent/edit/reply ops still address correctly.
+      collapsedItems.delete(itemKey(zoom.section.title, zoom.item));
+      const list = el('ul', {});
+      list.append(itemNode(zoom.section.title, zoom.item));
+      main.append(list);
+    }
+  } else {
   let secIdx = 0;
   for (const sec of b.sections || []) {
     const isLog = sec.title === 'Log';
@@ -1505,6 +1623,7 @@ function renderOutline(b) {
     addSec.value = '';
     post({ op: 'add-section', text: v });
   }));
+  }
 
   // Restore the cursor onto the same stop; if its raw line changed under it
   // (its own status/urgent/edit), follow by section + text; if it vanished
@@ -1987,10 +2106,7 @@ const findNodeById = (root, id) => {
 // syncMapHash reflects the current zoom root into the URL fragment so a zoomed
 // map is shareable/linkable (#<node-id>); the whole-board center clears it.
 // history.replaceState avoids spamming the back stack on every f/b.
-function syncMapHash() {
-  const want = mapState.in && mapState.rootId ? '#' + mapState.rootId : '';
-  if (location.hash !== want) history.replaceState(null, '', location.pathname + location.search + want);
-}
+function syncMapHash() { syncZoomHash(); }
 
 // splitSides: mm's balancing, ported. Heaviest-first onto the lighter side;
 // the first (or lone) child claims the right; document order kept per side.
@@ -2441,26 +2557,34 @@ function exitMap() {
   mapState.in = false;
   document.body.classList.remove('mapmode');
   document.getElementById('mapfoot').hidden = true;
-  syncMapHash(); // leaving the map clears the zoom fragment
+  syncMapHash(); // the zoom root is preserved across the view switch
   // Selection carries back: the map's focus becomes the outline cursor.
   if (mapState.focus !== 'center') cursorKey = mapState.focus;
   renderOutline(cur);
 }
 
-// applyZoomHash honours a #<node-id> fragment: enter the map (if needed) and
-// zoom to that node, so /b/{board}#<id> deep-links to a zoomed view. An empty
-// or unknown fragment while zoomed steps back to the whole board.
+// applyZoomHash honours a #<node-id> fragment. In the map it re-roots the map
+// (the M2 behavior); in the outline it re-roots the outline (M7). An empty or
+// unknown fragment steps back to the whole board. The zoom root is shared
+// (mapState.rootId), so /b/{board}#<id> deep-links to a zoomed view in whichever
+// view is active and survives a view switch.
 function applyZoomHash() {
   const id = decodeURIComponent((location.hash || '').replace(/^#/, ''));
-  if (!id) {
-    if (mapState.in && mapState.rootId) { mapState.rootId = ''; mapState.root = 'center'; renderMap(cur); }
+  if (mapState.in) {
+    if (!id) {
+      if (mapState.rootId) { mapState.rootId = ''; mapState.root = 'center'; renderMap(cur); }
+      return;
+    }
+    const full = mapBuild(cur);
+    const n = findNodeById(full, id);
+    if (!n || n.kind === 'center') return; // unknown id: leave the view as-is
+    mapFocusInto(n);
     return;
   }
-  const full = mapBuild(cur);
-  const n = findNodeById(full, id);
-  if (!n || n.kind === 'center') return; // unknown id: leave the view as-is
-  if (!mapState.in) enterMap();
-  mapFocusInto(n);
+  // Outline: re-root (or clear). renderOutline validates the id and clears a
+  // stale one, so an unknown fragment gracefully shows the whole board.
+  mapState.rootId = id || '';
+  renderOutline(cur);
 }
 
 // ---- inline add/edit (in-place, no detached overlay) ----
@@ -3338,6 +3462,9 @@ document.addEventListener('keydown', e => {
   // `/`) clears the highlights + tally — every other key keeps them alive so
   // ordinary navigation no longer silently drops out of search.
   if (searchHL !== '' && e.key === 'Escape') { e.preventDefault(); endSearch(); return; }
+  // In a zoomed outline, Escape steps the zoom root out one level (whole board
+  // once fully unzoomed) — the counterpart of `f` zooming in.
+  if (!mapState.in && mapState.rootId && e.key === 'Escape' && !modalOpen()) { e.preventDefault(); outlineZoomOut(); return; }
   // In results mode, Tab toggles the search scope (not the section) so a search
   // never drifts into section-cycling.
   if (searchActive && e.key === 'Tab') { e.preventDefault(); toggleSearchScopeLive(); return; }
@@ -3369,7 +3496,7 @@ document.addEventListener('keydown', e => {
   // must not also type their own character into it, space must not scroll.
   const HANDLED = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Tab', 'g', 'G', 'a', 'A',
     ' ', 'b', '!', 'p', 'e', 'w', 'W', 'R', 'F', 'o', 'd', 'D', 'L', 'E', 'H', 'T', 'B', 'm', 'u', 'y', '?', 'Enter', 'l', 'h',
-    '/', 'n', 'N', 'z', 'V', 's']);
+    '/', 'n', 'N', 'z', 'V', 's', 'f']);
   if (HANDLED.has(e.key) || (e.key === 'r' && e.ctrlKey)) e.preventDefault();
   switch (e.key) {
     case 'j': case 'ArrowDown': moveCursor(1); break;
@@ -3418,6 +3545,7 @@ document.addEventListener('keydown', e => {
     case 'm': enterMap(); break;
     case 'W': cycleWidth(); break;
     case 'z': focusFold(); break;
+    case 'f': outlineZoomIn(); break;
     case 's': openShare(); break;
     case 'u': post({ op: 'undo' }); break;
     case 'r': if (e.ctrlKey) post({ op: 'redo' }); break;
@@ -3435,9 +3563,15 @@ async function refresh() {
     const b = await (await fetch(API)).json();
     computeNovelty(b); // flag out-of-band changes before the render paints them
     cur = b;
+    // Honour a #<node-id> deep-link on first load by seeding the shared zoom root
+    // BEFORE the first render — otherwise renderOutline's syncZoomHash would wipe
+    // the fragment before we read it. The default view is the outline, so the
+    // seed re-roots the outline; pressing m carries the same root into the map.
+    if (!zoomHashApplied) {
+      zoomHashApplied = true;
+      if (location.hash.length > 1 && !mapState.in) mapState.rootId = decodeURIComponent(location.hash.slice(1));
+    }
     render(cur); // render() itself defers when an input is open
-    // Honour a #<node-id> deep-link once the board is loaded (M2 zoom).
-    if (!zoomHashApplied) { zoomHashApplied = true; if (location.hash.length > 1) applyZoomHash(); }
   } catch { /* transient; SSE or next action will retry */ }
 }
 
@@ -3565,6 +3699,17 @@ window.__sn = {
   }; },
   get stops() { return stops.map(s => ({ key: s.key, type: s.type, visible: s.el.offsetParent !== null })); },
   get cursorKey() { return cursorKey; },
+  // Shared zoom (re-root) state for the e2e harness: the root id (shared with
+  // the map), whether the outline breadcrumb is showing, and its crumb count.
+  get zoom() {
+    const bar = document.getElementById('outlinecrumb');
+    return {
+      rootId: mapState.rootId,
+      hash: location.hash,
+      crumbVisible: bar ? !bar.hidden : false,
+      crumbCount: bar ? bar.querySelectorAll('.crumb, .cur').length : 0,
+    };
+  },
   get inputsOpen() { return inputsOpen; },
   get board() { return cur; },
   get map() { return { in: mapState.in, focus: mapState.focus, root: mapState.root, rootId: mapState.rootId, hash: location.hash, showLog: mapState.showLog, nodes: mapNodes.map(n => n.key), expanded: { ...mapState.expanded }, folds: { ...mapState.folds }, focusFolded: !!mapFoldPrev,

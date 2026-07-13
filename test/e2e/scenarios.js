@@ -296,13 +296,21 @@ run({
     const rootId = (await t.sn2()).map.rootId;
     t.assert(rootId, 'zoom root has a durable node id');
 
-    // A fresh load of /b/{board}#<id> deep-links straight into the zoomed view.
-    const boardUrl = t.page.url().split('#')[0];
-    await t.page.goto(`${boardUrl}#${rootId}`);
+    // A fresh load of /b/{board}#<id> deep-links into the zoomed OUTLINE (the
+    // default view; M7 shared re-root zoom). The zoom root is shared with the
+    // map, so pressing m enters the map still zoomed to the same node.
+    // ?fresh forces a real full reload (a fragment-only goto is a same-document
+    // navigation that would preserve the in-memory map state).
+    const boardUrl = t.page.url().split('#')[0].split('?')[0];
+    await t.page.goto(`${boardUrl}?fresh=1#${rootId}`);
     await t.page.waitForFunction(() => window.__sn && window.__sn.board !== null);
-    await t.page.waitForFunction(id => window.__sn && window.__sn.map && window.__sn.map.in && window.__sn.map.rootId === id, rootId, { timeout: 4000 });
+    await t.page.waitForFunction(id => window.__sn && window.__sn.zoom && !window.__sn.map.in && window.__sn.zoom.rootId === id, rootId, { timeout: 4000 });
+    let z = (await t.sn2()).zoom;
+    t.assert(z.rootId === rootId && z.crumbVisible, 'reload with #id re-roots the outline (breadcrumb shown)');
+    await t.key('m'); // into the map, zoom preserved
+    await t.page.waitForFunction(id => window.__sn.map.in && window.__sn.map.rootId === id, rootId, { timeout: 4000 });
     const m = (await t.sn2()).map;
-    t.assert(m.in && m.rootId === rootId, 'reload with #id deep-links into the zoomed map');
+    t.assert(m.in && m.rootId === rootId, 'the map opens still zoomed to the same node (shared root)');
   },
 
   'map: z focus-folds to the ancestor path, second z restores': async t => {
@@ -326,6 +334,63 @@ run({
     m = (await t.sn2()).map;
     t.assert(!m.focusFolded, 'second z clears the zoom');
     t.assert(m.nodes.includes(planItem), 'the prior fold state is restored');
+  },
+
+  'outline: f re-roots on the cursor, breadcrumb + #id, esc zooms out': async t => {
+    await t.open();
+    await t.key('3'); // Threads
+    await t.key('j'); // auth refactor (owns a reply child)
+    await t.key(' '); // cycle status -> save -> EnsureIDs (durable ids)
+    await t.settled();
+    // Re-set the cursor on the same node after the save re-render.
+    await t.page.waitForFunction(() => window.__sn.cursorKey && window.__sn.cursorKey.startsWith('it:Threads:'));
+    const before = (await t.sn2());
+    t.assert(before.zoom.rootId === '', 'not zoomed initially');
+    // A sibling section item is present in the full outline.
+    t.assert(before.zoom.crumbVisible === false, 'no breadcrumb before zoom');
+
+    await t.key('f'); // re-root the outline on the auth-refactor node
+    await t.page.waitForFunction(() => window.__sn.zoom.rootId && window.__sn.zoom.crumbVisible);
+    let z = (await t.sn2()).zoom;
+    t.assert(z.rootId && z.hash === '#' + z.rootId, 'zoom root reflected into the URL fragment');
+    t.assert(z.crumbCount >= 2, 'breadcrumb shows board › … › node');
+    // Only the subtree renders: the reply child is a visible stop, and a Plan
+    // item from another section is gone.
+    const stops = await t.page.evaluate(() => window.__sn.stops.filter(s => s.visible).map(s => s.key));
+    t.assert(stops.some(k => k.includes('claude: extracted')), 'the subtree child is visible under the zoom');
+    t.assert(!stops.some(k => k.startsWith('it:Plan:')), 'unrelated sections are not rendered');
+
+    // Escape steps out one level: a top-level item root → its section, still
+    // zoomed (breadcrumb shown); a second Escape → the whole board.
+    await t.key('Escape');
+    await t.page.waitForFunction(() => window.__sn.zoom.rootId && window.__sn.zoom.crumbVisible);
+    z = (await t.sn2()).zoom;
+    t.assert(z.rootId && z.hash === '#' + z.rootId, 'first esc steps out to the section root (still zoomed)');
+    await t.key('Escape');
+    await t.page.waitForFunction(() => window.__sn.zoom.rootId === '' && !window.__sn.zoom.crumbVisible);
+    z = (await t.sn2()).zoom;
+    t.assert(z.rootId === '' && z.hash === '', 'second esc clears the zoom and the fragment');
+    const back = await t.page.evaluate(() => window.__sn.stops.filter(s => s.visible).map(s => s.key));
+    t.assert(back.some(k => k.startsWith('it:Plan:')), 'the whole board renders again after zoom-out');
+  },
+
+  'outline: editing the #id fragment re-roots live (hashchange round-trip)': async t => {
+    await t.open();
+    await t.key('4'); // Questions
+    await t.key('j'); // an item there
+    await t.key(' '); // save -> EnsureIDs
+    await t.settled();
+    await t.key('f');
+    await t.page.waitForFunction(() => window.__sn.zoom.rootId);
+    const rootId = (await t.sn2()).zoom.rootId;
+    // Clear the fragment programmatically -> hashchange -> whole board.
+    await t.page.evaluate(() => { location.hash = ''; });
+    await t.page.waitForFunction(() => window.__sn.zoom.rootId === '');
+    t.assert((await t.sn2()).zoom.rootId === '', 'clearing the fragment un-zooms the outline');
+    // Set it back -> hashchange -> re-root.
+    await t.page.evaluate(id => { location.hash = '#' + id; }, rootId);
+    await t.page.waitForFunction(id => window.__sn.zoom.rootId === id, rootId);
+    t.assert((await t.sn2()).zoom.rootId === rootId, 'setting the fragment re-roots the outline');
   },
 
   'undo and redo walk this browser\'s edits': async t => {

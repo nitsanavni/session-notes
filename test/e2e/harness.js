@@ -160,6 +160,7 @@ class Ctx {
     cursorKey: window.__sn.cursorKey,
     inputsOpen: window.__sn.inputsOpen,
     map: window.__sn.map,
+    zoom: window.__sn.zoom,
   })); }
 
   async cursorKey() { return (await this.sn()).cursorKey; }
