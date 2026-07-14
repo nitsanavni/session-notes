@@ -404,20 +404,13 @@ fold-based `z` (which collapses, not re-roots).
    the zoom (e2e).
 3. gofmt/vet/`go test ./...` green; the web e2e suite green.
 
-### Cut: TUI attaches to remote boards
+### Deferred: TUI attaches to remote boards (shipped in M11)
 
 The third planned feature — opening the bubbletea TUI on a `RemoteTree`-backed
-board (`--board https://host/b/<board>`) — was **cut** as disproportionately
-risky for this milestone. The TUI's mutation/reload path is file-path-centric at
-many seams (`board.SaveRebasing(m.path, m.lastDisk, …)`, `board.Undo(m.path)`,
-`os.ReadFile(m.path)`, an fsnotify directory watcher), and the rebase machinery
-is fundamentally file/flock-based, whereas a remote board conflict-resolves via
-`RemoteTree.Apply`'s version `base`. Bridging cleanly needs a `BoardStore`
-interface over load/save/watch threaded through the model plus SSE-driven
-refresh, remote-undo greying, and `$EDITOR`-merge disabling — a large change best
-done as its own milestone rather than forced in alongside the two web features.
-The remote read/edit/watch path itself already exists (`internal/cloud`,
-exercised by `edit`/`watch`); only the TUI front-end binding is deferred.
+board (`--board https://host/b/<board>`) — was deferred from M7 as milestone-
+sized and **shipped in M11** (see below). The remote read/edit/watch path itself
+already existed (`internal/cloud`, exercised by `edit`/`watch`); M11 added the
+TUI front-end binding.
 
 ## M9 (soak-driven robustness fixes, implemented)
 
@@ -494,3 +487,74 @@ SSE, so the payload change affects only the CLI watcher; an older server's bare
 4. A remote `watch --json` event carries the editing author.
 5. A short validation soak shows sub-linear journal growth, flat-ish `/history`
    latency, stable edit p99, and zero criticals.
+
+## M11 (TUI attaches to remote/cloud boards, implemented)
+
+The interactive TUI opens on a cloud board — `session-notes --board
+https://host/b/<board>[#node]`, or a `link`ed cwd whose ref is remote — with the
+same editing experience as a local file, minus explicitly-degraded features. No
+protocol or access-model change: it reuses the M3–M4 `RemoteTree` HTTP+SSE client
+and the login token store.
+
+### The load/save/watch seam
+
+The TUI was file-path-centric (`board.SaveRebasing(m.path, m.lastDisk, …)`,
+`board.Undo(m.path)`, `os.ReadFile(m.path)`, an fsnotify watcher). M11 threads a
+`remoteStore` (internal/tui) through that seam behind a non-nil `m.remote`; the
+**file path stays byte-identical** (the existing model-level suite proves zero
+regression — the invariant), and `m.remote != nil` branches each seam:
+
+- **Load** — `RemoteTree` `GET /raw` (content + version). When the token carves
+  out a subtree, the server renders only that subtree, so a scoped agent's TUI
+  shows exactly its granted node.
+- **Save** — every TUI `pendingOp` maps to one (or, for multi-section add, a few)
+  surgical `board.Op` sent through `RemoteTree.Apply`, which does server-side
+  version-based conflict resolution (optimistic `base`; on 409 refetch head and
+  retry the op, bounded, then an unconditional apply — last-writer-wins, no
+  dropped write). The model then adopts the authoritative content. The mapping
+  mirrors the file rebase's `applyOp` exactly (same addressing, the `user:` reply
+  prefix, AddReply-vs-AddItem, absolute structural state).
+- **Watch** — the server SSE stream (whole board, or `?node=<id>` for a `#node`
+  ref), delivered to the model as the same `reloadMsg` the fsnotify watcher uses.
+  It self-reconnects: a dropped stream marks the store disconnected (a footer
+  `⚠ remote connection lost — retrying` warning) and retries with backoff; a
+  successful reconnect signals a reload so a change missed during the outage is
+  caught up. External changes flag `fresh`/novelty and the `V` feed like local.
+
+### Degraded in v1 (documented, not silent)
+
+- **Undo/redo** (`u`/`ctrl+r`) — status-line `undo/redo not available on remote
+  boards`. The shared undo journal is file/flock-specific; remote undo was
+  already refused server-side since M3.
+- **`$EDITOR` merge** (`E`) — disabled with a status message (the 3-way
+  git-merge-file machinery is inherently local-file/flock based).
+- **History overlay** (`H`) — points at the board's web `/history` instead of
+  rendering the local journal sidecar (which does not exist for a remote board).
+
+### No silent data loss
+
+If a save ultimately fails (network outage, or a permission refusal for an op
+addressing outside the `#node` carve-out), `remoteSave` keeps the user's
+optimistic in-memory edit **visible on screen** and reports the error loudly in
+the status line (`… your edit is unsaved` / `edit refused (outside shared
+subtree?)`) — the board stays viewable and typed content is never dropped.
+
+### Auth / entry
+
+`RunRemote` reuses the host's login token (`session-notes login`); a secured
+server with no stored token exits with the login hint **before** entering the
+TUI rather than dropping the user into an empty board. A `#node` fragment scopes
+every edit to that subtree (refused server-side otherwise) and opens the map
+zoomed onto it.
+
+### Exit criteria (met)
+
+1. `FileStore` regression: the existing model-level suite is green unchanged (the
+   local path is untouched).
+2. `remoteStore` against an httptest cloud server: load/edit/add round-trip, an
+   external change reloads and marks items fresh, a save conflict loses no write,
+   the SSE watch signals on an external change, an out-of-scope op is surfaced in
+   the status line, undo/redo/`$EDITOR` degrade with a message, a secured host
+   with no token yields the login hint; the `pendingOp`→`board.Op` mapping matches
+   `applyOp`.
+3. gofmt/vet/`go test ./...` green.

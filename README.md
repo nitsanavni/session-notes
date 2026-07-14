@@ -88,6 +88,7 @@ session-notes remote grant https://host/b/myboard#<node> --new-token scout --per
 session-notes link 'https://host/b/myboard#<node>'  # #<node> is its whole world
 session-notes watch --json --ignore-author scout    # react to OTHERS' edits only
 session-notes edit reply "…" "scout: done"           # writes as subject "scout"
+# or open the interactive TUI on it: session-notes --board https://host/b/myboard[#<node>]
 ```
 
 ## What it looks like
@@ -359,7 +360,13 @@ Because you may have several Claude Code sessions running concurrently (differen
 tmux panes, different repos, or several panes in the same repo), `session-notes`
 needs to figure out which board you mean:
 
-1. `--board <path>` — explicit path, always wins.
+1. `--board <path>` — explicit path, always wins. `--board` also accepts a cloud
+   URL (`https://host/b/<board>[#node]`); the interactive TUI then opens on the
+   remote board over the HTTP+SSE backend, with the same editing experience as a
+   local file minus undo/redo, `$EDITOR` merge, and the history overlay (all
+   file-specific — see SPEC-TREE.md M11). A `link`ed cwd pointing at a remote ref
+   opens the same way. Reuses the host's `session-notes login` token; a secured
+   host with no token exits with the login hint.
 2. `--pane <tmux-pane-id>` — looks up `~/.claude/boards/panes/<pane-id>.json`,
    which maps that pane to the board of the session currently running there. The
    tmux keybind passes `#{pane_id}` of the active pane, so each pane resolves to

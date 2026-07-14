@@ -330,6 +330,13 @@ scoped ref for the working dir so every command drops --board:
   session-notes watch --once --ignore-author scout  # react to OTHERS' edits only
   session-notes edit reply "…" "scout: done"        # writes as subject "scout"
 
+Human at the same subtree — open the interactive TUI on the remote board (or on
+the linked cwd): the #<id> fragment scopes edits to that subtree and zooms the
+map onto it. Undo/redo, $EDITOR merge, and the H history overlay are degraded on
+remote boards (file-specific); everything else edits like a local board.
+
+  session-notes --board 'https://host/b/BOARD#<id>'   # TUI on the shared subtree
+
 The edit's author defaults to the token's subject server-side (here "scout"), so
 ` + "`watch --ignore-author scout`" + ` suppresses the agent's own echo: the server drops
 any change whose journalled ops are all authored by that name. Edit as subject
@@ -368,6 +375,12 @@ token bound to that node's subtree — and shows a copyable attach command
 URL to hand a teammate or a sub-agent. The action is feature-detected via GET
 /api/me ({subject, admin, cloud}); the file-mode ` + "`serve`" + ` UI has no such route, so
 it stays hidden there. Revoke later with ` + "`remote revoke … --token-name`" + `.
+
+Attach the interactive TUI to a cloud board (not just the browser or the edit
+CLI): ` + "`session-notes --board https://host/b/<board>[#node]`" + ` opens the full TUI
+over the HTTP+SSE backend, reusing the host's ` + "`login`" + ` token. Edits, live SSE
+refresh, and the #node carve-out all work; undo/redo, $EDITOR merge, and the
+history overlay are degraded (file-specific) — see ` + "`docs subtree`" + ` and SPEC-TREE M11.
 
 Operational surface: GET /healthz (no auth, 200 ok) for probes; one stderr log
 line per request (method path status duration); POST/PUT bodies over 1 MiB are
