@@ -876,7 +876,13 @@ function setCursor(stop, scroll = true) {
 function moveCursor(delta) {
   const vis = visibleStops();
   if (!vis.length) return;
-  const i = vis.findIndex(s => s.key === cursorKey);
+  // Find the current index by the DOM element actually carrying the cursor,
+  // not by key: duplicate raw lines within a section share a key, so matching
+  // by key always lands on the FIRST duplicate — the cursor then gets stuck
+  // bouncing there and down-arrow can't advance past it (issue #7). The
+  // `.cursor` class marks exactly one element, so it's the true position.
+  let i = vis.findIndex(s => s.el.classList.contains('cursor'));
+  if (i < 0) i = vis.findIndex(s => s.key === cursorKey);
   setCursor(vis[Math.max(0, Math.min(vis.length - 1, i < 0 ? (delta > 0 ? 0 : vis.length - 1) : i + delta))]);
 }
 

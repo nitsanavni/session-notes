@@ -26,6 +26,41 @@ run({
     await t.assertCursor('sec:Waiting on User');
   },
 
+  'down-arrow advances past duplicate lines (issue #7)': async t => {
+    // Duplicate raw lines share a cursor key. Matching the cursor by key alone
+    // always resolves to the FIRST duplicate, so j/down got stuck bouncing on
+    // it and could never reach items below. The cursor must walk through both
+    // copies and land on the unique item that follows.
+    const fs = require('fs');
+    fs.writeFileSync(t.boardPath, [
+      '---',
+      'session: e2e-fixture-0001',
+      'cwd: /tmp/e2e-project',
+      'started: 2026-07-09T10:00:00Z',
+      'title: dup fixture',
+      '---',
+      '',
+      '## Dups',
+      '- alpha',
+      '- dup line',
+      '- dup line',
+      '- omega',
+      '',
+    ].join('\n'));
+    await t.open();
+    await t.key('j'); // sec:Dups
+    await t.assertCursor('sec:Dups');
+    await t.key('j'); // alpha
+    await t.assertCursor('it:Dups:- alpha');
+    await t.key('j'); // first dup
+    await t.assertCursor('it:Dups:- dup line');
+    // Two more presses must clear BOTH duplicates and reach omega — before the
+    // fix the second press stalled on the duplicate key forever.
+    await t.key('j'); // second dup (same key, different element)
+    await t.key('j'); // omega
+    await t.assertCursor('it:Dups:- omega');
+  },
+
   'space cycles status and cursor survives the re-render': async t => {
     await t.open();
     await t.key('3');
