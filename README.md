@@ -1,9 +1,94 @@
 # session-notes
 
-A shared scratchpad for a Claude Code session — one board per session, viewed and
-edited by you in a tmux popup, and read/maintained by Claude during the session via
-hooks. Threads of work, open questions, a plan, ideas, and a running log, kept in a
-plain Markdown file that both sides can safely edit at the same time.
+Collaborative, infinite-outline boards that humans and AI agents attach to and
+edit at the same time. A board is a plain Markdown file — a tree of bullets in
+`##` sections — that you view and edit in a tmux popup or the browser while a
+Claude Code session reads and maintains it via hooks. It began as a shared
+scratchpad for one session (a plan, open questions, threads, a running log) and
+is now a general outline board whose core primitive is **zoom**: every bullet is
+a node with a stable id, and any node's subtree can be rendered, linked,
+watched, and edited as its own root — which doubles as a **permission boundary**
+when you hand one subtree to a sub-agent.
+
+**Local files first, optional cloud.** Boards live as Markdown under
+`~/.claude/boards/`, and everything — TUI, web UI, the agent CLI — works with no
+server at all. A `session-notes server` (SQLite-backed) is optional: it lets a
+Claude session anywhere attach to a board, or a single granted subtree, over the
+same watch/edit protocol as a local file.
+
+## Feature tour
+
+- **Dual view** — the same board as a keyboard-driven **outline** or a
+  center-outward **mindmap** (`m` toggles between them; the selection carries
+  over). `f` zooms — re-roots either view on the focused node with a breadcrumb
+  back out.
+- **Node ids + `board#node` refs** — every bullet gets a stable trailing `^id`
+  anchor on its first CLI save; `<board>#<id>` is the single addressing scheme
+  across the CLI, web, TUI, `watch`, and remote URLs.
+- **Subtree carve-outs** — `session-notes edit … --root <id>` confines every
+  write to one node's subtree; `session-notes watch --node <id>` reports only
+  changes inside it. On the cloud server a **grant** binds a token to
+  `(board, node, read|write)`, so the same boundary is *server-enforced*.
+- **One-line agent handoff** — `remote grant …/b/board#<node> --new-token scout
+  --perm write` mints a scoped token and prints an attach line to paste into a
+  sub-agent: it then sees and edits exactly that subtree and nothing else.
+- **Live co-editing** — the TUI, the browser, the hooks, and Claude's
+  `session-notes edit` all serialize on one advisory lock with atomic writes and
+  a **shared undo journal**, so concurrent editors never clobber each other.
+- **Cloud mode** — an optional `session-notes server` with token identity, a
+  grants ACL, SSE change streams, and a full deploy runbook
+  ([`deploy/README.md`](deploy/README.md)).
+
+## Quickstart
+
+### Try it in one command
+
+```
+session-notes demo
+```
+
+Seeds a throwaway board with a few subtrees, serves it locally on a free port,
+and prints its URL plus a few things to try (zoom the outline and map, edit from
+a second terminal, `watch --json`). File-mode, no tokens, nothing written to
+`~/.claude/boards`; Ctrl-C tears it down.
+
+### a) Solo, local
+
+```
+./install.sh                     # build + install the binary and the hooks
+# add the tmux bind-key line the installer prints, then reload tmux:
+tmux source-file ~/.tmux.conf
+# prefix + g pops open the board for the Claude session in the active pane.
+# No tmux? Use the browser instead:
+session-notes serve              # http://127.0.0.1:7080
+```
+
+### b) Attach Claude to a board
+
+`install.sh` wires the `SessionStart` / `prompt-submit` / `session-end` hooks, so
+a new Claude Code session auto-creates its board and is told to maintain it.
+Where no hook runs (headless agents, CI, containers) bootstrap and drive it by
+hand — Claude writes through the CLI, never the file:
+
+```
+session-notes init --board ./board.md            # seed a board (no hook needed)
+session-notes link ./board.md                    # pin it for this directory
+session-notes edit add Threads "start the work"  # Claude edits via the CLI
+session-notes watch --once                        # …and reacts to your edits
+session-notes history                             # catch up after compaction
+```
+
+### c) Share a subtree with an agent (cloud)
+
+```
+session-notes login https://host --token <ops-token>
+session-notes remote new https://host myboard
+session-notes remote grant https://host/b/myboard#<node> --new-token scout --perm write
+# paste the printed attach line into the sub-agent; then, as that agent:
+session-notes link 'https://host/b/myboard#<node>'  # #<node> is its whole world
+session-notes watch --json --ignore-author scout    # react to OTHERS' edits only
+session-notes edit reply "…" "scout: done"           # writes as subject "scout"
+```
 
 ## What it looks like
 
