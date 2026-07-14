@@ -1474,6 +1474,19 @@ run({
     await t.waitBoardContains('## Retro');
   },
 
+  'A overlay: custom input is reachable by keyboard alone': async t => {
+    await t.open();
+    await t.key('A');
+    await t.page.waitForSelector('#addsecmodal.open');
+    // The fixture already has every canonical section, so the overlay lands the
+    // keyboard straight in the custom name box — no mouse, no click needed.
+    await t.page.waitForFunction(
+      () => document.activeElement === document.querySelector('#addsecmodal input.custom'));
+    await t.page.keyboard.type('Retro');
+    await t.page.keyboard.press('Enter');
+    await t.waitBoardContains('## Retro');
+  },
+
   'p toggles pin on an item from the outline': async t => {
     await t.open();
     await t.key('2'); // Plan

@@ -463,7 +463,7 @@ form { display: contents; }
 <div id="maptools"></div><div id="searchprompt"><span class="lbl">/</span><form><input spellcheck="false" enterkeyhint="search" aria-label="search"></form><span class="scope" id="searchscope">working</span></div>
 <div id="searchpanel" aria-label="search results"></div>
 <div id="linkchooser"><div class="lbl">open link — j/k/arrows move · enter open · esc cancel</div><div class="list"></div></div>
-<div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · enter add · esc cancel</div><div class="list"></div><form><input class="custom" spellcheck="false" enterkeyhint="done" placeholder="custom section name…"></form></div>
+<div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · i name · enter add · esc cancel</div><div class="list"></div><form><input class="custom" spellcheck="false" enterkeyhint="done" placeholder="custom section name…"></form></div>
 <footer id="listfoot">j/k/arrows move · tab section · enter fold · z zoom · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
@@ -1704,6 +1704,9 @@ function addSectionOverlay() {
     if (ev.key === 'Escape') close();
   };
   custom.form.onsubmit = ev => { ev.preventDefault(); confirm(); };
+  // No canonical sections left to pick — the only useful action is the custom
+  // name, so land the keyboard right in the input box.
+  if (!options.length) custom.focus();
   const onKey = ev => {
     if (document.activeElement === custom) return; // custom input owns its keys
     ev.stopPropagation(); ev.preventDefault();
