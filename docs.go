@@ -135,7 +135,8 @@ reinvent an flock script.
 
 Target the board with --board <path> (primary for an agent) or --session <id>
 (resolved to <boards-dir>/<id>.md). --board also accepts a remote board URL
-(http(s)://host/b/<board>[#<node>]) — edit/watch treat it like a local file.
+(http(s)://host/b/<board>[#<node>]) — edit/watch treat it like a local file
+(run "session-notes login <host>" first; see "docs server" and "docs subtree").
 
 Board resolution priority (edit + watch), highest first:
   1. explicit --board <ref> (or --session <id>)
@@ -299,8 +300,8 @@ fragment both re-root on the same node id, so a zoomed view is shareable.
 
 Authenticated carve-out (cloud) — real auth, one node as the world
 
-On a ` + "`session-notes server`" + ` the carve-out becomes an enforced permission,
-not a convention. A grant binds a token to (board, node, read|write): a
+On a ` + "`session-notes server`" + ` (see "docs server") the carve-out becomes an
+enforced permission, not a convention. A grant binds a token to (board, node, read|write): a
 subtree-scoped token literally cannot fetch, watch, or edit a sibling — the
 server forces every op's root to the granted node, scopes the SSE stream, and
 serves a board view containing only that subtree.

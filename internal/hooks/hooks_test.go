@@ -17,7 +17,7 @@ func TestBlurb(t *testing.T) {
 		"Session board: /tmp/board.md",
 		"WRITE THE BOARD VIA THE CLI",
 		"--board /tmp/board.md",
-		"(protocol|monitor|conflicts|cli|blurb)",
+		"(protocol|monitor|conflicts|cli|subtree|server|headless|blurb)",
 	} {
 		if !strings.Contains(b, want) {
 			t.Errorf("blurb missing %q", want)

@@ -148,7 +148,7 @@ This session has a shared markdown board you and the user both maintain:
 - WRITE THE BOARD VIA THE CLI, never by editing the file: "session-notes edit <add|reply|status|log|title|replace> --board %s [--refresh-snapshot <snap>] args…" does the whole locked read → modify → atomic-replace (the same lock the TUI uses), so your write never clobbers the user's concurrent edit.
 - The user edits live in a TUI; watch the board with the Monitor tool and pass --refresh-snapshot to every edit so the watch ignores your own writes.
 - Preserve content you don't understand; edit surgically.
-- Run "session-notes docs <topic>" (protocol|monitor|conflicts|cli|blurb) for the full recipes (reply/threading, [[links]], watcher setup, conflict reconciliation, edit reference).
+- Run "session-notes docs <topic>" (protocol|monitor|conflicts|cli|subtree|server|headless|blurb) for the full recipes (reply/threading, [[links]], watcher setup, conflict reconciliation, edit reference, subtree carve-outs, cloud server, headless/CI).
 `, boardPath, boardPath)
 }
 

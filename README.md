@@ -739,7 +739,8 @@ from actual behavior). Topics:
 | `docs monitor` | The `session-notes watch` recipe with self-edit suppression via `edit --refresh-snapshot` (plus the old manual loop as an appendix). |
 | `docs conflicts` | Reconciling `<<<<<<<`/`=======`/`>>>>>>>` markers under the lock with `edit replace`. |
 | `docs cli` | The `session-notes edit` subcommand reference (including `--id` node addressing and the `--root` carve-out). |
-| `docs subtree` | Subtree attach: handing a sub-agent one node as its whole world with `watch --node` + `edit --root`. |
+| `docs subtree` | Subtree attach: handing a sub-agent one node as its whole world with `watch --node` + `edit --root`, and the cloud grant carve-out. |
+| `docs server` | The cloud `session-notes server`: run it, token lifecycle, the durability layers, share-from-UI, and a pointer to the deploy runbook. |
 | `docs headless` | Bootstrapping in environments with no tmux, no hooks, and no inbound network (Claude Code on the web, CI, containers): `session-notes init`, the watch/edit loop, and what `serve` can and cannot do from inside a sandbox. |
 | `docs blurb` | The session-start blurb itself (with a placeholder board path) — the single source shared with the `session-start` hook injection. |
 
