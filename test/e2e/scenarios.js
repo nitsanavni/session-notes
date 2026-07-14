@@ -61,6 +61,102 @@ run({
     await t.assertCursor('it:Dups:- omega');
   },
 
+  'down-arrow reaches the very last item of a busy board (issue #7)': async t => {
+    // A board resembling a real busy session: all canonical sections, nested
+    // user/claude replies (2 levels), [x]/[>] statuses, duplicated short lines
+    // both within and across sections, an item whose text equals a section
+    // title, and a Log section ending in a nested reply under a done item.
+    // Walk ArrowDown from the top; the cursor must reach the LAST visible
+    // stop and stay there — never stall mid-board.
+    const fs = require('fs');
+    fs.writeFileSync(t.boardPath, [
+      '---',
+      'session: e2e-fixture-0001',
+      'cwd: /tmp/e2e-project',
+      'started: 2026-07-09T10:00:00Z',
+      'title: busy fixture',
+      '---',
+      '',
+      '## Plan',
+      '- [x] extract middleware',
+      '- [>] wire sessions',
+      '- [ ] ship it',
+      '- [ ] ship it',
+      '',
+      '## Threads',
+      '- [>] auth refactor',
+      '  - claude: extracted, tests green',
+      '    - user: nice, ship it',
+      '- [x] fix flaky test',
+      '  - claude: done',
+      '- [ ] ship it',
+      '',
+      '## Questions',
+      '- [ ] !! Threads',
+      '- [ ] ship it',
+      '- [ ] ship it',
+      '',
+      '## Ideas',
+      '- dup idea',
+      '- dup idea',
+      '',
+      '## Log',
+      '- 10:00 start',
+      '- [x] wrapped up',
+      '  - claude: final reply at the very bottom',
+      '',
+    ].join('\n'));
+    await t.open();
+    // Count visible stops, then press ArrowDown that many times (more than
+    // enough to traverse everything) and assert we're on the last stop.
+    const total = await t.page.evaluate(() => window.__sn.stops.filter(s => s.visible).length);
+    t.assert(total > 15, `busy board has many stops (got ${total})`);
+    await t.key('ArrowDown', total + 3);
+    const got = await t.cursorKey();
+    t.assert(got === 'it:Log:  - claude: final reply at the very bottom',
+      `cursor reached the bottom reply (got ${JSON.stringify(got)})`);
+    // And it stays put on further presses.
+    await t.key('ArrowDown', 2);
+    t.assert((await t.cursorKey()) === got, 'cursor stable at the bottom');
+  },
+
+  'down-arrow survives a live SSE re-render mid-walk (issue #7)': async t => {
+    const fs = require('fs');
+    fs.writeFileSync(t.boardPath, [
+      '---',
+      'session: e2e-fixture-0001',
+      'cwd: /tmp/e2e-project',
+      'started: 2026-07-09T10:00:00Z',
+      'title: sse fixture',
+      '---',
+      '',
+      '## Plan',
+      '- one',
+      '- dup',
+      '- dup',
+      '- two',
+      '',
+      '## Log',
+      '- 10:00 start',
+      '',
+    ].join('\n'));
+    await t.open();
+    await t.key('j', 4); // sec:Plan, one, dup, dup(second copy)
+    // External edit triggers an SSE re-render while the cursor sits on the
+    // SECOND duplicate. The restore-by-key lands on a "dup" row; navigation
+    // afterwards must still advance to the end, not get stuck.
+    await t.editExternally({ op: 'log', text: 'external poke', author: 'claude' });
+    await t.waitBoardContains('external poke');
+    await t.settled();
+    await t.key('j', 6);
+    const [got, lastKey] = await t.page.evaluate(() => {
+      const vis = window.__sn.stops.filter(s => s.visible);
+      return [window.__sn.cursorKey, vis[vis.length - 1].key];
+    });
+    t.assert(got === lastKey && lastKey.includes('external poke'),
+      `cursor reached the last item after SSE re-render (got ${JSON.stringify(got)}, last ${JSON.stringify(lastKey)})`);
+  },
+
   'space cycles status and cursor survives the re-render': async t => {
     await t.open();
     await t.key('3');
