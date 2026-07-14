@@ -1586,6 +1586,27 @@ run({
     await t.key('Escape');
   },
 
+  'markdown [label](url) links render as anchors and o opens them': async t => {
+    await t.open();
+    await t.editExternally({ op: 'add', section: 'Ideas', text: 'see [the docs](https://example.com/docs)' });
+    await t.settled();
+    // Renders as a real anchor with the label text and href, not raw markdown.
+    const a = t.page.locator('.text a.mdlink', { hasText: 'the docs' });
+    await a.waitFor();
+    const href = await a.getAttribute('href');
+    t.assert(href === 'https://example.com/docs', `anchor href is the url (got ${href})`);
+    const target = await a.getAttribute('target');
+    t.assert(target === '_blank', `anchor opens a new tab (got ${target})`);
+    // o on the selected item opens the link in a new browser tab.
+    await t.page.locator('.row', { hasText: 'the docs' }).click();
+    const [popup] = await Promise.all([
+      t.page.waitForEvent('popup'),
+      t.key('o'),
+    ]);
+    t.assert(popup.url() === 'https://example.com/docs', `o opened the url (got ${popup.url()})`);
+    await popup.close();
+  },
+
   'map j from the center steps to the nearest first-ring node': async t => {
     await t.open();
     await t.key('m');

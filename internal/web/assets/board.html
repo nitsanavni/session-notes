@@ -112,6 +112,7 @@ li { padding: .1rem 0; }
 .pinflag { color: var(--pin); }
 .wikilink { color: var(--link); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
 .wikilink.path { cursor: help; text-decoration-style: dashed; }
+.mdlink { color: var(--link); cursor: pointer; text-decoration: underline; }
 .actions { visibility: hidden; flex: none; display: flex; gap: .15rem; }
 .row:hover .actions, .row:focus-within .actions, .row.cursor .actions,
 .sechead.cursor .actions { visibility: visible; }
@@ -1123,23 +1124,50 @@ function tintAuthor(target, str) {
   return str.slice(m[0].length);
 }
 
-// linkify renders [[wiki-links]] as live elements. Side notes open the note
-// modal; path links are deliberately inert (the server would otherwise become
-// a general file server) and say so on hover.
+// LINK_RE matches a [[wiki-link]] OR a markdown [label](url) link. Groups:
+// 1 = wiki name; 2 = markdown label, 3 = markdown url. Both forms are scanned
+// in one pass so they render in document order without clashing.
+const LINK_RE = /\[\[([^\[\]]+)\]\]|\[([^\[\]]+)\]\(([^\s()]+)\)/g;
+
+// isWebUrl says whether a markdown link target is something we can open in the
+// browser (http/https, or a scheme-less //host). Other targets (relative paths,
+// mailto:, etc.) still render but as plain, un-openable text.
+function isWebUrl(u) {
+  return /^(https?:)?\/\//i.test(u);
+}
+
+// linkify renders [[wiki-links]] and markdown [label](url) links as live
+// elements. Side notes open the note modal; path wiki-links are deliberately
+// inert (the server would otherwise become a general file server) and say so on
+// hover; markdown web links open in a new browser tab.
 function linkify(target, text) {
-  const re = /\[\[([^\[\]]+)\]\]/g;
+  const re = new RegExp(LINK_RE.source, 'g');
   let last = 0, m;
   while ((m = re.exec(text))) {
     target.append(text.slice(last, m.index));
-    const name = m[1].trim();
-    const isPath = name.includes('/') || name.startsWith('~');
-    const span = el('span', {
-      class: 'wikilink' + (isPath ? ' path' : ''),
-      title: isPath ? `path link — resolved against the session cwd; open ${name} in your editor`
-                    : `side note — click to open`,
-    }, m[0]);
-    if (!isPath) span.addEventListener('click', ev => { ev.stopPropagation(); openNote(name); });
-    target.append(span);
+    if (m[1] != null) {
+      const name = m[1].trim();
+      const isPath = name.includes('/') || name.startsWith('~');
+      const span = el('span', {
+        class: 'wikilink' + (isPath ? ' path' : ''),
+        title: isPath ? `path link — resolved against the session cwd; open ${name} in your editor`
+                      : `side note — click to open`,
+      }, m[0]);
+      if (!isPath) span.addEventListener('click', ev => { ev.stopPropagation(); openNote(name); });
+      target.append(span);
+    } else {
+      const label = m[2].trim(), url = m[3].trim();
+      if (isWebUrl(url)) {
+        const a = el('a', {
+          class: 'mdlink', href: url, target: '_blank', rel: 'noopener noreferrer',
+          title: url,
+        }, label);
+        a.addEventListener('click', ev => ev.stopPropagation());
+        target.append(a);
+      } else {
+        target.append(m[0]); // non-web target: leave the raw markdown as text
+      }
+    }
     last = m.index + m[0].length;
   }
   target.append(text.slice(last));
@@ -1153,22 +1181,32 @@ function firstLink(text) {
   return { name, isPath: name.includes('/') || name.startsWith('~') };
 }
 
-// extractLinks returns every [[link]] on an item (name + path-form flag), in
-// document order — the source for the multi-link chooser (the TUI's o).
+// extractLinks returns every link on an item in document order — the source for
+// the multi-link chooser and the `o` key. Each entry is one of:
+//   { kind: 'note', name }             a [[side note]] (opens the note modal)
+//   { kind: 'path', name }             a [[path/link]] (inert, hint on open)
+//   { kind: 'url',  label, url }       a markdown [label](url) web link
 function extractLinks(text) {
-  const re = /\[\[([^\[\]]+)\]\]/g;
+  const re = new RegExp(LINK_RE.source, 'g');
   const out = [];
   let m;
   while ((m = re.exec(text))) {
-    const name = m[1].trim();
-    out.push({ name, isPath: name.includes('/') || name.startsWith('~') });
+    if (m[1] != null) {
+      const name = m[1].trim();
+      out.push({ kind: (name.includes('/') || name.startsWith('~')) ? 'path' : 'note', name });
+    } else {
+      const url = m[3].trim();
+      if (isWebUrl(url)) out.push({ kind: 'url', label: m[2].trim(), url });
+    }
   }
   return out;
 }
 
-// openLink opens a single [[link]] (side note modal, or a hint for path links).
+// openLink opens a single link: a side note modal, a hint for inert path links,
+// or a new browser tab for a markdown web link.
 function openLink(l) {
-  if (l.isPath) { toast(`path link — open ${l.name} in your editor`, true); return; }
+  if (l.kind === 'url') { window.open(l.url, '_blank', 'noopener,noreferrer'); return; }
+  if (l.kind === 'path') { toast(`path link — open ${l.name} in your editor`, true); return; }
   openNote(l.name);
 }
 
@@ -1183,7 +1221,10 @@ function linkChooser(links) {
   };
   list.textContent = '';
   links.forEach((l, i) => {
-    const row = el('div', { class: 'lrow' }, `[[${l.name}]]` + (l.isPath ? '  (path)' : ''));
+    const label = l.kind === 'url' ? `${l.label}  →  ${l.url}`
+                : l.kind === 'path' ? `[[${l.name}]]  (path)`
+                : `[[${l.name}]]`;
+    const row = el('div', { class: 'lrow' }, label);
     row.addEventListener('click', () => { close(); openLink(l); });
     list.append(row);
   });
@@ -1265,8 +1306,9 @@ const act = {
   },
   // copyPath (O): copy the item's first [[linked note]] absolute path to the
   // clipboard so it can be opened in another editor — the TUI's O, web parity.
+  // Markdown web links have no on-disk path, so they're skipped here.
   copyPath: async (s, it) => {
-    const links = extractLinks(it.text);
+    const links = extractLinks(it.text).filter(l => l.kind !== 'url');
     if (!links.length) { toast('no [[link]] on this item', true); return; }
     try {
       const r = await fetch(`${API}/note/${encodeURIComponent(links[0].name)}`);
