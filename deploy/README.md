@@ -316,6 +316,18 @@ persists.
 Schema migrations are idempotent `ALTER TABLE ADD COLUMN` guards run at every
 `Open`, so upgrades are forward-only and safe. Still, snapshot first.
 
+**First boot on a large legacy (pre-M9) db may be slow.** The one-time journal
+migration (fat before/after snapshots → line-diffs, stamped in `PRAGMA
+user_version`) runs synchronously inside `Open`, before `/healthz` comes up. It
+converts rows in batches of 1000 and logs progress to stderr
+(`journal-migrate: converted N rows …`). It then runs a best-effort one-shot
+`VACUUM` to reclaim space; VACUUM temporarily needs roughly **2× the db size in
+free disk**, so ensure headroom, and **back up first** (the snapshot commands
+below). If VACUUM fails on a disk-tight host it is logged and tolerated — the
+journal is already in the correct format and the migration will not rerun. Watch
+the logs and wait for `journal-migrate: done` before expecting `/healthz` to
+respond on the first boot after upgrading such a db.
+
 **Docker Compose:**
 
 ```sh

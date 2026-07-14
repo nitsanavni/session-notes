@@ -142,6 +142,20 @@ func (s *Server) identity(r *http.Request) Identity {
 	return Identity{}
 }
 
+// effectiveAuthor decides the author recorded for a write. On an authenticated
+// server (not --insecure) it is FORCED to the token subject, ignoring any
+// client-supplied author, so a writer cannot spoof another principal — which
+// would poison ignore-author self-suppression and audit attribution. In
+// --insecure mode (loopback dev) a client-supplied author is honored.
+func (s *Server) effectiveAuthor(r *http.Request, reqAuthor string) string {
+	if !s.insecure {
+		if subj := s.identity(r).Subject; subj != "" {
+			return subj
+		}
+	}
+	return reqAuthor
+}
+
 // authWrap admits a request presenting a valid bearer token (Authorization:
 // Bearer, ?token=, or the cookie a tokened visit set) and stashes the resolved
 // identity in the request context for per-board grant checks. Everything else
@@ -422,7 +436,7 @@ func (s *Server) handlePutRaw(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, "bad JSON: "+err.Error())
 		return
 	}
-	version, err := s.store.SetContent(id, req.Content, req.Author)
+	version, err := s.store.SetContent(id, req.Content, s.effectiveAuthor(r, req.Author))
 	if err != nil {
 		httpErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -477,6 +491,11 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Root = grant.Root
 	}
+	// Author is forced to the authenticated subject: a client cannot spoof
+	// author=<victim> to poison ignore-author suppression or audit attribution.
+	// Overriding req.Author here also fixes the "log" op, which stamps op.Author
+	// into the board body. Only --insecure honors a client-supplied author.
+	req.Author = s.effectiveAuthor(r, req.Author)
 	op, err := toOp(req)
 	if err != nil {
 		httpErr(w, http.StatusBadRequest, err.Error())
@@ -620,8 +639,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			// Plumb the author(s) of the change into the event so `watch --json`
 			// can report who edited (the server knows via the ops journal; the
-			// SSE payload previously carried an empty author).
-			authors, _ := s.store.AuthorsSince(id, prevVer)
+			// SSE payload previously carried an empty author). For a subtree-scoped
+			// stream, restrict the authors to ops that actually touched the granted
+			// subtree — a concurrent sibling edit must not leak its author here.
+			var authors []string
+			if node != "" {
+				authors, _ = s.store.AuthorsSinceTouching(id, prevVer, subtreeLineSet(prev, cur, node))
+			} else {
+				authors, _ = s.store.AuthorsSince(id, prevVer)
+			}
 			prev, prevVer = cur, curVer
 			payload, _ := json.Marshal(map[string]any{"authors": dedupeAuthors(authors)})
 			fmt.Fprintf(w, "data: %s\n\n", payload)
@@ -670,6 +696,25 @@ func subtreeChanged(before, after, id string) bool {
 	b, _ := board.SubtreeSource(before, id)
 	a, _ := board.SubtreeSource(after, id)
 	return b != a
+}
+
+// subtreeLineSet is the union of the subtree's source lines before and after a
+// change — the reference set AuthorsSinceTouching intersects each op's diff
+// against to decide whether that op (and thus its author) is in-subtree.
+func subtreeLineSet(before, after, id string) map[string]bool {
+	set := map[string]bool{}
+	for _, content := range []string{before, after} {
+		src, ok := board.SubtreeSource(content, id)
+		if !ok || src == "" {
+			continue
+		}
+		for _, l := range strings.Split(src, "\n") {
+			if strings.TrimSpace(l) != "" {
+				set[l] = true
+			}
+		}
+	}
+	return set
 }
 
 // ---- history ----

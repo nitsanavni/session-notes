@@ -277,6 +277,116 @@ func TestScopedSSE(t *testing.T) {
 	}
 }
 
+// TestScopedSSEAuthorsNoSiblingLeak proves F2: a subtree-scoped stream's author
+// payload is restricted to ops that touched the granted subtree. A concurrent
+// edit in a sibling subtree (which board-wide AuthorsSince would surface) must
+// never appear in the scoped authors, and an in-subtree edit is attributed to
+// its real author.
+func TestScopedSSEAuthorsNoSiblingLeak(t *testing.T) {
+	s, ts := testServer(t, false)
+	admin, _ := s.CreateToken("boss")
+	ac := NewRemoteTree(ts.URL, "b1", admin)
+	_, _ = ac.Apply(board.Op{Name: "add", Section: "Threads", Text: "parent-A"})
+	_, _ = ac.Apply(board.Op{Name: "add", Section: "Threads", Text: "parent-B"})
+	content, verBefore, _ := s.Get("b1")
+	th := board.Parse(content).Section("Threads")
+	var aID, bID string
+	for _, it := range th.Items {
+		if strings.Contains(it.DisplayText(), "parent-A") {
+			aID = it.ID
+		}
+		if strings.Contains(it.DisplayText(), "parent-B") {
+			bID = it.ID
+		}
+	}
+
+	// Two distinct principals: alice edits subtree A (watched), bob edits sibling
+	// B. Authors are forced to the token subjects.
+	aliceTok, _ := s.CreateToken("alice")
+	bobTok, _ := s.CreateToken("bob")
+	alice := NewRemoteTree(ts.URL, "b1", aliceTok)
+	bob := NewRemoteTree(ts.URL, "b1", bobTok)
+	if _, err := alice.Apply(board.Op{Name: "reply", ID: aID, Text: "in-A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.Apply(board.Op{Name: "reply", ID: bID, Text: "in-B"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Board-wide, both alice and bob authored ops since verBefore — the leak the
+	// old scoped stream would have surfaced.
+	all, err := s.AuthorsSince("b1", verBefore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(all, "alice") || !contains(all, "bob") {
+		t.Fatalf("precondition: board-wide authors %v want both alice and bob", all)
+	}
+
+	// Scoped to subtree A: only alice, never bob.
+	cur, _, _ := s.Get("b1")
+	scoped, err := s.AuthorsSinceTouching("b1", verBefore, subtreeLineSet(content, cur, aID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(scoped, "alice") {
+		t.Fatalf("scoped authors %v missing in-subtree author alice", scoped)
+	}
+	if contains(scoped, "bob") {
+		t.Fatalf("scoped authors %v leaked sibling-subtree author bob", scoped)
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestScopedSSEEndToEndAuthor drives the SSE stream: a scoped watcher gets the
+// in-subtree change attributed to the real editor.
+func TestScopedSSEEndToEndAuthor(t *testing.T) {
+	s, ts := testServer(t, false)
+	admin, _ := s.CreateToken("boss")
+	ac := NewRemoteTree(ts.URL, "b1", admin)
+	_, _ = ac.Apply(board.Op{Name: "add", Section: "Threads", Text: "watched"})
+	content, _, _ := s.Get("b1")
+	th := board.Parse(content).Section("Threads")
+	var watchedID string
+	for _, it := range th.Items {
+		if strings.Contains(it.DisplayText(), "watched") {
+			watchedID = it.ID
+		}
+	}
+	editorTok, _ := s.CreateToken("editor")
+	editor := NewRemoteTree(ts.URL, "b1", editorTok)
+
+	scopedTok, _ := s.CreateTokenAs("w", "w", false)
+	_ = s.AddGrant("w", "b1", watchedID, "read")
+	watcher := NewRemoteTree(ts.URL, "b1", scopedTok)
+	ch, cancel, err := watcher.Watch("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	if _, err := editor.Apply(board.Op{Name: "reply", ID: watchedID, Text: "signal"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ev := <-ch:
+		if ev.Author != "editor" {
+			t.Fatalf("in-subtree event author=%q want editor", ev.Author)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no event for in-scope edit")
+	}
+}
+
 // TestConcurrentSameNodeRace has two remote writers hammer the SAME node. With
 // base+retry, last-writer-wins but no write is silently dropped and no 5xx.
 func TestConcurrentSameNodeRace(t *testing.T) {

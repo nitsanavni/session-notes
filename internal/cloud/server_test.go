@@ -147,10 +147,14 @@ func TestRemoteWatchScoped(t *testing.T) {
 // fires.
 func TestRemoteWatchIgnoreAuthor(t *testing.T) {
 	s, ts := testServer(t, false)
-	tok, _ := s.CreateToken("t")
-	tree := NewRemoteTree(ts.URL, "b1", tok)
+	// On an authed server the author is the token subject, not client-supplied,
+	// so each principal gets its own token: scout watches ignoring itself.
+	scoutTok, _ := s.CreateToken("scout")
+	otherTok, _ := s.CreateToken("other")
+	scout := NewRemoteTree(ts.URL, "b1", scoutTok)
+	other := NewRemoteTree(ts.URL, "b1", otherTok)
 
-	ch, cancel, err := tree.WatchFiltered("", "scout")
+	ch, cancel, err := scout.WatchFiltered("", "scout")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +162,8 @@ func TestRemoteWatchIgnoreAuthor(t *testing.T) {
 	// Let the SSE handler subscribe before we write.
 	time.Sleep(100 * time.Millisecond)
 
-	// Own edit (author "scout"): suppressed, no wakeup.
-	if _, err := tree.Apply(board.Op{Name: "add", Section: "Threads", Text: "mine", Author: "scout"}); err != nil {
+	// Own edit (author forced to token subject "scout"): suppressed, no wakeup.
+	if _, err := scout.Apply(board.Op{Name: "add", Section: "Threads", Text: "mine"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -168,14 +172,64 @@ func TestRemoteWatchIgnoreAuthor(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 
-	// Another author's edit: fires.
-	if _, err := tree.Apply(board.Op{Name: "add", Section: "Threads", Text: "theirs", Author: "other"}); err != nil {
+	// Another principal's edit: fires.
+	if _, err := other.Apply(board.Op{Name: "add", Section: "Threads", Text: "theirs"}); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-ch:
 	case <-time.After(2 * time.Second):
 		t.Fatal("edit by another author should fire an event")
+	}
+}
+
+// TestForcedAuthorOverridesSpoof proves F1: on an authed server a client-supplied
+// author is ignored and forced to the token subject, so an attacker cannot spoof
+// author=<victim> to (a) slip past the victim's ignore-author self-suppression or
+// (b) forge journal/audit attribution.
+func TestForcedAuthorOverridesSpoof(t *testing.T) {
+	s, ts := testServer(t, false)
+	victimTok, _ := s.CreateToken("victim")
+	attackerTok, _ := s.CreateToken("attacker")
+	victim := NewRemoteTree(ts.URL, "b1", victimTok)
+	attacker := NewRemoteTree(ts.URL, "b1", attackerTok)
+
+	// Victim watches, ignoring its own edits.
+	ch, cancel, err := victim.WatchFiltered("", "victim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	// Attacker edits but claims author="victim" hoping to be suppressed.
+	if _, err := attacker.Apply(board.Op{Name: "add", Section: "Threads", Text: "sneaky", Author: "victim"}); err != nil {
+		t.Fatal(err)
+	}
+	// Suppression must NOT be gamed: the victim's watch still fires.
+	var ev board.Event
+	select {
+	case ev = <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("spoofed author must not suppress the victim's watch")
+	}
+	// And the event attributes the change to the attacker's real subject.
+	if ev.Author != "attacker" {
+		t.Fatalf("event author=%q want attacker (spoof leaked or misattributed)", ev.Author)
+	}
+
+	// The journal records the attacker's real subject, never the spoofed name.
+	authorsJournal, err := s.AuthorsSince("b1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range authorsJournal {
+		if a != "attacker" {
+			t.Fatalf("journal author=%q want attacker (spoof leaked)", a)
+		}
+	}
+	if len(authorsJournal) == 0 {
+		t.Fatal("journal recorded no op")
 	}
 }
 

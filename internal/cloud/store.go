@@ -15,6 +15,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -178,44 +180,59 @@ func (s *Store) migrateJournal() error {
 	if uv >= journalSchemaVersion {
 		return nil
 	}
-	// Convert legacy rows (those still carrying a full snapshot) to diffs.
-	rows, err := s.db.Query(`SELECT id, before, after FROM ops WHERE before<>'' OR after<>''`)
-	if err != nil {
-		return err
-	}
-	type conv struct {
-		id             int64
-		added, removed string
-	}
-	var todo []conv
-	for rows.Next() {
-		var id int64
-		var before, after string
-		if err := rows.Scan(&id, &before, &after); err != nil {
+	start := time.Now()
+	mlog := log.New(os.Stderr, "journal-migrate: ", log.LstdFlags)
+	mlog.Printf("starting (fat snapshot -> line-diff) conversion")
+	// Convert legacy rows (those still carrying a full snapshot) to diffs, in
+	// batches so a fat db never opens one unbounded transaction (the M9 review's
+	// slow/disk-tight first-boot concern). Each batch reads up to migrateBatch
+	// pending rows and rewrites them in one tx; loop until none remain.
+	converted := 0
+	for {
+		rows, err := s.db.Query(
+			`SELECT id, before, after FROM ops WHERE before<>'' OR after<>'' LIMIT ?`, migrateBatch)
+		if err != nil {
+			return err
+		}
+		type conv struct {
+			id             int64
+			added, removed string
+		}
+		var todo []conv
+		for rows.Next() {
+			var id int64
+			var before, after string
+			if err := rows.Scan(&id, &before, &after); err != nil {
+				rows.Close()
+				return err
+			}
+			added, removed := board.DiffLines(before, after)
+			todo = append(todo, conv{id: id, added: joinLines(added), removed: joinLines(removed)})
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
 			return err
 		}
-		added, removed := board.DiffLines(before, after)
-		todo = append(todo, conv{id: id, added: joinLines(added), removed: joinLines(removed)})
-	}
-	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
-	}
-	rows.Close()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	for _, c := range todo {
-		if _, err := tx.Exec(`UPDATE ops SET added=?, removed=?, before='', after='' WHERE id=?`,
-			c.added, c.removed, c.id); err != nil {
-			_ = tx.Rollback()
+		if len(todo) == 0 {
+			break
+		}
+		tx, err := s.db.Begin()
+		if err != nil {
 			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
+		for _, c := range todo {
+			if _, err := tx.Exec(`UPDATE ops SET added=?, removed=?, before='', after='' WHERE id=?`,
+				c.added, c.removed, c.id); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		converted += len(todo)
+		mlog.Printf("converted %d rows so far", converted)
 	}
 	// Prune every board down to journalKeep rows.
 	boardIDs, err := s.opsBoardIDs()
@@ -227,13 +244,26 @@ func (s *Store) migrateJournal() error {
 			return err
 		}
 	}
+	// Stamp the schema version BEFORE the VACUUM so the (best-effort, one-shot)
+	// space reclaim can fail on a disk-tight host without the whole migration
+	// rerunning on every subsequent boot.
 	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, journalSchemaVersion)); err != nil {
 		return err
 	}
-	// Reclaim the space the fat snapshots occupied.
-	_, _ = s.db.Exec(`VACUUM`)
+	mlog.Printf("converted %d rows in %s; reclaiming space (VACUUM)", converted, time.Since(start).Round(time.Millisecond))
+	// Reclaim the space the fat snapshots occupied. Best effort: a failure here
+	// (e.g. insufficient free disk for the rebuild) is logged and tolerated — the
+	// journal is already in the correct diff format and won't be migrated again.
+	if _, err := s.db.Exec(`VACUUM`); err != nil {
+		mlog.Printf("VACUUM failed (space not reclaimed, continuing): %v", err)
+	}
+	mlog.Printf("done in %s", time.Since(start).Round(time.Millisecond))
 	return nil
 }
+
+// migrateBatch caps how many legacy ops rows are converted per transaction, so a
+// large pre-M9 db migrates in bounded chunks rather than one giant tx.
+const migrateBatch = 1000
 
 // journalSchemaVersion marks the diff-journal format in PRAGMA user_version.
 const journalSchemaVersion = 1
@@ -545,6 +575,50 @@ func (s *Store) AuthorsSince(id string, sinceVersion int) ([]string, error) {
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// AuthorsSinceTouching is the subtree-scoped variant of AuthorsSince: it returns
+// only the authors of ops whose stored line-diff added or removed a line present
+// in `lines` (the source line set of the granted subtree, before ∪ after). It
+// backs the privacy fix for scoped SSE tokens — a scoped watcher must not learn
+// who is active in sibling subtrees, so an op that touched only lines outside
+// the subtree contributes no author. Diff lines and SubtreeSource lines are both
+// verbatim raw source lines, so equality is exact.
+func (s *Store) AuthorsSinceTouching(id string, sinceVersion int, lines map[string]bool) ([]string, error) {
+	rows, err := s.db.Query(`SELECT author, added, removed FROM ops WHERE board_id=? AND version>? ORDER BY version`, id, sinceVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var author, added, removed string
+		if err := rows.Scan(&author, &added, &removed); err != nil {
+			return nil, err
+		}
+		if diffTouchesLines(added, removed, lines) {
+			out = append(out, author)
+		}
+	}
+	return out, rows.Err()
+}
+
+// diffTouchesLines reports whether any added/removed diff line is in the set.
+func diffTouchesLines(added, removed string, lines map[string]bool) bool {
+	if len(lines) == 0 {
+		return false
+	}
+	for _, l := range splitLines(added) {
+		if lines[l] {
+			return true
+		}
+	}
+	for _, l := range splitLines(removed) {
+		if lines[l] {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- version-bump pub/sub (SSE) ----
