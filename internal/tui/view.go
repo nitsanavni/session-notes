@@ -142,6 +142,9 @@ func (m *model) viewBoard() string {
 	// Title text (Title -> Session -> path fallback) is held aside and rendered
 	// as a sticky header below, outside the scrollable body — see boardHeader.
 	title := m.path
+	if m.remote != nil {
+		title = m.remote.url()
+	}
 	// A path fallback carries its meaning in the tail (the filename), so it is
 	// truncated from the left; a frontmatter title leads with the name and is
 	// truncated from the right (dropping the trailing dim Cwd first).
@@ -738,6 +741,9 @@ func (m *model) viewFooter() string {
 	if n := m.binaryNotice(); n != "" {
 		line = n + "\n" + line
 	}
+	if m.remote != nil && !m.remote.isConnected() {
+		line = styleUrgent.Render("⚠ remote connection lost — retrying") + "\n" + line
+	}
 	return line
 }
 
@@ -871,6 +877,10 @@ func (m *model) viewHistory() string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("history — shared edit journal") + "\n")
 	b.WriteString(styleDim.Render("newest first · who changed what · read-only") + "\n\n")
+	if m.remote != nil {
+		b.WriteString(styleDim.Render("history overlay not available on remote boards\n(see the board's web /history)") + "\n")
+		return lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+	}
 	entries := board.History(m.path)
 	var lines []string
 	if len(entries) == 0 {

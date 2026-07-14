@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nitsanavni/session-notes/internal/board"
+	"github.com/nitsanavni/session-notes/internal/cloud"
 	"github.com/nitsanavni/session-notes/internal/update"
 )
 
@@ -227,7 +228,12 @@ type model struct {
 	// In-memory only; persisted (as part of a record) when `!` saves a note.
 	feedbackEvents []feedbackEvent
 
-	watch  *watcher
+	watch *watcher
+	// remote is non-nil when the TUI is attached to a cloud board (--board
+	// https://…). It replaces the file seams (load/save/watch) with the RemoteTree
+	// HTTP+SSE client; undo/redo, $EDITOR merge, and the history overlay degrade to
+	// a status-line message. m.path is "" in this mode.
+	remote *remoteStore
 	width  int
 	height int
 
@@ -298,6 +304,51 @@ func Run(path string) error {
 	return runProgram(m)
 }
 
+// RunRemote opens the interactive TUI on a cloud board addressed by a
+// https://host/b/<board>[#<node>] URL. It reuses the login token stored for the
+// host (session-notes login); if the server requires auth and no token is
+// stored, it exits with the login hint before entering the TUI rather than
+// dropping the user into an empty board. A #node fragment scopes edits to that
+// subtree (refused server-side otherwise) and zooms the map onto it.
+func RunRemote(rawURL string) error {
+	ref, err := cloud.ParseRef(rawURL)
+	if err != nil {
+		return err
+	}
+	rs := newRemoteStore(ref, cloud.TokenFor(ref.Host))
+	m := newModel()
+	if err := m.openRemote(rs); err != nil {
+		if isAuthError(err) {
+			return fmt.Errorf("not authorized for %s — run: session-notes login %s --token <token>", ref.Host, ref.Server)
+		}
+		return fmt.Errorf("open remote board %s: %w", rawURL, err)
+	}
+	m.resumeView()
+	return runProgram(m)
+}
+
+// openRemote loads a cloud board into the model and starts its SSE watch. It is
+// the remote counterpart of openBoard: m.path stays "" (there is no file), the
+// remote store carries load/save/watch, and a #node fragment seeds the map zoom.
+func (m *model) openRemote(rs *remoteStore) error {
+	content, err := rs.load()
+	if err != nil {
+		return err
+	}
+	m.remote = rs
+	m.path = ""
+	b := board.Parse(content)
+	m.board = b
+	m.mode = modeBoard
+	m.lastDisk = content
+	if rs.node != "" {
+		m.mapFocusRootID = rs.node // open zoomed onto the shared subtree
+	}
+	m.rebuildPositions()
+	rs.startWatch()
+	return nil
+}
+
 // RunPicker opens the TUI in picker mode.
 func RunPicker() error {
 	m := newModel()
@@ -326,6 +377,9 @@ func runProgram(m *model) error {
 	_, err := p.Run()
 	if m.watch != nil {
 		m.watch.close()
+	}
+	if m.remote != nil {
+		m.remote.close()
 	}
 	// The terminal is now handed back (p.Run returned, alt-screen torn down), so
 	// it is safe to replace the process image with the freshly-deployed binary.
@@ -726,6 +780,10 @@ func (m *model) save() {
 // tree if the file changed underneath us. On a rebase the model adopts the
 // merged board, records the external state for undo coherence, and reports it.
 func (m *model) saveWithRebase(op pendingOp) {
+	if m.remote != nil {
+		m.remoteSave(op)
+		return
+	}
 	var msg string
 	res, err := m.board.SaveRebasing(m.path, m.lastDisk, func(fresh *board.Board) {
 		msg = applyOp(fresh, op)
@@ -747,6 +805,29 @@ func (m *model) saveWithRebase(op pendingOp) {
 		}
 	}
 	m.lastDisk = res.Content
+}
+
+// remoteSave persists a text-entry or structural mutation to a cloud board by
+// sending it as a surgical op through the RemoteTree (server-side version-based
+// conflict resolution), then adopting the authoritative content the server
+// returns. On failure (network outage, permission refusal) it keeps the user's
+// optimistic in-memory edit visible and reports the error in the status line —
+// never silently dropping typed content. The caller has already applied the
+// mutation to m.board, so an offline edit stays on screen until it can be saved.
+func (m *model) remoteSave(op pendingOp) {
+	content, err := m.remote.applyOp(op)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid op") {
+			m.status = "edit refused (outside shared subtree?) — not saved: " + err.Error()
+		} else {
+			m.status = "save failed (remote) — your edit is unsaved: " + err.Error()
+		}
+		return
+	}
+	b := board.Parse(content)
+	m.board = b
+	m.lastDisk = content
+	m.rebuildPositions()
 }
 
 // currentContent is the board's current serialized form — the unit of the undo
@@ -783,6 +864,10 @@ func (m *model) restore(content string) {
 // non-journaling writer: a hook or a human in $EDITOR — ErrUndoConflict), so
 // single-user robustness is not regressed.
 func (m *model) undo() {
+	if m.remote != nil {
+		m.status = "undo not available on remote boards"
+		return
+	}
 	if m.path != "" {
 		switch err := board.Undo(m.path); err {
 		case nil:
@@ -809,6 +894,10 @@ func (m *model) undo() {
 // redo re-applies the most recently undone edit, mirroring undo: the shared
 // journal first, the in-memory history as a fallback.
 func (m *model) redo() {
+	if m.remote != nil {
+		m.status = "redo not available on remote boards"
+		return
+	}
 	if m.path != "" {
 		switch err := board.Redo(m.path); err {
 		case nil:
@@ -843,10 +932,14 @@ func (m *model) reloadExternal() { m.doReload(true) }
 // xclip / wl-copy, best effort) and always shows it in the status line, so the
 // path is revealed even when no clipboard tool is available.
 func (m *model) yankBoardPath() {
-	if copyToClipboard(m.board.Path) {
-		m.status = "copied " + m.board.Path
+	ref := m.board.Path
+	if m.remote != nil {
+		ref = m.remote.url()
+	}
+	if copyToClipboard(ref) {
+		m.status = "copied " + ref
 	} else {
-		m.status = m.board.Path
+		m.status = ref
 	}
 }
 
@@ -902,16 +995,25 @@ func (m *model) yankNotePath(name string) {
 	}
 }
 
-func (m *model) doReload(recordExternal bool) {
-	if m.path == "" {
-		return
+// loadContent reads the whole board content from its backing store: the file at
+// m.path locally, or the RemoteTree (GET /raw) for a cloud board.
+func (m *model) loadContent() (string, error) {
+	if m.remote != nil {
+		return m.remote.load()
 	}
 	data, err := os.ReadFile(m.path)
+	return string(data), err
+}
+
+func (m *model) doReload(recordExternal bool) {
+	if m.remote == nil && m.path == "" {
+		return
+	}
+	content, err := m.loadContent()
 	if err != nil {
 		m.status = "reload failed: " + err.Error()
 		return
 	}
-	content := string(data)
 	if recordExternal && m.board != nil && content != m.board.Render() {
 		old := m.board.Render()
 		m.hist.record(old)
@@ -1060,6 +1162,9 @@ func (m *model) Init() tea.Cmd {
 	if m.watch != nil {
 		cmds = append(cmds, m.watch.wait())
 	}
+	if m.remote != nil {
+		cmds = append(cmds, m.remote.wait())
+	}
 	if m.mode == modeDash {
 		// A single perpetual tick chain drives the 2s dashboard refresh. It is
 		// re-issued on every dashTickMsg (see Update) so it survives dipping into
@@ -1091,6 +1196,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rescanDash()
 		} else if m.mode != modePicker && !m.isInputMode() {
 			m.reloadExternal()
+		}
+		if m.remote != nil {
+			return m, m.remote.wait()
 		}
 		if m.watch != nil {
 			return m, m.watch.wait()
@@ -1416,6 +1524,10 @@ func (m *model) handleBoardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.startInput(modeInputReply, "", "fork a sub-thread")
 		}
 	case "E":
+		if m.remote != nil {
+			m.status = "$EDITOR merge disabled on remote boards"
+			return m, nil
+		}
 		m.snapshot() // capture pre-edit state before handing off to $EDITOR
 		return m, m.openEditor()
 	case "o":

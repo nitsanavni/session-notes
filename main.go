@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nitsanavni/session-notes/internal/board"
+	"github.com/nitsanavni/session-notes/internal/cloud"
 	"github.com/nitsanavni/session-notes/internal/hooks"
 	"github.com/nitsanavni/session-notes/internal/tui"
 	"github.com/nitsanavni/session-notes/internal/update"
@@ -163,12 +164,37 @@ func main() {
 		return
 	}
 
+	// A remote board (explicit --board URL, or the cwd's link pointing at one)
+	// opens the TUI over the cloud backend instead of a file.
+	if ref := remoteBoardRef(boardPath); ref != "" {
+		exitIf(tui.RunRemote(ref))
+		return
+	}
+
 	path, ok := resolveBoard(boardPath, paneID)
 	if !ok {
 		exitIf(tui.RunPicker())
 		return
 	}
 	exitIf(tui.Run(path))
+}
+
+// remoteBoardRef returns a remote board URL to open in the TUI: an explicit
+// --board http(s) URL, else the current directory's link when it points at a
+// remote board. Returns "" when neither applies (a local board / picker).
+func remoteBoardRef(boardPath string) string {
+	if boardPath != "" {
+		if cloud.IsRemote(boardPath) {
+			return boardPath
+		}
+		return ""
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if ref, _, ok := cloud.LinkFor(cwd); ok && cloud.IsRemote(ref) {
+			return ref
+		}
+	}
+	return ""
 }
 
 // resolveBoard implements the spec's session-resolution order. Returns
