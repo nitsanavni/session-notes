@@ -81,6 +81,12 @@ func main() {
 		os.Exit(runServe(args[1:]))
 	}
 
+	// Demo subcommand: seed a throwaway board and serve it locally — the
+	// one-command tour for a stranger. File-mode only, torn down on Ctrl-C.
+	if len(args) >= 1 && args[0] == "demo" {
+		os.Exit(runDemo(args[1:]))
+	}
+
 	// Server subcommand: the M3 cloud-mode server (SQLite-backed, bearer auth).
 	// Distinct from `serve` (local file-backed web UI). See server_cloud.go.
 	if len(args) >= 1 && args[0] == "server" {
@@ -334,6 +340,10 @@ Usage:
                                       <path> or --session <id>); --due prints only
                                       when due on the re-injection cadence and
                                       updates the shared state (for monitors)
+  session-notes demo                  seed a throwaway board and serve it
+                                      locally on a free port, printing things
+                                      to try (--addr <host:port> to pin one);
+                                      Ctrl-C tears it down. File-mode, no tokens
   session-notes serve                 web UI (dashboard + boards) on
                                       127.0.0.1:7080; --addr <host:port> to
                                       change, --board <path> to serve one board.
@@ -371,8 +381,8 @@ Usage:
                                       --ignore-author <n> drops a remote watch's
                                       own edits)
   session-notes docs <topic>          print a protocol/recipe topic
-                                      (protocol|monitor|conflicts|cli|headless|
-                                      blurb); no topic lists them
+                                      (protocol|monitor|conflicts|cli|subtree|
+                                      server|headless|blurb); no topic lists them
   session-notes hook session-start    Claude Code SessionStart hook (JSON on stdin)
   session-notes hook session-end      SessionEnd hook
   session-notes hook prompt-submit    UserPromptSubmit hook
