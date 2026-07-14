@@ -1605,17 +1605,37 @@ run({
     await t.waitBoardContains('## Retro');
   },
 
-  'A overlay: custom input is reachable by keyboard alone': async t => {
+  'A overlay: custom input focused even with canonical picks left (issue #8)': async t => {
+    // The real-usage repro: a board missing some canonical sections, so the
+    // picklist is NON-empty. Typing right after A must land in the name box.
+    const fs = require('fs');
+    fs.writeFileSync(t.boardPath, '# e2e\n\n## Plan\n\n- [ ] one thing\n');
     await t.open();
     await t.key('A');
     await t.page.waitForSelector('#addsecmodal.open');
-    // The fixture already has every canonical section, so the overlay lands the
-    // keyboard straight in the custom name box — no mouse, no click needed.
     await t.page.waitForFunction(
       () => document.activeElement === document.querySelector('#addsecmodal input.custom'));
     await t.page.keyboard.type('Retro');
+    const typed = await t.page.$eval('#addsecmodal input.custom', i => i.value);
+    t.assert(typed === 'Retro', `keystrokes landed in the box (got "${typed}")`);
     await t.page.keyboard.press('Enter');
     await t.waitBoardContains('## Retro');
+  },
+
+  'A overlay: space toggles a canonical pick, then typing still names a custom one': async t => {
+    const fs = require('fs');
+    fs.writeFileSync(t.boardPath, '# e2e\n\n## Plan\n\n- [ ] one thing\n');
+    await t.open();
+    await t.key('A');
+    await t.page.waitForSelector('#addsecmodal.open');
+    // Box is empty → space toggles the selected canonical row (first one).
+    await t.page.keyboard.press(' ');
+    const box = await t.page.$eval('#addsecmodal .srow .box', b => b.textContent);
+    t.assert(box === '[x]', `space toggled the first canonical row (got "${box}")`);
+    await t.page.keyboard.type('Retro');
+    await t.page.keyboard.press('Enter');
+    await t.waitBoardContains('## Retro');
+    await t.waitBoardContains('## Threads'); // first canonical option on this board
   },
 
   'p toggles pin on an item from the outline': async t => {

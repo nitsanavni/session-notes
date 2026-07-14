@@ -471,7 +471,7 @@ form { display: contents; }
 <div id="maptools"></div><div id="searchprompt"><span class="lbl">/</span><form><input spellcheck="false" enterkeyhint="search" aria-label="search"></form><span class="scope" id="searchscope">working</span></div>
 <div id="searchpanel" aria-label="search results"></div>
 <div id="linkchooser"><div class="lbl">open link — j/k/arrows move · enter open · esc cancel</div><div class="list"></div></div>
-<div id="addsecmodal"><div class="lbl">add sections — j/k/arrows move · space toggle · i name · enter add · esc cancel</div><div class="list"></div><form><input class="custom" spellcheck="false" enterkeyhint="done" placeholder="custom section name…"></form></div>
+<div id="addsecmodal"><div class="lbl">add sections — type a custom name · ↑/↓ move · space toggle (empty box) · enter add · esc cancel</div><div class="list"></div><form><input class="custom" spellcheck="false" enterkeyhint="done" placeholder="custom section name…"></form></div>
 <footer id="listfoot">j/k/arrows move · tab section · enter fold · z zoom · a add · A section · R reply · F fork · space status · ! urgent · p pin · w wrap · e edit · T title · d archive · E raw · o link · B boards · m map · W width · / search · u undo · ? help</footer>
 <footer id="mapfoot" hidden></footer>
 <div id="err"></div>
@@ -1768,23 +1768,31 @@ function addSectionOverlay() {
     close();
     for (const nm of names) post({ op: 'add-section', text: nm });
   };
+  // The custom input holds focus the whole time (so typing a name always just
+  // works); list navigation runs from inside it: arrows move, space toggles
+  // while the box is empty (with text, space types a space), enter adds.
   custom.onkeydown = ev => {
     ev.stopPropagation();
-    if (ev.key === 'Escape') close();
+    if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+    else if (ev.key === 'ArrowDown') { ev.preventDefault(); if (options.length) { sel = Math.min(options.length - 1, sel + 1); paint(); } }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); if (options.length) { sel = Math.max(0, sel - 1); paint(); } }
+    else if (ev.key === ' ' && !custom.value && options.length) { ev.preventDefault(); toggle(); }
   };
   custom.form.onsubmit = ev => { ev.preventDefault(); confirm(); };
-  // No canonical sections left to pick — the only useful action is the custom
-  // name, so land the keyboard right in the input box.
-  if (!options.length) custom.focus();
+  custom.focus();
+  // Fallback for when a mouse click on a row blurred the input: the classic
+  // j/k/space keys still drive the list, and typing any printable character
+  // refocuses the input (no preventDefault, so the character lands in it).
   const onKey = ev => {
     if (document.activeElement === custom) return; // custom input owns its keys
-    ev.stopPropagation(); ev.preventDefault();
-    if (ev.key === 'j' || ev.key === 'ArrowDown') { if (options.length) { sel = Math.min(options.length - 1, sel + 1); paint(); } }
-    else if (ev.key === 'k' || ev.key === 'ArrowUp') { if (options.length) { sel = Math.max(0, sel - 1); paint(); } }
-    else if (ev.key === ' ') { if (options.length) toggle(); }
-    else if (ev.key === 'i') { custom.focus(); }
-    else if (ev.key === 'Enter') confirm();
-    else if (ev.key === 'Escape' || ev.key === 'q') close();
+    ev.stopPropagation();
+    if (ev.key === 'j' || ev.key === 'ArrowDown') { ev.preventDefault(); if (options.length) { sel = Math.min(options.length - 1, sel + 1); paint(); } }
+    else if (ev.key === 'k' || ev.key === 'ArrowUp') { ev.preventDefault(); if (options.length) { sel = Math.max(0, sel - 1); paint(); } }
+    else if (ev.key === ' ') { ev.preventDefault(); if (options.length) toggle(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); confirm(); }
+    else if (ev.key === 'Escape' || ev.key === 'q') { ev.preventDefault(); close(); }
+    else if (ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) custom.focus();
+    else ev.preventDefault();
   };
   document.addEventListener('keydown', onKey, true);
 }
