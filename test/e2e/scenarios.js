@@ -1779,6 +1779,38 @@ run({
     t.assert((await t.cursorKey()) === key, 'the feed entry moved the cursor onto the change');
   },
 
+  'the corner feed peeks a few changes and hides the rest behind "+N more"': async t => {
+    await t.open();
+    await t.settled();
+    // Six out-of-band adds land; the corner log must not grow to swallow the
+    // screen — it caps at the peek height and offers the rest via "+N more".
+    for (let i = 1; i <= 6; i++) {
+      await t.editExternally({ op: 'add', section: 'Ideas', text: `peek idea ${i}` });
+      await t.waitBoardContains(`- peek idea ${i}`);
+    }
+    await t.page.waitForFunction(() => window.__sn.novelty.feed.length >= 6, null, { timeout: 4000 });
+    await t.settled();
+    const rest = await t.page.evaluate(() => ({
+      total: window.__sn.novelty.feed.length,
+      entries: document.querySelectorAll('#feed .fentry').length,
+      more: document.querySelector('#feed .fmore')?.textContent || null,
+    }));
+    t.assert(rest.total >= 6, `all changes tracked (total=${rest.total})`);
+    t.assert(rest.entries === 4, `corner shows only the peek entries (entries=${rest.entries})`);
+    t.assert(/\+2 more/.test(rest.more || ''), `"+N more" cue counts the hidden rest (more=${JSON.stringify(rest.more)})`);
+    // Clicking "+N more" drops into keyboard mode and expands to the full list.
+    await t.page.click('#feed .fmore');
+    await t.settled();
+    const expanded = await t.page.evaluate(() => ({
+      focused: window.__sn.novelty.focused,
+      entries: document.querySelectorAll('#feed .fentry').length,
+      more: !!document.querySelector('#feed .fmore'),
+    }));
+    t.assert(expanded.focused, 'the feed took keyboard focus');
+    t.assert(expanded.entries === rest.total, `all entries visible while browsing (entries=${expanded.entries})`);
+    t.assert(!expanded.more, 'the "+N more" cue is gone once expanded');
+  },
+
   'a self-edit is not flagged as novelty': async t => {
     await t.open();
     await t.settled();

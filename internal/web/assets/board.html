@@ -196,6 +196,13 @@ details.archive summary { cursor: pointer; color: var(--dim); margin: 1.25rem 0 
 /* Keyboard focus (V): the selected entry gets an accent bar + tint. */
 #feed.kbd .fentry.sel { background: var(--cursor); box-shadow: inset 3px 0 0 var(--accent); }
 #feed .fentry.aged { opacity: .55; }
+/* "+N more" cue when the corner is trimmed to its peek height. */
+#feed .fmore {
+  display: block; width: 100%; text-align: center; background: none;
+  border: none; border-top: 1px solid var(--border); color: var(--dim);
+  cursor: pointer; font: inherit; font-size: .92em; padding: .3rem .5rem;
+}
+#feed .fmore:hover, #feed .fmore:focus { color: var(--accent); background: var(--cursor); outline: none; }
 /* Copy leads with WHAT changed; the who/where is the dim second line. */
 #feed .fentry .fprimary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #feed .fentry .fmeta { color: var(--dim); font-size: .82em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -574,6 +581,10 @@ let pendingRender = false;
 const FRESH_TTL = 20000;      // a fresh mark auto-clears after 20s untouched
 const LOCAL_WINDOW = 2500;    // refreshes this soon after a local edit are "ours"
 const FEED_MAX = 30;
+// The corner log stays deliberately small so it never buries the board: at rest
+// it shows only the newest few changes with a "+N more" cue. Dropping into
+// keyboard mode (V) — or the full recents view — reveals the rest.
+const FEED_PEEK = 4;
 let lastLocalEdit = 0;
 let prevKeys = null;                 // Set of item keys from the last board seen
 let prevById = null;                 // Map id -> item from the last board (status-agnostic)
@@ -704,7 +715,10 @@ function renderFeed() {
   box.classList.toggle('kbd', feedFocused);
   if (!feed.length && feedFocused) exitFeedMode();
   body.textContent = '';
-  feed.forEach((e, i) => {
+  // At rest the corner shows only the newest FEED_PEEK entries so it stays out
+  // of the way; keyboard mode (V) expands it to the full list for browsing.
+  const shown = feedFocused ? feed : feed.slice(0, FEED_PEEK);
+  shown.forEach((e, i) => {
     const aged = Date.now() - e.ts > 12000;
     const b = el('button', {
       class: 'fentry' + (aged ? ' aged' : '') + (feedFocused && i === feedSel ? ' sel' : ''),
@@ -715,6 +729,13 @@ function renderFeed() {
     b.addEventListener('click', () => { exitFeedMode(); jumpToFresh(e.key); });
     body.append(b);
   });
+  const hidden = feed.length - shown.length;
+  if (hidden > 0) {
+    const more = el('button', { class: 'fmore', title: 'browse all recent changes (V)' },
+      `+${hidden} more — press V`);
+    more.addEventListener('click', () => { enterFeedMode(); });
+    body.append(more);
+  }
   if (feedFocused && feedSel >= 0 && body.children[feedSel]) body.children[feedSel].scrollIntoView({ block: 'nearest' });
 }
 
