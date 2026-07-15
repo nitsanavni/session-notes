@@ -33,5 +33,12 @@
     "text": "also allow to arrow up to the current title , allow to edit the title; zoom in  out cursor stays where it was",
     "replyTo": null,
     "at": "2026-07-15T09:36:46.026Z"
+  },
+  {
+    "id": 6,
+    "author": "claude",
+    "text": "Rebuilt — refresh. The bullet you dive into now literally flies and grows into the page title (one traveling element, children unfolding from under it with a slight stagger); zoom-out is the exact reverse flight back into its slot. Also in: Tab (or hover ›) expands/collapses inline without moving the camera, Enter on a leaf zooms into an empty page that invites writing, arrow-up from the first child reaches the title, Enter/click on the title edits it in place (updates breadcrumb + tab title; Escape cancels the edit not the zoom), and the cursor glides + remembers your place per level across zooms. One known rough edge: mid-flight vertical alignment of the flying title is approximate — tell me if it reads wrong.",
+    "replyTo": 3,
+    "at": "2026-07-15T09:50:58.170Z"
   }
 ]

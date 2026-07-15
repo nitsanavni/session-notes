@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <title>camera zoom — the tree is a place</title>
-<meta name="blurb" content="Zoom is a camera, not a filter — dive through a note tree; agents glow amber in the deep.">
+<meta name="blurb" content="Zoom is a camera, not a filter — a bullet grows into the new page, its title travels into place; Tab to open in-line.">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root{
@@ -9,7 +9,7 @@
   }
   @media(prefers-color-scheme:dark){
     :root{ --ink:#e8e8e6; --bg:#141413; --hair:rgba(232,232,230,.08);
-      --dim:rgba(232,232,230,.5); --ember:#f0b45a; }
+      --dim:rgba(232,232,230,.5); --agent:#6c8eef; --ember:#f0b45a; }
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -42,8 +42,19 @@
     max-width:46rem; margin:0 auto; padding:2px 22px 0;
     font-size:1.7em; line-height:1.25; font-weight:600; letter-spacing:-.01em;
     color:var(--ink); user-select:none;
-    transition:opacity .2s;
   }
+  #ptitle .ptitle-text{ display:inline-block; transform-origin:0 50%;
+    border-radius:6px; padding:0 6px; margin-left:-6px;
+    transition:background .18s, box-shadow .18s; }
+  #ptitle.settle .ptitle-text{ animation:settle .3s cubic-bezier(0.2,0,0.2,1); }
+  @keyframes settle{ from{ opacity:.35; transform:translateY(2px) scale(.99) } to{ opacity:1; transform:none } }
+  /* cursor parked on the title — subtler than a row */
+  #ptitle.nav .ptitle-text{ background:color-mix(in srgb,var(--hair) 70%,transparent);
+    box-shadow:inset 2px 0 0 var(--agent); }
+  /* the title just becomes writable — no chrome */
+  #ptitle .ptitle-text[contenteditable="true"]{ outline:none; cursor:text;
+    background:color-mix(in srgb,var(--hair) 45%,transparent); }
+
   #frame{ position:absolute; inset:90px 0 0 0; overflow:hidden; }
   #stage{
     position:absolute; top:22px; left:0; right:0;
@@ -52,22 +63,39 @@
   }
   #ghost{ position:absolute; top:22px; left:0; right:0;
     max-width:46rem; margin:0 auto; padding:0 22px;
-    transform-origin:50% 30%; pointer-events:none; z-index:5; }
+    transform-origin:50% 24%; pointer-events:none; z-index:5; }
 
-  .node{ position:relative; }
+  /* the shared element that travels between a bullet and the page title */
+  .flyer{ position:fixed; margin:0; z-index:60; pointer-events:none;
+    white-space:nowrap; transform-origin:0 0; color:var(--ink); }
+
+  .node{ position:relative; z-index:1; }
   .node > .kids{ margin-left:20px; border-left:1px solid var(--hair); padding-left:16px; }
 
-  .row{ display:flex; align-items:baseline; gap:8px; padding:3px 8px;
+  /* gliding cursor highlight — a box that slides between rows */
+  .cursorbar{ position:absolute; z-index:0; border-radius:7px;
+    background:var(--hair); box-shadow:inset 2px 0 0 var(--agent);
+    pointer-events:none; top:0; left:0; width:0; height:0; }
+
+  .row{ position:relative; display:flex; align-items:baseline; gap:6px; padding:3px 8px;
     border-radius:7px; cursor:pointer; transition:background .15s; }
-  .row:hover{ background:var(--hair); }
+  .row:hover{ background:color-mix(in srgb, var(--hair) 55%, transparent); }
+  .disclosure{ flex:none; width:11px; text-align:center; color:var(--dim);
+    opacity:0; cursor:pointer; user-select:none; transform-origin:50% 55%;
+    transition:opacity .15s, transform .18s cubic-bezier(0.2,0,0.2,1); }
+  .disclosure.ph{ cursor:default; }
+  .row:hover .disclosure:not(.ph){ opacity:.5; }
+  .disclosure:not(.ph):hover{ opacity:.9; color:var(--ink); }
+  .node.open > .row .disclosure{ opacity:.7; transform:rotate(90deg); }
   .bullet{ flex:none; width:6px; height:6px; border-radius:50%;
     background:var(--dim); transform:translateY(-2px); transition:background .2s; }
   .title{ font-weight:450; }
   .gist{ color:var(--dim); font-size:.92em; }
-  .dots{ display:inline-flex; gap:3px; margin-left:2px; }
-  .dot{ width:5px; height:5px; border-radius:50%; background:var(--agent); opacity:.55; }
   .full{ margin:2px 0 8px 22px; color:var(--dim); font-size:.95em; max-width:38rem; }
   .full .ink{ color:var(--agent); }
+
+  .ghostline{ color:var(--dim); opacity:.55; font-style:italic;
+    padding:6px 8px; user-select:none; }
 
   /* fog of war: grandchildren shown only as faint ghost lines */
   .fog{ margin:1px 0 8px 26px; display:flex; flex-direction:column; gap:3px;
@@ -78,21 +106,6 @@
   .node.ember > .fog .fogline{ background:var(--ember); }
   .node.ember-anc > .fog .fogline{ background:var(--ember); opacity:.8; }
   @keyframes fogIn{ from{ opacity:0; transform:translateY(-2px) } to{ opacity:1; transform:none } }
-
-  /* semantic zoom levels */
-  .lvl-full > .row .title{ font-size:1.14em; font-weight:500; }
-  .lvl-full > .row{ padding-top:6px; }
-  .lvl-full > .full{ display:block; }
-  .lvl-gist > .full{ display:none; }
-  .lvl-gist > .row .title{ font-size:1em; }
-  .lvl-chip > .full{ display:none; }
-  .lvl-chip > .row .gist{ display:none; }
-  .lvl-chip > .row{ padding:2px 8px; }
-  .lvl-chip > .row .title{ font-size:.9em; color:var(--dim); }
-  .lvl-chip > .row .bullet{ width:4px; height:4px; }
-
-  /* cursor */
-  .node.cursor > .row{ background:var(--hair); box-shadow:inset 2px 0 0 var(--agent); }
 
   /* embers */
   .node.ember > .row .bullet{ background:var(--ember); box-shadow:0 0 8px var(--ember); }
@@ -121,7 +134,7 @@
 <div id="ptitle"></div>
 <div id="frame"><div id="stage"></div></div>
 <div id="hint">
-  <b>j/k</b> move · <b>Enter</b> zoom in · <b>Esc</b> zoom out ·
+  <b>j/k</b> move · <b>Enter</b> zoom in · <b>Esc</b> zoom out · <b>Tab</b> open in-line ·
   <b>click</b> a node or crumb · <b>g</b> then <b>1</b>/<b>2</b> dive to a <span class="live">● live</span> agent
 </div>
 
@@ -132,8 +145,10 @@
   // ---- data: one person's notes, 4 levels deep ----
   let _id = 0;
   const parent = new Map();
+  const byId = new Map();
   function T(title, gist, full, kids, opts) {
     const n = { id: ++_id, title, gist, full: full || "", kids: kids || [], ...(opts||{}) };
+    byId.set(n.id, n);
     for (const k of n.kids) parent.set(k.id, n);
     return n;
   }
@@ -198,10 +213,15 @@
 
   // ---- state ----
   let focusPath = [root];         // ancestors incl. focus (root always first)
-  let cursor = 0;                 // index into focus's kids
+  let cursor = 0;                 // -1 = the page title; 0..n = visible rows
+  const expanded = new Set();     // node ids expanded in-line (no camera move)
+  const cursorMem = new Map();    // focus id -> last cursor, so diving remembers your place
+  let editing = false;            // title is being typed into
+  let editOrig = "";
   const stage = document.getElementById("stage");
   const crumbBar = document.getElementById("crumbs");
   const frame = document.getElementById("frame");
+  const ptitle = document.getElementById("ptitle");
   const reduce = matchMedia("(prefers-reduced-motion:reduce)").matches;
   const EASE = "cubic-bezier(0.2,0,0.2,1)";
   let animating = false;
@@ -210,18 +230,32 @@
   const focus = () => focusPath[focusPath.length - 1];
   const pathTo = (node) => { const p = [node]; let c = parent.get(node.id); while (c){ p.unshift(c); c = parent.get(c.id); } return p; };
 
+  // the flattened list of rows the cursor can land on: focus's children, plus
+  // (recursively) the children of any node expanded in-line. Kept in DOM order
+  // so j/k track exactly what the eye sees. Recomputed on every change.
+  function flatVisible(){
+    const out = [];
+    (function walk(list){
+      for (const n of list){ out.push(n); if (expanded.has(n.id) && n.kids.length) walk(n.kids); }
+    })(focus().kids);
+    return out;
+  }
+  function curNode(){ const r = flatVisible(); return r.length ? r[Math.min(cursor, r.length - 1)] : null; }
+
   // ---- render ----
-  // fog-of-war: focus's children render fully (rel 0); their children appear
-  // only as faint ghost-line hints. Deeper levels are invisible until you dive.
   const FOG_W = ["38%", "27%", "33%"];
   function nodeEl(n){
     const d = document.createElement("div");
-    d.className = "node lvl-full";
+    d.className = "node" + (expanded.has(n.id) ? " open" : "");
     if (n.ember) d.classList.add("ember");
     else if (emberAnc.has(n.id)) d.classList.add("ember-anc");
     d.dataset.fid = n.id;
 
     const row = document.createElement("div"); row.className = "row";
+    const dis = document.createElement("span");
+    dis.className = "disclosure" + (n.kids.length ? "" : " ph");
+    dis.textContent = n.kids.length ? "›" : "";
+    row.appendChild(dis);
     const b = document.createElement("span"); b.className = "bullet"; row.appendChild(b);
     const t = document.createElement("span"); t.className = "title"; t.textContent = n.title; row.appendChild(t);
     if (n.gist){ const g = document.createElement("span"); g.className = "gist"; g.textContent = "— " + n.gist; row.appendChild(g); }
@@ -235,38 +269,52 @@
       d.appendChild(f);
     }
     if (n.kids.length){
-      const fog = document.createElement("div"); fog.className = "fog";
-      const lines = Math.min(3, n.kids.length);
-      for (let i = 0; i < lines; i++){
-        const l = document.createElement("span"); l.className = "fogline";
-        l.style.width = FOG_W[i % FOG_W.length];
-        l.style.animationDelay = (i * 40) + "ms";
-        fog.appendChild(l);
+      if (expanded.has(n.id)){
+        // in-line expansion lifts this node's fog locally: show real children
+        const kids = document.createElement("div"); kids.className = "kids";
+        n.kids.forEach(k => kids.appendChild(nodeEl(k)));
+        d.appendChild(kids);
+      } else {
+        const fog = document.createElement("div"); fog.className = "fog";
+        const lines = Math.min(3, n.kids.length);
+        for (let i = 0; i < lines; i++){
+          const l = document.createElement("span"); l.className = "fogline";
+          l.style.width = FOG_W[i % FOG_W.length];
+          l.style.animationDelay = (i * 40) + "ms";
+          fog.appendChild(l);
+        }
+        d.appendChild(fog);
       }
-      d.appendChild(fog);
     }
     return d;
   }
 
-  function render(){
+  function render(prevLen){
     const f = focus();
     stage.innerHTML = "";
-    f.kids.forEach((k, i) => {
-      const el = nodeEl(k);
-      if (i === cursor) el.classList.add("cursor");
-      stage.appendChild(el);
-    });
+    const bar = document.createElement("div"); bar.className = "cursorbar"; bar.style.opacity = "0";
+    stage.appendChild(bar);               // first, so rows paint above it
+    if (f.kids.length){
+      f.kids.forEach(k => stage.appendChild(nodeEl(k)));
+    } else {
+      const gl = document.createElement("div"); gl.className = "ghostline";
+      gl.textContent = "· nothing here yet — a place to think";
+      stage.appendChild(gl);
+    }
     renderTitle();
-    renderCrumbs();
+    renderCrumbs(prevLen);
     startStream();
+    markCursor(false);
   }
 
-  const ptitle = document.getElementById("ptitle");
   function renderTitle(){
     const f = focus();
-    ptitle.textContent = f.title;
+    ptitle.innerHTML = "";
+    const s = document.createElement("span"); s.className = "ptitle-text"; s.textContent = f.title;
+    ptitle.appendChild(s);
     document.title = f === root ? "notes" : f.title + " — notes";
   }
+  const ptitleText = () => ptitle.querySelector(".ptitle-text");
 
   function renderCrumbs(prevLen){
     crumbBar.innerHTML = "";
@@ -286,6 +334,31 @@
     });
   }
 
+  // ---- gliding cursor ----
+  function markCursor(glide){
+    const rows = flatVisible();
+    // clamp into [-1 .. last]; -1 is the title, and it's the only target when
+    // the page is empty (a leaf). j/k track exactly this visible set.
+    if (cursor < -1) cursor = -1;
+    if (cursor > rows.length - 1) cursor = rows.length - 1;   // -1 when empty
+    const onTitle = cursor === -1;
+    ptitle.classList.toggle("nav", onTitle && !editing);
+    const bar = stage.querySelector(".cursorbar");
+    if (!bar) return;
+    if (onTitle){ bar.style.opacity = "0"; return; }
+    const n = rows[cursor];
+    const rowEl = n && stage.querySelector('.node[data-fid="' + n.id + '"] > .row');
+    if (!rowEl){ bar.style.opacity = "0"; return; }
+    const sr = stage.getBoundingClientRect(), rr = rowEl.getBoundingClientRect();
+    bar.style.transition = glide ? ("top .18s " + EASE + ", left .18s " + EASE + ", width .18s " + EASE + ", height .18s " + EASE) : "none";
+    bar.style.opacity = "1";
+    bar.style.top = (rr.top - sr.top) + "px";
+    bar.style.left = (rr.left - sr.left) + "px";
+    bar.style.width = rr.width + "px";
+    bar.style.height = rr.height + "px";
+    rowEl.scrollIntoView({ block: "nearest" });
+  }
+
   // ---- streaming "wet ink" ----
   function startStream(){
     if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
@@ -294,8 +367,7 @@
     const done = el.textContent;
     const tail = " Re-running the e2e walk now…";
     el.innerHTML = "";
-    const base = document.createTextNode(done);
-    el.appendChild(base);
+    el.appendChild(document.createTextNode(done));
     const ink = document.createElement("span"); ink.className = "ink"; el.appendChild(ink);
     if (reduce){ ink.textContent = tail; return; }
     let i = 0;
@@ -306,13 +378,35 @@
     }, 42);
   }
 
-  // ---- FLIP camera navigation ----
-  function capture(){
-    const m = new Map();
-    document.querySelectorAll("#stage [data-fid], #crumbs [data-fid]").forEach(el => {
-      m.set(el.dataset.fid, el.getBoundingClientRect());
-    });
-    return m;
+  // ---- shared-element camera navigation ----
+  // The one job: the node you dive into *is* the new page title. We measure the
+  // node's title where it sits, and the page title where it lands, then fly one
+  // element between the two. Zoom-out is the same flight reversed.
+  function titleElFor(id){ return stage.querySelector('.node[data-fid="' + id + '"] > .row > .title'); }
+
+  function makeFlyer(srcRect, srcFont, dstEl, text, dur){
+    const d = dstEl.getBoundingClientRect();
+    const cs = getComputedStyle(dstEl);
+    const fl = document.createElement("div");
+    fl.className = "flyer";
+    fl.textContent = text;
+    fl.style.left = d.left + "px";
+    fl.style.top = d.top + "px";
+    fl.style.fontFamily = cs.fontFamily;
+    fl.style.fontSize = cs.fontSize;
+    fl.style.fontWeight = cs.fontWeight;
+    fl.style.letterSpacing = cs.letterSpacing;
+    fl.style.lineHeight = cs.lineHeight;
+    fl.style.color = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim() || "currentColor";
+    document.body.appendChild(fl);
+    const dFont = parseFloat(cs.fontSize) || 1;
+    const scale = srcFont / dFont;
+    const dx = srcRect.left - d.left, dy = srcRect.top - d.top;
+    fl.style.transform = "translate(" + dx + "px," + dy + "px) scale(" + scale + ")";
+    fl.getBoundingClientRect();
+    fl.style.transition = "transform " + dur + "ms " + EASE;
+    fl.style.transform = "translate(0,0) scale(1)";
+    return fl;
   }
 
   function navigate(newPath, dur){
@@ -320,123 +414,208 @@
     dur = dur == null ? 250 : dur;
     if (reduce) dur = 0;
     const prevLen = focusPath.length;
-    const olds = capture();
-
-    // ghost layer for exiting content
-    const ghost = stage.cloneNode(true);
-    ghost.id = "ghost";
-    frame.appendChild(ghost);
-
-    focusPath = newPath;
-    cursor = 0;
-    render();
-    // keep the crumb that just grew flagged as 'enter' when zooming out isn't wanted; redo crumbs with prevLen
-    renderCrumbs(prevLen);
-
-    const news = capture();
-    // hide persisters in ghost so only truly-leaving nodes remain visible
-    ghost.querySelectorAll("[data-fid]").forEach(g => { if (news.has(g.dataset.fid)) g.style.visibility = "hidden"; });
-
     const zoomingIn = newPath.length > prevLen;
-    if (dur === 0){ ghost.remove(); return; }
+    const oldFocus = focus();
+    const pivot = zoomingIn ? newPath[newPath.length - 1] : oldFocus;
+
+    // --- measure the shared element BEFORE the DOM changes ---
+    let srcRect = null, srcFont = 15;
+    if (zoomingIn){
+      const se = titleElFor(pivot.id);
+      if (se){ srcRect = se.getBoundingClientRect(); srcFont = parseFloat(getComputedStyle(se).fontSize) || 15; }
+    } else {
+      const se = ptitleText();
+      srcRect = se.getBoundingClientRect(); srcFont = parseFloat(getComputedStyle(se).fontSize) || 27;
+    }
+
+    // ghost of the leaving content (siblings on the way in, children on the way out)
+    let ghost = null;
+    if (dur > 0){
+      ghost = stage.cloneNode(true);
+      ghost.id = "ghost";
+      const gb = ghost.querySelector(".cursorbar"); if (gb) gb.remove();
+      if (zoomingIn){ const gp = ghost.querySelector('.node[data-fid="' + pivot.id + '"]'); if (gp) gp.style.visibility = "hidden"; }
+      frame.appendChild(ghost);
+    }
+
+    // --- commit the new view ---
+    cursorMem.set(oldFocus.id, Math.max(0, cursor));   // remember where we were
+    focusPath = newPath;
+    expanded.clear();
+    cursor = 0;
+    render(prevLen);
+    if (zoomingIn){
+      // first child by default, but restore your place if you've been here
+      const m = cursorMem.get(pivot.id);
+      cursor = (m != null) ? Math.min(m, flatVisible().length - 1) : 0;
+      markCursor(false);
+    } else {
+      // land back on the node we zoomed out of
+      const i = flatVisible().indexOf(pivot);
+      if (i >= 0){ cursor = i; markCursor(false); }
+    }
+
+    const dstEl = zoomingIn ? ptitleText() : titleElFor(pivot.id);
+
+    if (dur === 0){ if (ghost) ghost.remove(); return; }
 
     animating = true;
-    // animate ghost (leaving siblings) out
-    ghost.style.transition = `transform ${dur}ms ${EASE}, opacity ${dur}ms ${EASE}`;
-    requestAnimationFrame(() => {
-      ghost.style.opacity = "0";
-      ghost.style.transform = zoomingIn ? "scale(1.28)" : "scale(0.8)";
-    });
 
-    // FLIP the survivors + entrances
-    document.querySelectorAll("#stage [data-fid], #crumbs [data-fid]").forEach(el => {
-      const fid = el.dataset.fid, last = news.get(fid), first = olds.get(fid);
-      if (first && last){
-        const dx = first.left - last.left, dy = first.top - last.top;
-        const sx = last.width ? first.width / last.width : 1;
-        const sy = last.height ? first.height / last.height : 1;
-        el.style.transformOrigin = "0 0";
-        el.style.transform = `translate(${dx}px,${dy}px) scale(${sx},${sy})`;
-        el.style.transition = "none";
-        el.getBoundingClientRect();
-        el.style.transition = `transform ${dur}ms ${EASE}`;
-        el.style.transform = "";
-      } else if (!first){
-        el.style.opacity = "0";
-        el.style.transform = zoomingIn ? "translateY(8px) scale(.96)" : "translateY(-8px) scale(1.04)";
-        el.style.transition = "none"; el.getBoundingClientRect();
-        el.style.transition = `opacity ${dur}ms ${EASE}, transform ${dur}ms ${EASE}`;
-        el.style.opacity = ""; el.style.transform = "";
-      }
+    // hide both endpoints of the flight so only the flyer shows the title
+    const pt = ptitleText(); pt.style.opacity = "0";
+    let hiddenRow = null;
+    if (!zoomingIn && dstEl){ hiddenRow = dstEl; hiddenRow.style.opacity = "0"; }
+
+    const fl = (srcRect && dstEl) ? makeFlyer(srcRect, srcFont, dstEl, pivot.title, dur) : null;
+
+    // ghost drifts away in the direction of travel
+    if (ghost){
+      ghost.style.transition = "opacity " + dur + "ms " + EASE + ", transform " + dur + "ms " + EASE;
+      requestAnimationFrame(() => {
+        ghost.style.opacity = "0";
+        ghost.style.transform = zoomingIn ? "scale(1.06)" : "scale(0.94)";
+      });
+    }
+
+    // new rows expand out from under the (growing/shrinking) title, staggered
+    const nodes = [...stage.querySelectorAll(":scope > .node")];
+    nodes.forEach((el, i) => {
+      el.style.opacity = "0";
+      el.style.transform = zoomingIn ? "translateY(-6px)" : "translateY(6px)";
+      el.style.transition = "none"; el.getBoundingClientRect();
+      el.style.transition = "opacity " + dur + "ms " + EASE + ", transform " + dur + "ms " + EASE;
+      el.style.transitionDelay = Math.min(i * 18, 120) + "ms";
+      el.style.opacity = ""; el.style.transform = "";
     });
+    const gl = stage.querySelector(".ghostline");
+    if (gl){ gl.style.opacity = "0"; gl.style.transition = "none"; gl.getBoundingClientRect();
+      gl.style.transition = "opacity " + dur + "ms " + EASE; gl.style.transitionDelay = (dur * 0.45) + "ms"; gl.style.opacity = ""; }
 
     setTimeout(() => {
-      ghost.remove();
-      document.querySelectorAll("#stage [data-fid], #crumbs [data-fid]").forEach(el => {
-        el.style.transition = ""; el.style.transform = ""; el.style.transformOrigin = ""; el.style.opacity = "";
-      });
+      if (ghost) ghost.remove();
+      if (fl) fl.remove();
+      pt.style.opacity = "";
+      ptitle.classList.remove("settle"); void ptitle.offsetWidth; ptitle.classList.add("settle");
+      if (hiddenRow) hiddenRow.style.opacity = "";
+      nodes.forEach(el => { el.style.transition = ""; el.style.transform = ""; el.style.opacity = ""; el.style.transitionDelay = ""; });
+      markCursor(false);
       animating = false;
     }, dur + 20);
   }
 
+  // ---- in-line expand / collapse (no camera move) ----
+  function animateHeight(el, from, to, cb){
+    el.style.overflow = "hidden";
+    el.style.height = from + "px";
+    el.style.opacity = from === 0 ? "0" : "1";
+    el.getBoundingClientRect();
+    el.style.transition = "height 180ms " + EASE + ", opacity 180ms " + EASE;
+    el.style.height = to + "px";
+    el.style.opacity = to === 0 ? "0" : "1";
+    setTimeout(() => {
+      el.style.transition = ""; el.style.height = ""; el.style.overflow = ""; el.style.opacity = "";
+      if (cb) cb();
+    }, 190);
+  }
+  function toggleExpand(node){
+    if (!node || !node.kids.length || animating) return;
+    const id = node.id, opening = !expanded.has(id);
+    if (opening){
+      expanded.add(id);
+      render();
+      cursor = Math.max(0, flatVisible().indexOf(node)); markCursor(false);
+      const kids = stage.querySelector('.node[data-fid="' + id + '"] > .kids');
+      if (kids && !reduce) animateHeight(kids, 0, kids.scrollHeight);
+    } else {
+      const kids = stage.querySelector('.node[data-fid="' + id + '"] > .kids');
+      const finish = () => { expanded.delete(id); render(); cursor = Math.max(0, flatVisible().indexOf(node)); markCursor(false); };
+      if (kids && !reduce) animateHeight(kids, kids.scrollHeight, 0, finish); else finish();
+    }
+  }
+
   // ---- actions ----
-  function zoomInto(node, dur){
-    if (!node.kids.length) return;           // leaves are already fully shown
-    navigate([...pathTo(node)], dur);
-  }
-  function zoomOut(dur){
-    if (focusPath.length <= 1) return;
-    const wasFocus = focus();
-    navigate(focusPath.slice(0, -1), dur);
-    // restore cursor onto the node we came from
-    const idx = focus().kids.indexOf(wasFocus);
-    if (idx >= 0){ cursor = idx; markCursor(); }
-  }
-  function markCursor(){
-    // only the focus's direct children are cursor targets — never nested
-    // descendants (that flat-list mismatch made the cursor jam and made Enter
-    // zoom the wrong node)
-    stage.querySelectorAll(":scope > .node").forEach((el, i) => {
-      const on = i === cursor;
-      el.classList.toggle("cursor", on);
-      if (on) el.scrollIntoView({ block: "nearest" });
-    });
-  }
+  function zoomInto(node){ if (!node) return; navigate(pathTo(node)); } // leaves zoom too
+  function zoomOut(dur){ if (focusPath.length <= 1) return; navigate(focusPath.slice(0, -1), dur); }
+
   function crumbClick(targetIndex){
-    // animate back THROUGH intermediate levels, ~80ms each
     const steps = focusPath.length - 1 - targetIndex;
-    if (steps <= 0) return;
+    if (steps <= 0 || animating) return;
     let remaining = steps;
-    const step = () => { zoomOut(80); remaining--; if (remaining > 0) setTimeout(step, 90); };
+    const step = () => { zoomOut(70); remaining--; if (remaining > 0) setTimeout(step, 100); };
     step();
   }
 
   // ---- ember dive ----
   let pendingG = false;
   function diveTo(ember){
-    if (!ember) return;
-    const path = pathTo(ember);           // root ... emberParent, ember
-    // land focus on the ember's parent so the ember node is a full, streaming child
-    const targetLen = path.length - 1;    // path minus the ember itself
-    focusPath = [root]; cursor = 0; render();
+    if (!ember || animating) return;
+    const path = pathTo(ember);
+    const targetLen = path.length - 1;       // land on the ember's parent
+    focusPath = [root]; expanded.clear(); cursor = 0; render();
     let len = 2;
     const step = () => {
       if (len > targetLen){
-        const idx = focus().kids.indexOf(ember);
-        if (idx >= 0){ cursor = idx; markCursor(); }
+        const i = flatVisible().indexOf(ember);
+        if (i >= 0){ cursor = i; markCursor(true); }
         return;
       }
       navigate(path.slice(0, len), 70);
       len++;
-      setTimeout(step, 95);
+      setTimeout(step, 100);
     };
     setTimeout(step, 30);
   }
 
+  // ---- inline title editing ----
+  // The title simply becomes writable in place; commit updates the node's text
+  // everywhere it appears (page title, breadcrumb, and its row when zoomed out).
+  function startEdit(caretToEnd){
+    if (editing || animating) return;
+    editing = true;
+    cursor = -1;
+    ptitle.classList.remove("nav");
+    const el = ptitleText();
+    editOrig = focus().title;
+    el.contentEditable = "true";
+    el.spellcheck = false;
+    el.focus();
+    if (caretToEnd){
+      const r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    }
+    el.addEventListener("blur", () => { if (editing) commitEdit(); }, { once: true });
+  }
+  function finishEdit(text){
+    editing = false;
+    const el = ptitleText();
+    if (el) el.contentEditable = "false";
+    focus().title = text;
+    renderTitle();          // rebuilds the span (drops editable state)
+    renderCrumbs();         // breadcrumb reflects the new text
+    markCursor(false);      // stays parked on the title
+  }
+  function commitEdit(){
+    if (!editing) return;
+    finishEdit((ptitleText().textContent || "").trim() || editOrig);
+  }
+  function cancelEdit(){
+    if (!editing) return;
+    finishEdit(editOrig);   // Escape restores — it does NOT zoom out
+  }
+  // keystrokes while typing stay local: never let demo keys (j/k/Enter/Tab/g/c) fire
+  ptitle.addEventListener("keydown", (e) => {
+    if (!editing) return;
+    e.stopPropagation();
+    if (e.key === "Enter" || e.key === "Tab"){ e.preventDefault(); commitEdit(); }
+    else if (e.key === "Escape"){ e.preventDefault(); cancelEdit(); }
+  });
+  ptitle.addEventListener("click", () => { if (!editing) startEdit(true); });
+
   // ---- input ----
   document.addEventListener("keydown", (e) => {
-    const tag = document.activeElement && document.activeElement.tagName;
-    if (tag === "TEXTAREA" || tag === "INPUT") return;   // let the comment rail type
+    const ae = document.activeElement;
+    const tag = ae && ae.tagName;
+    if (tag === "TEXTAREA" || tag === "INPUT" || editing || (ae && ae.isContentEditable)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     if (pendingG){
@@ -445,34 +624,40 @@
     }
     switch (e.key){
       case "j": case "ArrowDown":
-        e.preventDefault(); cursor = Math.min(cursor + 1, focus().kids.length - 1); markCursor(); break;
+        e.preventDefault(); cursor = Math.min(cursor + 1, flatVisible().length - 1); markCursor(true); break;
       case "k": case "ArrowUp":
-        e.preventDefault(); cursor = Math.max(cursor - 1, 0); markCursor(); break;
-      case "Enter": case "ArrowRight":
+        e.preventDefault(); cursor = Math.max(cursor - 1, -1); markCursor(true); break;  // -1 = up onto the title
+      case "Enter":
         e.preventDefault();
-        if (e.shiftKey) zoomOut(); else zoomInto(focus().kids[cursor]); break;
-      case "Escape": case "ArrowLeft":
+        if (cursor === -1) startEdit(true); else zoomInto(curNode()); break;
+      case "ArrowRight":
+        e.preventDefault(); if (cursor !== -1) zoomInto(curNode()); break;
+      case "Escape": case "ArrowLeft": case "[":
         e.preventDefault(); zoomOut(); break;
+      case "Tab":
+        e.preventDefault(); toggleExpand(curNode()); break;
       case "g":
         e.preventDefault(); pendingG = true; setTimeout(() => pendingG = false, 1200); break;
-      case "[":
-        e.preventDefault(); zoomOut(); break;
     }
   });
 
-  // click a node to zoom in; clicking a leaf just parks the cursor
+  // click a disclosure to expand in-line; click a node to zoom (leaves included)
   stage.addEventListener("click", (e) => {
-    const el = e.target.closest(".node[data-fid]");
-    if (!el) return;
-    // only direct children (rel 0) are zoom targets
-    const top = stage.querySelectorAll(":scope > .node");
-    let idx = -1; top.forEach((t, i) => { if (t === el || t.contains(el)) idx = i; });
-    if (idx < 0) return;
-    const target = focus().kids[idx];
-    if (target.kids.length){ cursor = idx; zoomInto(target); }
-    else { cursor = idx; markCursor(); }
+    const dis = e.target.closest(".disclosure");
+    if (dis && !dis.classList.contains("ph")){
+      const nEl = dis.closest(".node[data-fid]"); if (!nEl) return;
+      const node = byId.get(+nEl.dataset.fid); if (!node) return;
+      const i = flatVisible().indexOf(node); if (i >= 0){ cursor = i; markCursor(true); }
+      toggleExpand(node);
+      return;
+    }
+    const el = e.target.closest(".node[data-fid]"); if (!el) return;
+    const node = byId.get(+el.dataset.fid); if (!node) return;
+    const i = flatVisible().indexOf(node); if (i >= 0) cursor = i;
+    zoomInto(node);
   });
 
   render();
+  ptitle.classList.add("settle");
 })();
 </script>
