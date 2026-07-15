@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>camera zoom — the tree is a place</title>
 <meta name="blurb" content="Zoom is a camera, not a filter — dive through a note tree; agents glow amber in the deep.">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -36,7 +37,14 @@
   .crumb .ember-dot{ width:6px; height:6px; border-radius:50%; background:var(--ember);
     box-shadow:0 0 6px var(--ember); animation:pulse 2.4s ease-in-out infinite; }
 
-  #frame{ position:absolute; inset:44px 0 0 0; overflow:hidden; }
+  #ptitle{
+    position:fixed; top:42px; left:0; right:0; z-index:19;
+    max-width:46rem; margin:0 auto; padding:2px 22px 0;
+    font-size:1.7em; line-height:1.25; font-weight:600; letter-spacing:-.01em;
+    color:var(--ink); user-select:none;
+    transition:opacity .2s;
+  }
+  #frame{ position:absolute; inset:90px 0 0 0; overflow:hidden; }
   #stage{
     position:absolute; top:22px; left:0; right:0;
     max-width:46rem; margin:0 auto; padding:0 22px;
@@ -60,6 +68,16 @@
   .dot{ width:5px; height:5px; border-radius:50%; background:var(--agent); opacity:.55; }
   .full{ margin:2px 0 8px 22px; color:var(--dim); font-size:.95em; max-width:38rem; }
   .full .ink{ color:var(--agent); }
+
+  /* fog of war: grandchildren shown only as faint ghost lines */
+  .fog{ margin:1px 0 8px 26px; display:flex; flex-direction:column; gap:3px;
+    opacity:.3; transition:opacity .2s; pointer-events:none; }
+  .node:hover > .fog{ opacity:.5; }
+  .fog .fogline{ height:3px; border-radius:2px; background:var(--dim);
+    animation:fogIn .2s ease both; }
+  .node.ember > .fog .fogline{ background:var(--ember); }
+  .node.ember-anc > .fog .fogline{ background:var(--ember); opacity:.8; }
+  @keyframes fogIn{ from{ opacity:0; transform:translateY(-2px) } to{ opacity:1; transform:none } }
 
   /* semantic zoom levels */
   .lvl-full > .row .title{ font-size:1.14em; font-weight:500; }
@@ -100,6 +118,7 @@
 </style>
 
 <div id="crumbs"></div>
+<div id="ptitle"></div>
 <div id="frame"><div id="stage"></div></div>
 <div id="hint">
   <b>j/k</b> move · <b>Enter</b> zoom in · <b>Esc</b> zoom out ·
@@ -192,11 +211,12 @@
   const pathTo = (node) => { const p = [node]; let c = parent.get(node.id); while (c){ p.unshift(c); c = parent.get(c.id); } return p; };
 
   // ---- render ----
-  function levelClass(rel){ return rel === 0 ? "lvl-full" : rel === 1 ? "lvl-gist" : "lvl-chip"; }
-
-  function nodeEl(n, rel){
+  // fog-of-war: focus's children render fully (rel 0); their children appear
+  // only as faint ghost-line hints. Deeper levels are invisible until you dive.
+  const FOG_W = ["38%", "27%", "33%"];
+  function nodeEl(n){
     const d = document.createElement("div");
-    d.className = "node " + levelClass(rel);
+    d.className = "node lvl-full";
     if (n.ember) d.classList.add("ember");
     else if (emberAnc.has(n.id)) d.classList.add("ember-anc");
     d.dataset.fid = n.id;
@@ -206,23 +226,24 @@
     const t = document.createElement("span"); t.className = "title"; t.textContent = n.title; row.appendChild(t);
     if (n.gist){ const g = document.createElement("span"); g.className = "gist"; g.textContent = "— " + n.gist; row.appendChild(g); }
     if (n.ember){ const eb = document.createElement("span"); eb.className = "ember-badge"; eb.textContent = "● live " + n.ember; row.appendChild(eb); }
-    else if (n.kids.length && rel <= 1){
-      const dd = document.createElement("span"); dd.className = "dots";
-      for (let i=0;i<Math.min(3,n.kids.length);i++){ const o=document.createElement("span"); o.className="dot"; dd.appendChild(o); }
-      row.appendChild(dd);
-    }
     d.appendChild(row);
 
-    if (rel === 0 && (n.full || n.stream)){
+    if (n.full || n.stream){
       const f = document.createElement("div"); f.className = "full";
       if (n.stream) f.dataset.stream = "1";
       f.textContent = n.full;
       d.appendChild(f);
     }
-    if (rel < 2 && n.kids.length){
-      const kids = document.createElement("div"); kids.className = "kids";
-      for (const k of n.kids) kids.appendChild(nodeEl(k, rel + 1));
-      d.appendChild(kids);
+    if (n.kids.length){
+      const fog = document.createElement("div"); fog.className = "fog";
+      const lines = Math.min(3, n.kids.length);
+      for (let i = 0; i < lines; i++){
+        const l = document.createElement("span"); l.className = "fogline";
+        l.style.width = FOG_W[i % FOG_W.length];
+        l.style.animationDelay = (i * 40) + "ms";
+        fog.appendChild(l);
+      }
+      d.appendChild(fog);
     }
     return d;
   }
@@ -231,12 +252,20 @@
     const f = focus();
     stage.innerHTML = "";
     f.kids.forEach((k, i) => {
-      const el = nodeEl(k, 0);
+      const el = nodeEl(k);
       if (i === cursor) el.classList.add("cursor");
       stage.appendChild(el);
     });
+    renderTitle();
     renderCrumbs();
     startStream();
+  }
+
+  const ptitle = document.getElementById("ptitle");
+  function renderTitle(){
+    const f = focus();
+    ptitle.textContent = f.title;
+    document.title = f === root ? "notes" : f.title + " — notes";
   }
 
   function renderCrumbs(prevLen){
@@ -364,7 +393,14 @@
     if (idx >= 0){ cursor = idx; markCursor(); }
   }
   function markCursor(){
-    stage.querySelectorAll(".node").forEach((el, i) => el.classList.toggle("cursor", i === cursor));
+    // only the focus's direct children are cursor targets — never nested
+    // descendants (that flat-list mismatch made the cursor jam and made Enter
+    // zoom the wrong node)
+    stage.querySelectorAll(":scope > .node").forEach((el, i) => {
+      const on = i === cursor;
+      el.classList.toggle("cursor", on);
+      if (on) el.scrollIntoView({ block: "nearest" });
+    });
   }
   function crumbClick(targetIndex){
     // animate back THROUGH intermediate levels, ~80ms each

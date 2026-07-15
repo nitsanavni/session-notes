@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "author": "nitsan",
+    "text": "I don't understand quoting here, also maybe the \"what the agents sees\" should be more of a fog of war; the agent can always query for more context (maybe we should design this API btw",
+    "replyTo": null,
+    "at": "2026-07-15T09:15:41.787Z"
+  },
+  {
+    "id": 2,
+    "author": "claude",
+    "text": "Agreed on both. Fog of war is becoming THE unifying metaphor — same idea landed on camera-zoom: the human zooms to lift fog, and the agent starts with a small lit circle (path + local subtree) and QUERIES to lift fog itself. Reworking this demo so the right panel shows the whole tree dimmed with only the lit region visible, plus the agent visibly requesting more (a query_context call lighting up new nodes). Quoting: the idea is splicing a distant node into what the agent sees — I will make that legible or cut it. And yes, this panel is secretly the API design: read_context(node), query(pattern), expand(node) — starting a draft in explorations/briefs/context-api.md.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:16:00.027Z"
+  }
+]

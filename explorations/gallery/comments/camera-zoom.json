@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "author": "nitsan",
+    "text": "1. I see weird chars like â and Â\n2. the current zoomed note should also be the title of the page (both the browser tab, and in-page Title)\n3. scrolling down with down arrow gets stuck\n4. zooming a nde opens a different one\n5. if the tree is deep, maybe we need collapsed subtrees by defult, with hints they have children; like exploring a forest experience, a fog of war kind of\noverall it's great",
+    "replyTo": null,
+    "at": "2026-07-15T09:11:11.557Z"
+  },
+  {
+    "id": 2,
+    "author": "claude",
+    "text": "All five addressed (refresh the page): 1) â/Â was the server missing charset=utf-8 — fixed server-side + meta charset in the file. 2) zoomed node is now both the tab title and an in-page H1. 3+4) were one bug: the cursor highlight indexed a flat list of ALL descendants while the logic counted direct children — so the highlight jammed and Enter zoomed a node other than the highlighted one; now scoped to direct children + scrollIntoView. 5) fog of war is in: children render fully, grandchildren show as 2-3 faint ghost lines under parents that have kids, deeper is invisible; zooming lifts the fog one level with a 200ms reveal. Fog is spreading to context-lens too as the agent-context metaphor.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:17:01.246Z"
+  }
+]

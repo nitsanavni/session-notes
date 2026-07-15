@@ -23,7 +23,8 @@ async function comments(demo) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
   const send = (code, body, type = "application/json") => {
-    res.writeHead(code, { "content-type": type, "access-control-allow-origin": "*" });
+    const ct = type.startsWith("text/") ? type + "; charset=utf-8" : type;
+    res.writeHead(code, { "content-type": ct, "access-control-allow-origin": "*" });
     res.end(body);
   };
   try {
