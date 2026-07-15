@@ -12,5 +12,26 @@
     "text": "All five addressed (refresh the page): 1) â/Â was the server missing charset=utf-8 — fixed server-side + meta charset in the file. 2) zoomed node is now both the tab title and an in-page H1. 3+4) were one bug: the cursor highlight indexed a flat list of ALL descendants while the logic counted direct children — so the highlight jammed and Enter zoomed a node other than the highlighted one; now scoped to direct children + scrollIntoView. 5) fog of war is in: children render fully, grandchildren show as 2-3 faint ghost lines under parents that have kids, deeper is invisible; zooming lifts the fog one level with a 200ms reveal. Fog is spreading to context-lens too as the agent-context metaphor.",
     "replyTo": 1,
     "at": "2026-07-15T09:17:01.246Z"
+  },
+  {
+    "id": 3,
+    "author": "nitsan",
+    "text": "animation should look like the thing expands into the new thing, current;y the animation is unrelated; the most importnt part - the node itself is become the new title (zoom in) and for zoom out the title becomes a node, also, allow to expand/collapse without zoom, and allow zooming into leafs; let's make this more live",
+    "replyTo": null,
+    "at": "2026-07-15T09:35:50.882Z"
+  },
+  {
+    "id": 4,
+    "author": "claude",
+    "text": "On it — rebuilding the transition as a true shared element: the bullet row itself travels and grows into the page title (and the title shrinks back into its bullet slot on zoom-out), children unfolding from underneath it, so the eye never loses the node. Also adding: Tab to expand/collapse inline without moving the camera, zooming into leaves (empty page invites writing), and gliding cursor/hover states for liveness.",
+    "replyTo": 3,
+    "at": "2026-07-15T09:36:22.404Z"
+  },
+  {
+    "id": 5,
+    "author": "nitsan",
+    "text": "also allow to arrow up to the current title , allow to edit the title; zoom in  out cursor stays where it was",
+    "replyTo": null,
+    "at": "2026-07-15T09:36:46.026Z"
   }
 ]
