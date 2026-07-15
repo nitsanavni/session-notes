@@ -17,8 +17,9 @@ run({
     const tree = await t.tree();
     t.assert(tree.nodes.length === 6, `seed has 6 nodes (got ${tree.nodes.length})`);
     const v = await t.v0();
-    // Only the Welcome root is a board-level root, so one row renders.
-    t.assert(v.rendered.length === 1, `one root row rendered (got ${v.rendered.length})`);
+    // Nested view: the Welcome root renders with its subtree (3 levels), so
+    // all 6 seed nodes are visible on the board.
+    t.assert(v.rendered.length === 6, `nested seed tree rendered (got ${v.rendered.length})`);
     const welcome = await idByContent(t, 'Welcome');
     t.assert(v.rendered[0] === welcome && v.cursor === welcome, 'cursor on the Welcome root');
     const hint = await t.page.evaluate(() => document.getElementById('hint').textContent);
@@ -29,6 +30,12 @@ run({
     await t.open();
     const welcome = await idByContent(t, 'Welcome');
     t.assert((await t.page.title()) === 'outliner', 'root document.title is plain');
+    // Regression (nitsan): arrows must walk the nested tree at BOARD level too.
+    await t.key('ArrowDown');
+    const below = await t.cursor();
+    t.assert(below && below !== welcome, `ArrowDown at board level moved into the tree (got ${below})`);
+    await t.key('ArrowUp');
+    t.assert((await t.cursor()) === welcome, 'ArrowUp returned to Welcome');
     await t.key('Enter'); // zoom into Welcome
     t.assert((await t.focus()) === welcome, 'focus is Welcome after Enter');
     const title = await t.page.title();
@@ -98,7 +105,8 @@ run({
     await t.key('Enter');
     await t.page.waitForFunction(() => window.__v0.editing === false);
     await t.settled();
-    t.assert((await t.focus()) === welcome, 'zoomed into the reply target');
+    // Nested view: the reply renders inline; no zoom happens.
+    t.assert((await t.focus()) === '', 'stayed at board level (reply renders inline)');
     let tree = await t.tree();
     const mine = tree.nodes.find(n => n.content === 'my reply');
     t.assert(mine, 'reply node created');
@@ -149,13 +157,10 @@ run({
     let e2 = tree.edges.find(e => e.child === h2 && e.kind !== 'quote');
     t.assert(e2 && e2.parent === h1, `Tab reparented h2 under h1 (got ${JSON.stringify(e2)})`);
 
-    // Now zoom into h1 and outdent h2 back under Welcome. After the reparent
-    // re-render the cursor reset to the first visible child (h1).
+    // Nested view: h2 stays visible after the indent, so the cursor stays on it
+    // and Shift-Tab outdents it straight back under Welcome (its grandparent).
     const cur = await t.cursor();
-    t.assert(cur === h1, `cursor rests on h1 after reparent re-render (got ${cur})`);
-    await t.key('Enter'); // zoom into h1; its only child is h2
-    t.assert((await t.focus()) === h1, 'zoomed into h1');
-    t.assert((await t.cursor()) === h2, 'cursor on h2 inside h1');
+    t.assert(cur === h2, `cursor stays on h2 after reparent re-render (got ${cur})`);
     await t.key('Shift+Tab'); // outdent: h2 back under Welcome
     await t.settled();
     tree = await t.tree();

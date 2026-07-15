@@ -148,16 +148,33 @@ function render(){
     e.textContent = focus? 'empty — press o to add a child, r to reply' : 'empty board — press o to add';
     list.appendChild(e); return;
   }
-  for(const edge of evs){
-    if(edge.kind==='quote'){ list.appendChild(quoteRow(edge)); continue; }
-    list.appendChild(nodeRow(edge));
-  }
+  buildRows(list, evs, 0);
   paintCursor();
+}
+
+// Render MAXDEPTH levels below the focus; deeper stays fog (a '· N' count).
+const MAXDEPTH = 3;
+function buildRows(list, edgesHere, depth){
+  for(const edge of edgesHere){
+    if(edge.kind==='quote'){
+      const q=quoteRow(edge); q.style.marginLeft=(depth*28)+'px'; list.appendChild(q); continue;
+    }
+    const foggy = depth>=MAXDEPTH-1;
+    const row=nodeRow(edge, foggy); row.style.marginLeft=(depth*28)+'px'; list.appendChild(row);
+    if(!foggy) buildRows(list, childrenOf(edge.child), depth+1);
+  }
+}
+
+// depth of a rendered row relative to focus (children of focus = 0)
+function depthOf(id){
+  let d=0, cur=id;
+  while(cur && cur!==focus){ const e=parentEdge(cur); cur=e?e.parent:""; d++; }
+  return d-1;
 }
 
 function short(n){ if(!n) return '?'; const t=(n.content||'').split('\n')[0]; return t.length>32?t.slice(0,32)+'…':t||'(empty)'; }
 
-function nodeRow(edge){
+function nodeRow(edge, foggy){
   const n=nodes.get(edge.child); if(!n) return document.createElement('div');
   const row=document.createElement('div');
   row.className='row'; row.dataset.id=n.id; row.dataset.nodeId=n.id;
@@ -174,9 +191,9 @@ function nodeRow(edge){
   row.appendChild(content);
   const by=document.createElement('span'); by.className='byline'; by.textContent=n.author;
   row.appendChild(by);
-  // child count affordance
+  // fog affordance: children exist but are not rendered at this depth
   const kc=childrenOf(n.id).length;
-  if(kc){ const c=document.createElement('span'); c.className='byline'; c.textContent='· '+kc; row.appendChild(c); }
+  if(kc && foggy){ const c=document.createElement('span'); c.className='byline'; c.textContent='· '+kc; row.appendChild(c); }
   attachPresence(row,n.id);
   row.onclick=(e)=>{ if(editing) return; cursor=n.id; paintCursor();
     if(e.detail===2){ startEdit(n.id); } };
@@ -220,7 +237,18 @@ function linkify(t){
 }
 
 // ---- navigation ----
-function visibleIds(){ return visibleEdges().filter(e=>e.kind!=='quote').map(e=>e.child); }
+function visibleIds(){
+  const out=[];
+  const walk=(edgesHere,depth)=>{
+    for(const e of edgesHere){
+      if(e.kind==='quote') continue;
+      out.push(e.child);
+      if(depth<MAXDEPTH-1) walk(childrenOf(e.child),depth+1);
+    }
+  };
+  walk(visibleEdges(),0);
+  return out;
+}
 function move(delta){
   const ids=visibleIds(); if(!ids.length) return;
   let i=ids.indexOf(cursor); i=(i<0?0:i+delta);
@@ -294,8 +322,10 @@ function startEditTitle(){
 
 // ---- mutations ----
 async function addSibling(){
-  // sibling = child of current focus (same parent as the cursor's level)
-  const n=await api.create({parent:focus,kind:'child',content:'',author:AUTHOR});
+  // sibling of the cursor node (same parent); falls back to a child of focus
+  const pe=cursor?parentEdge(cursor):null;
+  const parent=pe?pe.parent:focus;
+  const n=await api.create({parent,kind:'child',content:'',author:AUTHOR});
   cursor=n.id; // SSE will render; edit once present
   waitFor(n.id,()=>startEdit(n.id));
 }
@@ -303,21 +333,26 @@ async function addReply(){
   const target = cursor || focus;
   if(!target) return;
   const n=await api.create({parent:target,kind:'reply',content:'',author:AUTHOR});
-  // reply lives under the target; zoom in so it is visible, then edit
-  if(target!==focus) zoomTo(target);
+  // the reply renders inline unless the target sits at the fog boundary
+  if(target!==focus && depthOf(target)>=MAXDEPTH-1) zoomTo(target);
   waitFor(n.id,()=>startEdit(n.id));
 }
 let yanked="";
-// indent: make cursor a child of its previous sibling
+// indent: make cursor a child of its previous *sibling* (same parent)
 async function indent(){
-  const ids=visibleIds(); const i=ids.indexOf(cursor); if(i<=0) return;
-  const prev=ids[i-1];
-  await reparent(cursor,prev);
+  if(!cursor) return;
+  const pe=parentEdge(cursor);
+  const sibs=(pe?childrenOf(pe.parent):roots()).filter(e=>e.kind!=='quote');
+  const i=sibs.findIndex(e=>e.child===cursor);
+  if(i<=0) return;
+  await reparent(cursor,sibs[i-1].child);
 }
+// outdent: move cursor up to its grandparent
 async function outdent(){
-  if(!focus) return;
-  const pe=parentEdge(focus);
-  await reparent(cursor, pe?pe.parent:"");
+  if(!cursor) return;
+  const pe=parentEdge(cursor); if(!pe) return;
+  const gpe=parentEdge(pe.parent);
+  await reparent(cursor, gpe?gpe.parent:"");
 }
 async function reparent(child,newParent){
   await fetch('/api/reparent',{method:'POST',body:JSON.stringify({child,parent:newParent})});
