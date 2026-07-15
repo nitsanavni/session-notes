@@ -12,5 +12,12 @@
     "text": "Agreed on both. Fog of war is becoming THE unifying metaphor — same idea landed on camera-zoom: the human zooms to lift fog, and the agent starts with a small lit circle (path + local subtree) and QUERIES to lift fog itself. Reworking this demo so the right panel shows the whole tree dimmed with only the lit region visible, plus the agent visibly requesting more (a query_context call lighting up new nodes). Quoting: the idea is splicing a distant node into what the agent sees — I will make that legible or cut it. And yes, this panel is secretly the API design: read_context(node), query(pattern), expand(node) — starting a draft in explorations/briefs/context-api.md.",
     "replyTo": 1,
     "at": "2026-07-15T09:16:00.027Z"
+  },
+  {
+    "id": 3,
+    "author": "claude",
+    "text": "Reworked — refresh: the right panel is now the whole tree under fog (~15% ink) with the lit region following your cursor; press x to watch the agent emit query(\"competitor pricing\") — a sweep shimmer, then 3 distant nodes light up tagged via-query. Quoting is reframed as pinning (q = pin a distant node into the agent's light, with a connector). The API this implies is drafted in explorations/briefs/context-api.md: read_context (free light) / query (search lifts fog, every call visible as a chip) / pin. Nice property: lit area ≈ token cost, so a context budget becomes literally glanceable.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:19:34.250Z"
   }
 ]

@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>context lens — see what the agent sees</title>
-<meta name="blurb" content="An agent's context is its location in the tree. Move the cursor and watch the ancestor path + subtree fly into a 'what the agent sees' panel; quote a distant node to splice two paths together with a drawn connector." />
+<title>context lens — fog of war over the tree</title>
+<meta name="blurb" content="An agent's context is a lit circle in a fogged tree: ancestor path + local subtree glow, the rest is fog. Move the cursor and the light rolls with you. The agent can query to lift fog on distant nodes, or you can pin one into its light." />
 <style>
   :root {
     --ink: #1a1a1a;
@@ -9,8 +9,10 @@
     --hair: rgba(26, 26, 26, 0.08);
     --dim: rgba(26, 26, 26, 0.45);
     --accent: #6c8eef;
+    --accent-soft: rgba(108, 142, 239, 0.16);
     --panel: rgba(26, 26, 26, 0.025);
     --chip: rgba(108, 142, 239, 0.1);
+    --fog: 0.15;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -19,8 +21,10 @@
       --hair: rgba(232, 232, 230, 0.08);
       --dim: rgba(232, 232, 230, 0.45);
       --accent: #6c8eef;
+      --accent-soft: rgba(108, 142, 239, 0.22);
       --panel: rgba(232, 232, 230, 0.03);
       --chip: rgba(108, 142, 239, 0.16);
+      --fog: 0.16;
     }
   }
   * {
@@ -42,20 +46,22 @@
     height: 100vh;
   }
   #left {
-    flex: 0 0 60%;
+    flex: 0 0 56%;
     position: relative;
     overflow: auto;
     padding: 34px 30px 80px;
   }
   #right {
     flex: 1;
+    display: flex;
+    flex-direction: column;
     border-left: 1px solid var(--hair);
-    padding: 34px 26px;
-    overflow: auto;
+    padding: 34px 26px 20px;
+    overflow: hidden;
     background: var(--panel);
   }
   h2 {
-    margin: 0 0 20px;
+    margin: 0 0 16px;
     font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.08em;
@@ -63,7 +69,7 @@
     color: var(--dim);
   }
 
-  /* ---- outline ---- */
+  /* ---- left: outline (source of truth) ---- */
   #outline {
     position: relative;
     z-index: 2;
@@ -73,9 +79,7 @@
     padding: 3px 8px;
     border-radius: 6px;
     cursor: default;
-    transition:
-      background 0.16s ease-out,
-      opacity 0.2s ease-out;
+    transition: background 0.16s ease-out;
   }
   .node .tw {
     display: inline-block;
@@ -105,20 +109,18 @@
   .node.d0 {
     font-weight: 600;
   }
-  .node.dimmed {
-    opacity: 0.28;
-  }
 
-  /* embedded quote on the left */
+  /* recessed embed under the cursor node when a node is pinned */
   .embed {
-    margin: 4px 0 4px 18px;
-    padding: 8px 12px;
+    margin: 4px 0 4px 20px;
+    padding: 6px 11px;
     border-left: 2px solid var(--accent);
     border-radius: 0 6px 6px 0;
     background: var(--panel);
     box-shadow: inset 0 1px 0 var(--hair);
-    transform-origin: top left;
-    animation: embedIn 0.22s ease-out;
+    filter: saturate(0.9);
+    opacity: 0.85;
+    animation: embedIn 0.2s ease-out;
   }
   @keyframes embedIn {
     from {
@@ -129,127 +131,229 @@
   .embed .mini {
     font-size: 11px;
     color: var(--dim);
-    margin-bottom: 2px;
   }
   .embed .mini b {
     color: var(--accent);
     font-weight: 500;
   }
+  .embed .body {
+    font-size: 13.5px;
+  }
+  #pincap {
+    margin: 3px 0 0 20px;
+    font-size: 11px;
+    color: var(--accent);
+    opacity: 0;
+    transition: opacity 0.2s ease-out;
+  }
+  #pincap.show {
+    opacity: 1;
+  }
 
-  /* connector overlay */
-  #svg {
+  /* ---- right: the fog-of-war minimap ---- */
+  #querybar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 26px;
+    margin-bottom: 12px;
+  }
+  #agentbadge {
+    color: var(--accent);
+    font-size: 15px;
+  }
+  #agentbadge b {
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .qchip {
+    align-self: flex-start;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    outline: 1px solid var(--accent);
+    color: var(--ink);
+    font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    opacity: 0;
+    transform: translateX(-10px);
+    transition:
+      opacity 0.2s ease-out,
+      transform 0.2s ease-out;
+  }
+  .qchip.show {
+    opacity: 1;
+    transform: none;
+  }
+  #demobtn {
+    margin-left: auto;
+    padding: 3px 10px;
+    border: 1px solid var(--hair);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--dim);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition:
+      color 0.16s ease-out,
+      border-color 0.16s ease-out;
+  }
+  #demobtn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  #mapwrap {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    border-radius: 8px;
+  }
+  #glow {
+    position: absolute;
+    border-radius: 50%;
+    background: radial-gradient(
+      closest-side,
+      var(--accent-soft),
+      transparent
+    );
+    filter: blur(6px);
+    pointer-events: none;
+    z-index: 0;
+    transition:
+      left 0.2s ease-out,
+      top 0.2s ease-out,
+      width 0.2s ease-out,
+      height 0.2s ease-out,
+      opacity 0.2s ease-out;
+  }
+  #mapsvg {
     position: absolute;
     inset: 0;
     z-index: 1;
     pointer-events: none;
     overflow: visible;
   }
-  #svg path {
+  #mapsvg path {
     fill: none;
     stroke: var(--accent);
-    stroke-width: 1.6;
-    opacity: 0.7;
+    stroke-width: 1.3;
+    stroke-dasharray: 3 3;
+    opacity: 0.75;
   }
-
-  /* ---- right: lens ---- */
-  #chips {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-bottom: 22px;
-  }
-  .chip {
+  #map {
     position: relative;
-    align-self: flex-start;
-    max-width: 100%;
-    padding: 5px 12px;
-    border-radius: 999px;
-    background: var(--chip);
+    z-index: 2;
+  }
+  .mnode {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 2px 6px;
+    border-radius: 5px;
     font-size: 13.5px;
+    opacity: var(--fog);
     transition:
       opacity 0.2s ease-out,
-      transform 0.2s ease-out;
+      background 0.2s ease-out,
+      color 0.2s ease-out;
   }
-  .chip.crumb {
-    margin-left: calc(var(--depth) * 16px);
+  .mnode .mdot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.5;
+    flex: none;
   }
-  .chip.leaf {
-    background: var(--accent);
-    color: #fff;
+  /* lit = in the agent's context: ancestor path + local subtree */
+  .mnode.lit {
+    opacity: 1;
+    color: var(--ink);
+  }
+  .mnode.self {
+    background: var(--chip);
     font-weight: 500;
   }
-  .chip.spliced {
-    background: rgba(108, 142, 239, 0.22);
+  /* lifted by an agent query */
+  .mnode.query {
+    opacity: 1;
+    color: var(--ink);
+    background: var(--accent-soft);
+  }
+  .mnode.pinned {
+    opacity: 1;
+    color: var(--ink);
+    background: var(--accent-soft);
     outline: 1px solid var(--accent);
   }
-  .chip.enter {
-    opacity: 0;
-    transform: translateX(-14px);
-  }
-  .chip.out {
-    opacity: 0;
-    transform: translateX(14px);
-  }
-  .chip.off {
-    opacity: 0.22;
-    text-decoration: line-through;
-  }
-  .chip .x {
-    display: none;
-    position: absolute;
-    right: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 15px;
-    height: 15px;
-    line-height: 14px;
-    text-align: center;
-    border-radius: 50%;
-    font-size: 11px;
-    background: rgba(0, 0, 0, 0.18);
-    color: inherit;
-    cursor: pointer;
-  }
-  .chip:hover .x {
-    display: block;
-  }
-  .chip:hover {
-    padding-right: 24px;
-  }
-  .sep {
-    align-self: flex-start;
-    color: var(--accent);
-    font-weight: 600;
-    margin: 2px 0 2px 2px;
-    animation: embedIn 0.2s ease-out;
-  }
-  #subhead {
-    font-size: 11px;
-    letter-spacing: 0.08em;
+  .mnode .tag {
+    font-size: 10px;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: var(--dim);
-    margin-bottom: 8px;
-  }
-  #subtree {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .sub {
-    padding: 2px 4px;
-    color: var(--dim);
-    font-size: 14px;
-    transition:
-      opacity 0.2s ease-out,
-      transform 0.2s ease-out;
-  }
-  .sub.self {
-    color: var(--ink);
-    font-weight: 500;
-  }
-  .sub.enter {
+    color: var(--accent);
     opacity: 0;
-    transform: translateY(6px);
+    transition: opacity 0.2s ease-out;
+  }
+  .mnode.query .tag,
+  .mnode.pinned .tag {
+    opacity: 1;
+  }
+  #agentglyph {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 3;
+    color: var(--accent);
+    font-size: 13px;
+    pointer-events: none;
+    transition:
+      transform 0.2s ease-out,
+      opacity 0.2s ease-out;
+  }
+  /* search sweep across the fog */
+  #sweep {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    opacity: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 0%,
+      transparent 38%,
+      rgba(108, 142, 239, 0.28) 50%,
+      transparent 62%,
+      transparent 100%
+    );
+    background-size: 260% 100%;
+    background-position: 140% 0;
+  }
+  #sweep.run {
+    opacity: 1;
+    animation: sweep 0.62s ease-in-out;
+  }
+  @keyframes sweep {
+    from {
+      background-position: 140% 0;
+    }
+    to {
+      background-position: -60% 0;
+    }
+  }
+
+  #legend {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--hair);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--dim);
+  }
+  #legend .lk {
+    color: var(--ink);
   }
 
   #hint {
@@ -272,24 +376,36 @@
 <div id="wrap">
   <div id="left">
     <h2>outline</h2>
-    <svg id="svg"></svg>
     <div id="outline"></div>
   </div>
   <div id="right">
-    <h2>what the agent sees</h2>
-    <div id="chips"></div>
-    <div id="subhead">subtree · in focus</div>
-    <div id="subtree"></div>
+    <h2>what the agent sees — fog of war</h2>
+    <div id="querybar">
+      <span id="agentbadge">⟡ <b>agent</b></span>
+      <div class="qchip" id="qchip"></div>
+      <button id="demobtn">▷ agent queries</button>
+    </div>
+    <div id="mapwrap">
+      <div id="glow"></div>
+      <svg id="mapsvg"></svg>
+      <div id="map"></div>
+      <div id="agentglyph">⟡</div>
+      <div id="sweep"></div>
+    </div>
+    <div id="legend">
+      <span class="lk">lit</span> = in context ·
+      <span class="lk">dim</span> = fog ·
+      the agent can <span class="lk">query</span> to lift fog
+    </div>
   </div>
 </div>
 <div id="hint">
-  <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>q</kbd> quote-splice the other subtree ·
-  <kbd>×</kbd> (hover a chip) drop from context
+  <kbd>j</kbd>/<kbd>k</kbd> move the light · <kbd>x</kbd> agent queries for
+  more · <kbd>q</kbd> pin a node into the agent's light
 </div>
 
 <script>
-  // ---- data: two visually distant subtrees + a filler root ----
-  // depth-encoded flat outline; ancestors derived from a depth stack.
+  // ---- data: whole tree; depth-encoded flat outline ----
   const RAW = [
     ["product", 0, "Product"],
     ["pricing", 1, "Pricing"],
@@ -314,15 +430,16 @@
 
   const nodes = RAW.map(([id, depth, title]) => ({ id, depth, title }));
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const indexOf = Object.fromEntries(nodes.map((n, i) => [n.id, i]));
 
-  // ancestor path (root -> node) via depth stack
+  // ancestor path (root -> node) via a depth stack
   const stack = [];
   for (const n of nodes) {
     stack[n.depth] = n;
     stack.length = n.depth + 1;
     n.path = stack.slice(0, n.depth + 1).map((x) => x.id);
   }
-  // subtree = following nodes with greater depth, until depth <= n.depth
+  // subtree = following nodes deeper than n, until depth <= n.depth
   nodes.forEach((n, i) => {
     const kids = [];
     for (let j = i + 1; j < nodes.length; j++) {
@@ -330,23 +447,26 @@
       kids.push(nodes[j].id);
     }
     n.subtree = kids;
-    // which distant node this one quotes (pre-marked, always the other side)
-    n.quoteRoot = n.path[0];
   });
-  function quoteTargetFor(n) {
+
+  // pin target: always a distant node in the *other* half of the tree
+  function pinTargetFor(n) {
     const root = n.path[0];
-    if (root === "product") return "linear";
-    if (root === "research") return "ent";
-    return "notion"; // roadmap reaches into research
+    if (root === "product") return "linear"; // reach into Research › Competitors
+    if (root === "research") return "ent"; // reach into Product › Pricing
+    return "notion"; // Roadmap reaches into Research
   }
+  // an agent query resolves to these distant nodes ("via query")
+  const QUERY_HITS = ["linear", "notion", "figma"];
+  const QUERY_TEXT = 'query("competitor pricing")';
 
   // ---- state ----
   let cursor = 3; // start on "Free-trial length"
-  let spliced = null; // target node id when a quote is active
-  const dropped = new Set(); // chip ids removed from context (visual)
-  let renderedChips = new Map(); // id -> element, for keyed diffing
+  let pinned = null; // node id pinned into the agent's light
+  let queried = new Set(); // node ids the agent lifted fog on via query
+  let pinCaptionShown = false;
 
-  // ---- render outline (once) ----
+  // ---- left outline (source of truth) ----
   const outline = document.getElementById("outline");
   const nodeEls = {};
   nodes.forEach((n, i) => {
@@ -361,198 +481,181 @@
     nodeEls[n.id] = el;
   });
 
-  function currentNode() {
-    return nodes[cursor];
-  }
+  const currentNode = () => nodes[cursor];
 
   function paintOutline() {
-    nodes.forEach((n, i) => {
-      const el = nodeEls[n.id];
-      el.classList.toggle("cursor", i === cursor);
-      // dim nodes whose chip was dropped from context
-      el.classList.toggle("dimmed", dropped.has(n.id));
-    });
-    // embedded quote block under the cursor node
-    document.querySelectorAll(".embed").forEach((e) => e.remove());
-    if (spliced) {
-      const t = byId[spliced];
+    nodes.forEach((n, i) =>
+      nodeEls[n.id].classList.toggle("cursor", i === cursor)
+    );
+    // recessed embed + one-time caption under the cursor node when pinned
+    document.querySelectorAll(".embed, #pincap").forEach((e) => e.remove());
+    if (pinned) {
+      const t = byId[pinned];
       const em = document.createElement("div");
       em.className = "embed";
       const crumb = t.path.map((id) => byId[id].title).join(" › ");
-      em.innerHTML = `<div class="mini">quoted · <b>${crumb}</b></div>`;
-      const body = document.createElement("div");
-      body.textContent = t.title;
-      em.appendChild(body);
+      em.innerHTML =
+        `<div class="mini">📌 pinned · <b>${crumb}</b></div>` +
+        `<div class="body"></div>`;
+      em.querySelector(".body").textContent = t.title;
+      const cap = document.createElement("div");
+      cap.id = "pincap";
+      cap.textContent = "pinned into context";
       const cur = nodeEls[currentNode().id];
+      cur.after(cap);
       cur.after(em);
-    }
-  }
-
-  // ---- right panel: keyed chip diffing for fly in/out ----
-  const chipsBox = document.getElementById("chips");
-
-  function desiredChips() {
-    // ancestor path of cursor, then (if spliced) a separator + the quoted path
-    const list = [];
-    const cn = currentNode();
-    cn.path.forEach((id, idx) => {
-      list.push({
-        key: id,
-        id,
-        depth: idx,
-        title: byId[id].title,
-        leaf: idx === cn.path.length - 1 && !spliced,
-        spliced: false,
-      });
-    });
-    if (spliced) {
-      list.push({ key: "__sep", sep: true });
-      const t = byId[spliced];
-      t.path.forEach((id, idx) => {
-        list.push({
-          key: "q:" + id,
-          id,
-          depth: idx,
-          title: byId[id].title,
-          leaf: false,
-          spliced: idx === t.path.length - 1,
-        });
-      });
-    }
-    return list;
-  }
-
-  function makeChip(spec) {
-    if (spec.sep) {
-      const s = document.createElement("div");
-      s.className = "sep";
-      s.textContent = "+";
-      return s;
-    }
-    const c = document.createElement("div");
-    c.className = "chip crumb enter" + (spec.leaf ? " leaf" : "") + (spec.spliced ? " spliced" : "");
-    c.style.setProperty("--depth", spec.depth);
-    const label = document.createElement("span");
-    label.textContent = spec.title;
-    c.appendChild(label);
-    const x = document.createElement("span");
-    x.className = "x";
-    x.textContent = "×";
-    x.title = "drop from context";
-    x.onclick = (e) => {
-      e.stopPropagation();
-      if (dropped.has(spec.id)) dropped.delete(spec.id);
-      else dropped.add(spec.id);
-      c.classList.toggle("off", dropped.has(spec.id));
-      paintOutline();
-    };
-    c.appendChild(x);
-    if (dropped.has(spec.id)) c.classList.add("off");
-    return c;
-  }
-
-  function renderChips() {
-    const want = desiredChips();
-    const wantKeys = new Set(want.map((w) => w.key));
-    // exit chips no longer wanted
-    for (const [key, el] of renderedChips) {
-      if (!wantKeys.has(key)) {
-        el.classList.add("out");
-        const rem = el;
-        setTimeout(() => rem.remove(), 200);
-        renderedChips.delete(key);
-      }
-    }
-    // add / reorder wanted chips, staggered
-    let delay = 0;
-    want.forEach((spec) => {
-      let el = renderedChips.get(spec.key);
-      if (!el) {
-        el = makeChip(spec);
-        renderedChips.set(spec.key, el);
-        chipsBox.appendChild(el);
-        const d = delay;
+      if (!pinCaptionShown) {
+        pinCaptionShown = true;
         requestAnimationFrame(() =>
-          requestAnimationFrame(() =>
-            setTimeout(() => el.classList.remove("enter"), d)
-          )
+          requestAnimationFrame(() => cap.classList.add("show"))
         );
-        delay += 45;
-      } else {
-        chipsBox.appendChild(el); // keep DOM order in sync
+        setTimeout(() => cap.classList.remove("show"), 2600);
       }
-    });
-  }
-
-  // ---- right panel: subtree list ----
-  const subBox = document.getElementById("subtree");
-  function renderSubtree() {
-    subBox.innerHTML = "";
-    const cn = currentNode();
-    const self = document.createElement("div");
-    self.className = "sub self enter";
-    self.textContent = cn.title;
-    subBox.appendChild(self);
-    cn.subtree.forEach((id) => {
-      const n = byId[id];
-      const d = document.createElement("div");
-      d.className = "sub enter";
-      d.style.paddingLeft = (n.depth - cn.depth) * 14 + "px";
-      d.textContent = n.title;
-      subBox.appendChild(d);
-    });
-    if (!cn.subtree.length) {
-      const e = document.createElement("div");
-      e.className = "sub enter";
-      e.style.opacity = 0.4;
-      e.textContent = "— leaf, no children —";
-      subBox.appendChild(e);
     }
-    let delay = 30;
-    [...subBox.children].forEach((el) => {
-      const d = delay;
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => setTimeout(() => el.classList.remove("enter"), d))
-      );
-      delay += 30;
-    });
   }
 
-  // ---- connector between the two outline locations ----
-  const svg = document.getElementById("svg");
-  function drawConnector() {
-    svg.innerHTML = "";
-    if (!spliced) return;
-    const left = document.getElementById("left");
-    const base = left.getBoundingClientRect();
-    const a = nodeEls[currentNode().id].getBoundingClientRect();
-    const b = nodeEls[spliced].getBoundingClientRect();
-    // anchor on the right edge of each node, in #left coordinates (account for scroll)
-    const x1 = a.right - base.left + left.scrollLeft;
-    const y1 = a.top + a.height / 2 - base.top + left.scrollTop;
-    const x2 = b.right - base.left + left.scrollLeft;
-    const y2 = b.top + b.height / 2 - base.top + left.scrollTop;
-    const bow = Math.max(60, Math.abs(y2 - y1) * 0.45);
+  // ---- right: the minimap (built once) ----
+  const map = document.getElementById("map");
+  const mnodeEls = {};
+  nodes.forEach((n) => {
+    const el = document.createElement("div");
+    el.className = "mnode";
+    el.style.marginLeft = n.depth * 18 + "px";
+    el.innerHTML =
+      `<span class="mdot"></span><span class="mlabel"></span>` +
+      `<span class="tag"></span>`;
+    el.querySelector(".mlabel").textContent = n.title;
+    map.appendChild(el);
+    mnodeEls[n.id] = el;
+  });
+
+  const glow = document.getElementById("glow");
+  const glyph = document.getElementById("agentglyph");
+  const mapsvg = document.getElementById("mapsvg");
+  const mapwrap = document.getElementById("mapwrap");
+
+  function litSet() {
+    // the agent's context: ancestor path + local subtree of the cursor
+    const cn = currentNode();
+    const s = new Set(cn.path);
+    cn.subtree.forEach((id) => s.add(id));
+    return s;
+  }
+
+  function paintMap() {
+    const lit = litSet();
+    const cn = currentNode();
+    nodes.forEach((n) => {
+      const el = mnodeEls[n.id];
+      const isLit = lit.has(n.id);
+      const isQuery = queried.has(n.id) && !isLit;
+      const isPin = pinned === n.id && !isLit;
+      el.classList.toggle("lit", isLit);
+      el.classList.toggle("self", n.id === cn.id);
+      el.classList.toggle("query", isQuery);
+      el.classList.toggle("pinned", isPin);
+      const tag = el.querySelector(".tag");
+      tag.textContent = isPin ? "📌 pinned" : isQuery ? "via query" : "";
+    });
+    positionGlow(lit);
+    positionGlyph();
+    drawPinConnector();
+  }
+
+  function positionGlow(lit) {
+    // soft light blob covering the lit region's bounding box
+    const litEls = [...lit].map((id) => mnodeEls[id]);
+    if (!litEls.length) {
+      glow.style.opacity = 0;
+      return;
+    }
+    const base = mapwrap.getBoundingClientRect();
+    let top = Infinity,
+      bottom = -Infinity,
+      left = Infinity,
+      right = -Infinity;
+    litEls.forEach((el) => {
+      const r = el.getBoundingClientRect();
+      top = Math.min(top, r.top);
+      bottom = Math.max(bottom, r.bottom);
+      left = Math.min(left, r.left);
+      right = Math.max(right, r.right);
+    });
+    const pad = 26;
+    const x = left - base.left - pad;
+    const y = top - base.top - pad;
+    const w = right - left + pad * 2;
+    const h = bottom - top + pad * 2;
+    glow.style.opacity = 1;
+    glow.style.left = x + "px";
+    glow.style.top = y + "px";
+    glow.style.width = w + "px";
+    glow.style.height = h + "px";
+  }
+
+  function positionGlyph() {
+    // the agent sits at the cursor node inside the fog
+    const base = mapwrap.getBoundingClientRect();
+    const r = mnodeEls[currentNode().id].getBoundingClientRect();
+    const x = r.left - base.left - 16;
+    const y = r.top - base.top + r.height / 2 - 8;
+    glyph.style.transform = `translate(${x}px, ${y}px)`;
+  }
+
+  function drawPinConnector() {
+    mapsvg.innerHTML = "";
+    if (!pinned || litSet().has(pinned)) return;
+    const base = mapwrap.getBoundingClientRect();
+    const a = mnodeEls[pinned].getBoundingClientRect(); // distant, pinned
+    const b = mnodeEls[currentNode().id].getBoundingClientRect(); // lit region
+    const x1 = a.right - base.left;
+    const y1 = a.top + a.height / 2 - base.top;
+    const x2 = b.right - base.left;
+    const y2 = b.top + b.height / 2 - base.top;
+    const bow = Math.max(28, Math.abs(y2 - y1) * 0.4);
     const cx = Math.max(x1, x2) + bow;
-    const d = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`;
     const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p.setAttribute("d", d);
-    svg.appendChild(p);
+    p.setAttribute("d", `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`);
+    mapsvg.appendChild(p);
     const len = p.getTotalLength();
-    p.style.strokeDasharray = len;
+    p.style.strokeDasharray = "3 3";
     p.style.strokeDashoffset = len;
-    p.style.transition = "stroke-dashoffset 0.6s ease-out";
+    p.style.transition = "stroke-dashoffset 0.5s ease-out";
     requestAnimationFrame(() =>
       requestAnimationFrame(() => (p.style.strokeDashoffset = "0"))
     );
   }
 
-  // ---- update everything ----
-  function update(moved) {
+  // ---- agent queries for more: lift fog on distant nodes ----
+  const qchip = document.getElementById("qchip");
+  const sweep = document.getElementById("sweep");
+  let querying = false;
+
+  function runQuery() {
+    if (querying) return;
+    querying = true;
+    // agent emits a visible query chip
+    qchip.textContent = QUERY_TEXT;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => qchip.classList.add("show"))
+    );
+    // search-sweep shimmer across the fog
+    sweep.classList.remove("run");
+    void sweep.offsetWidth;
+    sweep.classList.add("run");
+    // matching distant nodes light up and stay lit
+    setTimeout(() => {
+      QUERY_HITS.forEach((id) => queried.add(id));
+      paintMap();
+      querying = false;
+    }, 560);
+    setTimeout(() => qchip.classList.remove("show"), 3200);
+  }
+
+  // ---- update / input ----
+  function update() {
     paintOutline();
-    renderChips();
-    if (moved) renderSubtree();
-    drawConnector();
+    paintMap();
     nodeEls[currentNode().id].scrollIntoView({ block: "nearest" });
   }
 
@@ -560,20 +663,16 @@
     const next = Math.min(nodes.length - 1, Math.max(0, cursor + delta));
     if (next === cursor) return;
     cursor = next;
-    if (spliced) {
-      spliced = null; // moving unsplices — context follows the cursor
-    }
-    update(true);
+    // the light rolls with the cursor; a pin follows too (stays lit)
+    update();
   }
 
-  function toggleQuote() {
-    if (spliced) {
-      spliced = null;
-    } else {
-      spliced = quoteTargetFor(currentNode());
-    }
-    update(false);
+  function togglePin() {
+    pinned = pinned ? null : pinTargetFor(currentNode());
+    update();
   }
+
+  document.getElementById("demobtn").addEventListener("click", runQuery);
 
   document.addEventListener("keydown", (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -585,17 +684,18 @@
     } else if (e.key === "k" || e.key === "ArrowUp") {
       e.preventDefault();
       move(-1);
+    } else if (e.key === "x") {
+      e.preventDefault();
+      runQuery();
     } else if (e.key === "q") {
       e.preventDefault();
-      toggleQuote();
+      togglePin();
     }
     // NOTE: 'c' intentionally left unbound (comment rail owns it).
   });
 
-  window.addEventListener("resize", drawConnector);
-  document.getElementById("left").addEventListener("scroll", drawConnector);
+  window.addEventListener("resize", () => paintMap());
 
-  // first paint
-  renderSubtree();
-  update(false);
+  // first paint (glyph/glow need layout, so defer one frame)
+  requestAnimationFrame(() => update());
 </script>
