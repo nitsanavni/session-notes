@@ -1,0 +1,12 @@
+{
+  "name": "v0-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Browser e2e suite for the v0 outliner prototype",
+  "scripts": {
+    "test": "node scenarios.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}

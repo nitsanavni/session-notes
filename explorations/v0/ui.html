@@ -160,7 +160,7 @@ function short(n){ if(!n) return '?'; const t=(n.content||'').split('\n')[0]; re
 function nodeRow(edge){
   const n=nodes.get(edge.child); if(!n) return document.createElement('div');
   const row=document.createElement('div');
-  row.className='row'; row.dataset.id=n.id;
+  row.className='row'; row.dataset.id=n.id; row.dataset.nodeId=n.id;
   const agent=isAgent(n.author);
   if(agent) row.classList.add('agent');
   if(edge.kind==='reply'){ row.classList.add('reply'); if(n.author!==AUTHOR) row.classList.add('byother'); }
@@ -185,7 +185,7 @@ function nodeRow(edge){
 
 function quoteRow(edge){
   const tgt=nodes.get(edge.child);
-  const q=document.createElement('div'); q.className='quote'; q.dataset.id=edge.child;
+  const q=document.createElement('div'); q.className='quote'; q.dataset.id=edge.child; q.dataset.nodeId=edge.child; q.dataset.quote='1';
   const src=document.createElement('span'); src.className='q-src';
   src.textContent='“ quote · '+(tgt?tgt.author:'?');
   q.appendChild(src);
@@ -256,8 +256,11 @@ function startEdit(id){
   const range=document.createRange(); range.selectNodeContents(content);
   const sel=getSelection(); sel.removeAllRanges(); sel.addRange(range);
   const finish=(commit)=>{
-    content.contentEditable='false'; row.classList.remove('editing'); editing=false;
+    // Detach listeners BEFORE clearing contentEditable: doing so blurs the
+    // focused element, which would otherwise re-enter finish(true) via onblur
+    // and commit even on Escape (and double-patch on Enter).
     content.removeEventListener('keydown',onk); content.removeEventListener('blur',onblur);
+    content.contentEditable='false'; row.classList.remove('editing'); editing=false;
     if(commit){ const v=content.textContent; if(v!==nodes.get(id).content) api.patch(id,v); }
     render();
   };
@@ -277,8 +280,8 @@ function startEditTitle(){
   const range=document.createRange(); range.selectNodeContents(title);
   const sel=getSelection(); sel.removeAllRanges(); sel.addRange(range);
   const finish=(commit)=>{
-    title.contentEditable='false'; editing=false;
     title.removeEventListener('keydown',onk); title.removeEventListener('blur',onblur);
+    title.contentEditable='false'; editing=false;
     if(commit){ const v=title.textContent; if(v!==nodes.get(focus).content) api.patch(focus,v); }
     render();
   };
@@ -321,7 +324,9 @@ async function reparent(child,newParent){
 }
 
 function waitFor(id,fn){
-  if(nodes.has(id)){ fn(); return; }
+  // Render before running fn: the node may already be in the map while its row
+  // is still behind a debounced render, and fn (e.g. startEdit) needs the row.
+  if(nodes.has(id)){ render(); fn(); return; }
   const iv=setInterval(()=>{ if(nodes.has(id)){ clearInterval(iv); render(); fn(); } },40);
   setTimeout(()=>clearInterval(iv),2000);
 }
@@ -374,7 +379,13 @@ function applyEvent(ev){
     case 'node.add': nodes.set(p.id,{id:p.id,content:p.content,author:p.author,created_at:ev.ts,updated_at:ev.ts}); scheduleRender(true); break;
     case 'node.edit': { const n=nodes.get(p.id); if(n){ n.content=p.content; n.updated_at=ev.ts; } scheduleRender(); break; }
     case 'node.del': delSubtree(p.id); scheduleRender(); break;
-    case 'edge.add': edges.push({parent:p.parent,child:p.child,kind:p.kind,rank:p.rank}); scheduleRender(true); break;
+    case 'edge.add':
+      // Idempotent: boot() seeds edges from /api/tree, then the SSE stream
+      // (since=0) replays the same events — without this guard every edge
+      // would be duplicated, doubling every child in childrenOf/visibleIds.
+      if(!edges.some(e=>e.parent===p.parent&&e.child===p.child&&e.kind===p.kind))
+        edges.push({parent:p.parent,child:p.child,kind:p.kind,rank:p.rank});
+      scheduleRender(true); break;
     case 'edge.move':
       edges=edges.filter(e=>!(e.child===p.child && e.kind!=='quote'));
       edges.push({parent:p.parent,child:p.child,kind:p.kind,rank:p.rank}); scheduleRender(); break;
@@ -407,6 +418,25 @@ function scheduleRender(entrance){
 // presence fade tick
 setInterval(()=>{ if(presence.size && !editing) scheduleRender(); },1000);
 
+// ---- debug handle (for e2e) ----
+window.__v0 = {
+  get cursor(){ return cursor; },
+  get focus(){ return focus; },
+  get editing(){ return editing; },
+  get yanked(){ return yanked; },
+  get lastSeq(){ return lastSeq; },
+  // ids of the rows currently rendered under #list, in visual order
+  get rendered(){ return [...document.querySelectorAll('#list .row')].map(r=>r.dataset.nodeId); },
+  // ids of every quote reference currently rendered, in visual order
+  get quotes(){ return [...document.querySelectorAll('#list .quote')].map(r=>r.dataset.nodeId); },
+  // navigable ids under the current focus (excludes quotes), the j/k order
+  get visible(){ return visibleIds(); },
+  get nodeCount(){ return nodes.size; },
+  hasNode(id){ return nodes.has(id); },
+  presenceAt(id){ const p=presence.get(id); return p?p.actor:null; },
+  get ready(){ return window.__v0booted===true; },
+};
+
 // ---- boot ----
 async function boot(){
   const t=await api.tree();
@@ -415,6 +445,7 @@ async function boot(){
   focus=""; cursor=visibleIds()[0]||"";
   render();
   connect();
+  window.__v0booted=true;
 }
 boot();
 </script>
