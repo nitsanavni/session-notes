@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"sort"
@@ -82,17 +83,26 @@ func newStore(dir string) (*Store, error) {
 	}
 	// Replay existing log.
 	if b, err := os.ReadFile(path); err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
+		for i, line := range strings.Split(string(b), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
 			var e Event
 			if err := json.Unmarshal([]byte(line), &e); err != nil {
-				return nil, fmt.Errorf("replay: %w", err)
+				// A crash mid-write leaves a truncated final line; a bit-flip can
+				// corrupt any line. Skip the bad record with a warning rather than
+				// refusing to boot — the rest of the log is still authoritative.
+				log.Printf("replay: skipping malformed line %d in %s: %v", i+1, path, err)
+				continue
 			}
 			s.apply(e)
-			s.log = append(s.log, e)
+			// presence.move is transient and never persisted (see append); if an
+			// old log still carries some, replay them as no-ops but keep them out
+			// of the in-memory history so since= replay stays log-consistent.
+			if e.Kind != "presence.move" {
+				s.log = append(s.log, e)
+			}
 			if e.Seq > s.seq {
 				s.seq = e.Seq
 			}
@@ -186,17 +196,21 @@ func (s *Store) append(actor, kind string, payload any) (Event, error) {
 	}
 	s.seq++
 	e := Event{Seq: s.seq, TS: now(), Actor: actor, Kind: kind, Payload: raw}
-	line, _ := json.Marshal(e)
-	if s.f != nil {
-		if _, err := s.f.Write(append(line, '\n')); err != nil {
-			s.seq--
-			return Event{}, err
-		}
-	}
-	s.apply(e)
+	// presence.move is transient: broadcast to live subscribers only, never
+	// written to events.jsonl or the in-memory history. Cursor moves are a
+	// high-frequency stream and persisting them would bloat the log without
+	// value (position is not part of durable state).
 	if kind != "presence.move" {
+		line, _ := json.Marshal(e)
+		if s.f != nil {
+			if _, err := s.f.Write(append(line, '\n')); err != nil {
+				s.seq--
+				return Event{}, err
+			}
+		}
 		s.log = append(s.log, e)
 	}
+	s.apply(e)
 	for ch := range s.subs {
 		select {
 		case ch <- e:
@@ -264,6 +278,46 @@ func (s *Store) maxRank(parent string) float64 {
 		}
 	}
 	return m
+}
+
+// maxContentBytes caps node content. The UI never sends anything close; the cap
+// exists to reject accidental or hostile multi-megabyte payloads (→ 413).
+const maxContentBytes = 64 * 1024
+
+// validEdgeKind reports whether k is one of the three known edge kinds.
+func validEdgeKind(k string) bool {
+	switch k {
+	case "child", "reply", "quote":
+		return true
+	}
+	return false
+}
+
+// wouldCycle reports whether attaching child under parent would create a cycle,
+// i.e. parent is child itself or a descendant of child. It follows structural
+// (non-quote) edges only, since quote edges are pointers, not containment.
+// Caller holds s.mu.
+func (s *Store) wouldCycle(child, parent string) bool {
+	if parent == "" {
+		return false
+	}
+	if parent == child {
+		return true
+	}
+	desc := map[string]bool{child: true}
+	for grew := true; grew; {
+		grew = false
+		for _, e := range s.edges {
+			if e.Kind == "quote" {
+				continue
+			}
+			if desc[e.Parent] && !desc[e.Child] {
+				desc[e.Child] = true
+				grew = true
+			}
+		}
+	}
+	return desc[parent]
 }
 
 // ---- context primitive (fog of war) ----
@@ -357,9 +411,23 @@ func (srv *server) createNode(w http.ResponseWriter, r *http.Request) {
 	if in.Kind == "" {
 		in.Kind = "child"
 	}
+	if !validEdgeKind(in.Kind) {
+		http.Error(w, "unknown edge kind", 400)
+		return
+	}
+	if len(in.Content) > maxContentBytes {
+		http.Error(w, "content too large", 413)
+		return
+	}
 	id := newID()
 	srv.s.mu.Lock()
 	defer srv.s.mu.Unlock()
+	// A non-root node must attach to an existing parent, else it becomes an
+	// invisible orphan (no incoming-edge-free root, no visible parent).
+	if in.Parent != "" && srv.s.nodes[in.Parent] == nil {
+		http.Error(w, "unknown parent", 404)
+		return
+	}
 	if _, err := srv.s.append(in.Author, "node.add", map[string]string{"id": id, "content": in.Content, "author": in.Author}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -379,6 +447,10 @@ func (srv *server) patchNode(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Content string }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, err.Error(), 400)
+		return
+	}
+	if len(in.Content) > maxContentBytes {
+		http.Error(w, "content too large", 413)
 		return
 	}
 	srv.s.mu.Lock()
@@ -420,10 +492,22 @@ func (srv *server) addEdge(w http.ResponseWriter, r *http.Request) {
 	if in.Kind == "" {
 		in.Kind = "quote"
 	}
+	if !validEdgeKind(in.Kind) {
+		http.Error(w, "unknown edge kind", 400)
+		return
+	}
+	if math.IsNaN(in.Rank) || math.IsInf(in.Rank, 0) {
+		http.Error(w, "invalid rank", 400)
+		return
+	}
 	srv.s.mu.Lock()
 	defer srv.s.mu.Unlock()
 	if srv.s.nodes[in.Child] == nil {
 		http.Error(w, "unknown child", 400)
+		return
+	}
+	if in.Parent != "" && srv.s.nodes[in.Parent] == nil {
+		http.Error(w, "unknown parent", 400)
 		return
 	}
 	if in.Rank == 0 {
@@ -446,10 +530,25 @@ func (srv *server) reparent(w http.ResponseWriter, r *http.Request) {
 	if in.Kind == "" {
 		in.Kind = "child"
 	}
+	if !validEdgeKind(in.Kind) {
+		http.Error(w, "unknown edge kind", 400)
+		return
+	}
 	srv.s.mu.Lock()
 	defer srv.s.mu.Unlock()
 	if srv.s.nodes[in.Child] == nil {
 		http.Error(w, "unknown child", 400)
+		return
+	}
+	if in.Parent != "" && srv.s.nodes[in.Parent] == nil {
+		http.Error(w, "unknown parent", 400)
+		return
+	}
+	// Reject cycles: making a node a child of itself or of one of its own
+	// descendants would corrupt the tree (childrenOf recursion loops forever and
+	// clients hang).
+	if srv.s.wouldCycle(in.Child, in.Parent) {
+		http.Error(w, "reparent would create a cycle", 400)
 		return
 	}
 	rank := srv.s.maxRank(in.Parent) + 1

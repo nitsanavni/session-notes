@@ -64,22 +64,43 @@ class Ctx {
 
   log(msg) { this.steps.push(msg); }
 
+  // launchServer: spawn the server on a free port and wait for it to answer.
+  // Retries on a fresh port a few times to absorb the transient boot flake
+  // (a port that raced free between freePort() and bind, or a slow first exec).
+  async launchServer() {
+    this.serverLog = this.serverLog || '';
+    let lastErr;
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      this.port = await freePort();
+      this.base = `http://127.0.0.1:${this.port}`;
+      const [cmd, args] = BIN
+        ? [BIN, ['-port', String(this.port), '-data', this.dataDir]]
+        : [GO, ['run', SRC, '-port', String(this.port), '-data', this.dataDir]];
+      let exited = false;
+      this.server = spawn(cmd, args, { cwd: SRC, stdio: ['ignore', 'pipe', 'pipe'] });
+      this.server.stdout.on('data', d => (this.serverLog += d));
+      this.server.stderr.on('data', d => (this.serverLog += d));
+      this.server.on('exit', () => { exited = true; });
+      try {
+        await waitFor(async () => {
+          if (exited) throw new Error('server exited early');
+          try { return (await fetch(`${this.base}/api/tree`)).ok; } catch { return false; }
+        }, 12000, 'server to come up');
+        return; // up
+      } catch (e) {
+        lastErr = e;
+        try { this.server.kill(); } catch {}
+        this.serverLog += `\n[launch attempt ${attempt} failed: ${e.message}]\n`;
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+    throw lastErr || new Error('server failed to come up');
+  }
+
   async start() {
     this.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v0-e2e-'));
     this.dataDir = path.join(this.dir, 'data');
-    this.port = await freePort();
-
-    const [cmd, args] = BIN
-      ? [BIN, ['-port', String(this.port), '-data', this.dataDir]]
-      : [GO, ['run', SRC, '-port', String(this.port), '-data', this.dataDir]];
-    this.server = spawn(cmd, args, { cwd: SRC, stdio: ['ignore', 'pipe', 'pipe'] });
-    this.serverLog = '';
-    this.server.stdout.on('data', d => (this.serverLog += d));
-    this.server.stderr.on('data', d => (this.serverLog += d));
-    this.base = `http://127.0.0.1:${this.port}`;
-    await waitFor(async () => {
-      try { return (await fetch(`${this.base}/api/tree`)).ok; } catch { return false; }
-    }, 20000, 'server to come up');
+    await this.launchServer();
 
     this.browser = await chromium.launch({
       executablePath: CHROME,
@@ -143,6 +164,53 @@ class Ctx {
   }
   async apiPresence(actor, node) {
     return fetch(`${this.base}/api/presence`, { method: 'POST', body: JSON.stringify({ actor, node }) });
+  }
+  async apiDelete(id) {
+    return fetch(`${this.base}/api/nodes/${id}`, { method: 'DELETE' });
+  }
+  async apiPatch(id, content) {
+    return fetch(`${this.base}/api/nodes/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) });
+  }
+  // delete every node (roots cascade to their subtrees).
+  async apiWipe() {
+    const tree = await this.tree();
+    const child = new Set(tree.edges.map(e => e.child));
+    for (const n of tree.nodes) if (!child.has(n.id)) await this.apiDelete(n.id);
+  }
+
+  // reload the current page and wait for boot.
+  async reopen() {
+    this.log('reload /');
+    await this.page.reload();
+    await this.page.waitForFunction(() => window.__v0 && window.__v0.ready === true, null, { timeout: 8000 });
+    await this.settled();
+  }
+
+  // open a second independent page against the same server (two clients).
+  async secondPage() {
+    const page = await this.browser.newPage({ viewport: { width: 900, height: 900 } });
+    page.on('pageerror', e => this.pageErrors.push('B:' + e.message));
+    page.on('console', m => { if (m.type() === 'error') this.consoleErrors.push('B:' + m.text()); });
+    await page.goto(this.base + '/');
+    await page.waitForFunction(() => window.__v0 && window.__v0.ready === true, null, { timeout: 8000 });
+    await page.waitForTimeout(150);
+    return page;
+  }
+
+  // kill and relaunch the server against the SAME data dir (persistence check).
+  async restartServer() {
+    this.log('restart server (same data dir)');
+    this.server.kill();
+    await new Promise(r => setTimeout(r, 200));
+    const [cmd, args] = BIN
+      ? [BIN, ['-port', String(this.port), '-data', this.dataDir]]
+      : [GO, ['run', SRC, '-port', String(this.port), '-data', this.dataDir]];
+    this.server = spawn(cmd, args, { cwd: SRC, stdio: ['ignore', 'pipe', 'pipe'] });
+    this.server.stdout.on('data', d => (this.serverLog += d));
+    this.server.stderr.on('data', d => (this.serverLog += d));
+    await waitFor(async () => {
+      try { return (await fetch(`${this.base}/api/tree`)).ok; } catch { return false; }
+    }, 20000, 'server to restart');
   }
 
   // childrenOf: edges of a given parent id from a tree snapshot.

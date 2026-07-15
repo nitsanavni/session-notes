@@ -86,6 +86,7 @@ const api = {
   async tree(){ return (await fetch('/api/tree')).json(); },
   async create(o){ return (await fetch('/api/nodes',{method:'POST',body:JSON.stringify(o)})).json(); },
   async patch(id,content){ return fetch('/api/nodes/'+id,{method:'PATCH',body:JSON.stringify({content})}); },
+  async del(id){ return fetch('/api/nodes/'+id,{method:'DELETE'}); },
   async presence(node){ return fetch('/api/presence',{method:'POST',body:JSON.stringify({actor:AUTHOR,node})}); },
 };
 
@@ -96,17 +97,25 @@ let focus = "";             // "" = board root (children with no parent-in-view)
 let cursorByLevel = new Map(); // focus -> cursor id
 let cursor = "";
 let editing = false;
+// Nodes created empty by o/r that must be discarded if the edit ends empty
+// (keep-if-typed / discard-if-empty). Otherwise `o` then Escape would leave an
+// orphan empty node on the server.
+const freshEmpty = new Set();
 const presence = new Map();  // node -> {actor, ts}
 
 function childrenOf(id){
   return edges.filter(e=>e.parent===id).sort((a,b)=>a.rank-b.rank);
 }
-function parentEdge(id){ return edges.find(e=>e.child===id); }
+// structural parent only: quote edges are pointers, not containment.
+function parentEdge(id){ return edges.find(e=>e.child===id && e.kind!=='quote'); }
 function isAgent(a){ return a && a!==AUTHOR && a!=="system"; }
 
-// roots = nodes that have no incoming edge
+// roots = board-level nodes. A node is a root when it has no *structural*
+// (child/reply) parent: nodes with a real parent are excluded, but quote edges
+// are mere pointers (a quoted node is still a root), and an outdent-to-root
+// records an explicit parent:"" edge which must NOT demote the node.
 function roots(){
-  const hasParent = new Set(edges.map(e=>e.child));
+  const hasParent = new Set(edges.filter(e=>e.kind!=='quote' && e.parent!=='').map(e=>e.child));
   return [...nodes.values()].filter(n=>!hasParent.has(n.id))
     .sort((a,b)=>a.created_at<b.created_at?-1:1)
     .map(n=>({parent:"",child:n.id,kind:"child",rank:0}));
@@ -289,12 +298,20 @@ function startEdit(id){
     // and commit even on Escape (and double-patch on Enter).
     content.removeEventListener('keydown',onk); content.removeEventListener('blur',onblur);
     content.contentEditable='false'; row.classList.remove('editing'); editing=false;
-    if(commit){ const v=content.textContent; if(v!==nodes.get(id).content) api.patch(id,v); }
+    const cur=nodes.get(id); const orig=cur?cur.content:'';
+    // Nodes are single-line: flatten any pasted newlines to spaces.
+    const v = commit ? content.textContent.replace(/\s*\n\s*/g,' ') : orig;
+    if(commit && v!==orig && cur) api.patch(id,v);
+    if(freshEmpty.has(id)){
+      freshEmpty.delete(id);
+      if(v.trim()===''){ api.del(id); nodes.delete(id); edges=edges.filter(e=>e.child!==id&&e.parent!==id); }
+    }
     render();
   };
   const onk=(e)=>{
     e.stopPropagation();
-    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); finish(true); }
+    // Single-line: Enter always commits (Shift+Enter too — no multiline nodes).
+    if(e.key==='Enter'){ e.preventDefault(); finish(true); }
     else if(e.key==='Escape'){ e.preventDefault(); finish(false); }
   };
   const onblur=()=>finish(true);
@@ -310,11 +327,11 @@ function startEditTitle(){
   const finish=(commit)=>{
     title.removeEventListener('keydown',onk); title.removeEventListener('blur',onblur);
     title.contentEditable='false'; editing=false;
-    if(commit){ const v=title.textContent; if(v!==nodes.get(focus).content) api.patch(focus,v); }
+    if(commit){ const fn=nodes.get(focus); const v=title.textContent.replace(/\s*\n\s*/g,' '); if(fn && v!==fn.content) api.patch(focus,v); }
     render();
   };
   const onk=(e)=>{ e.stopPropagation();
-    if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); finish(true);}
+    if(e.key==='Enter'){ e.preventDefault(); finish(true);}
     else if(e.key==='Escape'){ e.preventDefault(); finish(false);} };
   const onblur=()=>finish(true);
   title.addEventListener('keydown',onk); title.addEventListener('blur',onblur);
@@ -326,6 +343,7 @@ async function addSibling(){
   const pe=cursor?parentEdge(cursor):null;
   const parent=pe?pe.parent:focus;
   const n=await api.create({parent,kind:'child',content:'',author:AUTHOR});
+  freshEmpty.add(n.id);
   cursor=n.id; // SSE will render; edit once present
   waitFor(n.id,()=>startEdit(n.id));
 }
@@ -333,6 +351,7 @@ async function addReply(){
   const target = cursor || focus;
   if(!target) return;
   const n=await api.create({parent:target,kind:'reply',content:'',author:AUTHOR});
+  freshEmpty.add(n.id);
   // the reply renders inline unless the target sits at the fog boundary
   if(target!==focus && depthOf(target)>=MAXDEPTH-1) zoomTo(target);
   waitFor(n.id,()=>startEdit(n.id));
