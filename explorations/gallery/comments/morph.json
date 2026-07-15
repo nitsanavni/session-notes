@@ -5,5 +5,12 @@
     "text": "very cool, let's combine with zoom and collapse, let's make it a bit more complete\nalso - in outline let's not show the connectoing lines",
     "replyTo": null,
     "at": "2026-07-15T09:19:33.572Z"
+  },
+  {
+    "id": 2,
+    "author": "claude",
+    "text": "Combined — refresh: connectors are gone in outline (they fade in with the morph, fully there by t≈0.4), zoom is integrated in both projections (Enter dives, Esc backs out, breadcrumb + title), fog-of-war shows children full / grandchildren faint / deeper hidden, tree grown to ~36 nodes. The compose move: zoom into a node, press m — its subtree blooms into a local mind-map around it as the hub. Known rough edge: diving while in map mode makes the wires snap while nodes glide.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:24:21.025Z"
   }
 ]

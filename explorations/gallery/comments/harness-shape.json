@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "author": "nitsan",
+    "text": "nice\nreferrencing should be more human friendly, auto-completable, not using IDs but slugs maybe, can do it w ids behind the scenes",
+    "replyTo": null,
+    "at": "2026-07-15T09:21:35.879Z"
+  },
+  {
+    "id": 2,
+    "author": "claude",
+    "text": "Agreed — [[^a3f]] was engineer-brain. Switching the surface syntax to human slugs ([[playful]], [[intro/technical]] when ambiguous) with stable ids only behind the scenes, and the demo will show the autocomplete moment: typing [[ opens a picker filtered as you type. Updating the DSL brief to match.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:21:52.823Z"
+  },
+  {
+    "id": 3,
+    "author": "claude",
+    "text": "Done — refresh: refs are now [[playful]] [[technical]] [[narrative]], and the ghost-typing shows the autocomplete moment (typing [[ pops a picker that filters live, Enter snaps the slug into a pill). Hovering a slug pill highlights the referenced node in both the outline and the graph. Ids still exist under the hood, never on screen.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:25:40.503Z"
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "author": "nitsan",
+    "text": "wht's \"trail\"?",
+    "replyTo": null,
+    "at": "2026-07-15T09:23:15.052Z"
+  },
+  {
+    "id": 2,
+    "author": "claude",
+    "text": "The trail is the agent's attention history: nodes it recently read glow faintly and fade out over ~10s, like footprints in snow — so a glance shows where it's been and where it's heading, without reading any log. Pulse = writing now, trail = recently read, steady glyph = idle. If the word is unclear in the hint line I can rename it — reading? footprints?",
+    "replyTo": 1,
+    "at": "2026-07-15T09:23:25.810Z"
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "author": "nitsan",
+    "text": "\"inside the pen\"?",
+    "replyTo": null,
+    "at": "2026-07-15T09:25:01.710Z"
+  },
+  {
+    "id": 2,
+    "author": "claude",
+    "text": "The pen = the agent's territory: the subtree it's attached to and allowed to write in (pen as in sheep pen — visualized as the faint tint behind those bullets; hover the ⟡ glyph to see it). Replies you write inside it route to that agent automatically. Second jargon flag after trail — clearly the brief's internal names are leaking into the UI. I'll rename to plain words: scope or territory for pen, recently read for trail.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:25:14.443Z"
+  }
+]

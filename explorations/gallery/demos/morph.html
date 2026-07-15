@@ -1,13 +1,14 @@
 <!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>morph — outline ⇄ mind-map</title>
-<meta name="blurb" content="One tree, one layout, a single scalar t morphs the outline into a radial mind-map — and back." />
+<title>morph — outline ⇄ mind-map, with a camera</title>
+<meta name="blurb" content="One tree, one scalar t morphs an outline into a radial mind-map — now with a zoom camera and fog of war: dive into a node and bloom its subtree either way." />
 <style>
   :root {
     --ink: #1a1a1a;
     --bg: #fbfbfa;
     --hair: rgba(26, 26, 26, 0.15);
+    --dim: rgba(26, 26, 26, 0.5);
     --card: rgba(26, 26, 26, 0.04);
     --accent: #6c8eef;
   }
@@ -16,6 +17,7 @@
       --ink: #e8e8e6;
       --bg: #141413;
       --hair: rgba(232, 232, 230, 0.15);
+      --dim: rgba(232, 232, 230, 0.5);
       --card: rgba(232, 232, 230, 0.05);
     }
   }
@@ -24,18 +26,43 @@
     margin: 0; height: 100%;
     background: var(--bg); color: var(--ink);
     font: 15px/1.6 system-ui, -apple-system, sans-serif;
-    overflow: hidden;
+    overflow: hidden; -webkit-font-smoothing: antialiased;
   }
-  #stage { position: fixed; inset: 0; }
+
+  /* breadcrumb + in-page title, borrowed from the camera-zoom demo */
+  #crumbs {
+    position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 20;
+    display: flex; align-items: center; gap: 2px; padding: 0 20px;
+    font-size: 13px; color: var(--dim); user-select: none;
+  }
+  .crumb {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    padding: 3px 7px; border-radius: 6px; white-space: nowrap;
+    transition: color .18s, background .18s;
+  }
+  .crumb:hover { color: var(--ink); background: var(--card); }
+  .crumb.cur { color: var(--ink); cursor: default; }
+  .crumb.cur:hover { background: none; }
+  .crumb .sep { opacity: .4; }
+  .crumb.enter { animation: crumbIn .25s cubic-bezier(0.2,0,0.2,1); }
+  @keyframes crumbIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+
+  #ptitle {
+    position: fixed; top: 38px; left: 20px; right: 20px; z-index: 19;
+    font-size: 1.15em; font-weight: 600; letter-spacing: -.01em;
+    color: var(--ink); user-select: none; transition: opacity .2s;
+  }
+
+  #stage { position: fixed; inset: 0; transform-origin: 50% 42%; }
   #wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #wires path { fill: none; stroke: var(--hair); stroke-width: 1.25; }
+
   .node {
     position: absolute; top: 0; left: 0;
     max-width: 15rem; padding: 3px 9px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     border-radius: 8px; border: 1px solid transparent;
-    will-change: transform; cursor: default;
-    transition: color .15s ease;
+    will-change: transform, opacity; cursor: pointer;
   }
   .node.root { font-weight: 600; }
   .node.cursor {
@@ -44,12 +71,17 @@
     box-shadow: 0 0 0 3px rgba(108, 142, 239, 0.14);
   }
   .bullet { opacity: .4; }
+
+  /* zoom choreography: node transforms/opacity glide only while .zooming is set */
+  #stage.zooming .node { transition: transform .25s cubic-bezier(0.2,0,0.2,1), opacity .25s cubic-bezier(0.2,0,0.2,1); }
+  #stage.zooming #wires path { transition: opacity .25s cubic-bezier(0.2,0,0.2,1); }
+
   #hud {
-    position: fixed; left: 16px; bottom: 14px; z-index: 5;
-    font-size: 12px; line-height: 1.5; opacity: .55;
-    display: flex; flex-direction: column; gap: 8px; max-width: 60vw;
+    position: fixed; left: 16px; bottom: 14px; z-index: 25;
+    font-size: 12px; line-height: 1.5; opacity: .7;
+    display: flex; flex-direction: column; gap: 8px; max-width: 68vw;
   }
-  #hud .keys b { font-weight: 600; opacity: .85; }
+  #hud .keys b { font-weight: 600; opacity: .9; color: var(--ink); }
   #slider {
     -webkit-appearance: none; appearance: none;
     width: 190px; height: 3px; border-radius: 3px;
@@ -63,166 +95,259 @@
     width: 13px; height: 13px; border: none; border-radius: 50%;
     background: var(--accent); cursor: pointer;
   }
+  @media (prefers-reduced-motion: reduce) {
+    #stage.zooming .node, #stage.zooming #wires path { transition-duration: .001ms !important; }
+  }
 </style>
 
+<div id="crumbs"></div>
+<div id="ptitle"></div>
 <div id="stage">
   <svg id="wires"></svg>
 </div>
 
 <div id="hud">
   <input id="slider" type="range" min="0" max="1000" value="0" aria-label="morph amount" />
-  <div class="keys"><b>m</b> morph · <b>drag</b> hold t=0.5 · <b>↑↓←→</b> move cursor</div>
+  <div class="keys">
+    <b>m</b> morph · <b>↑↓</b>/<b>j k</b> move · <b>Enter</b>/<b>→</b> zoom in ·
+    <b>Esc</b>/<b>←</b> out · <b>drag</b> t · <b>click</b> a node or crumb
+  </div>
 </div>
 
 <script>
   window.__demo = window.__demo || "morph";
 
-  // ---- the tree: one hardcoded ~25-node outline of the project's own notes ----
-  // [title, depth]; order is DFS visit order (== outline row order).
-  const RAW = [
-    ["session-notes", 0],
-    ["Vision", 1],
-    ["Zoom is a camera, not a filter", 2],
-    ["Context is the path", 2],
-    ["The agent is a cursor, not a chat window", 2],
-    ["Architecture", 1],
-    ["Go + SQLite core", 2],
-    ["one nodes table", 3],
-    ["typed edges (child / reply / quote)", 3],
-    ["append-only events, streamed over SSE", 3],
-    ["SSE sync + presence protocol", 2],
-    ["MCP server agents attach to", 2],
-    ["Agents in the outline", 1],
-    ["@name: spawns with path as context", 2],
-    [">> steers an attached agent", 2],
-    ["wet-ink proposals — Tab to accept", 2],
-    ["presence renders as fading heat", 2],
-    ["Threads", 1],
-    ["reply = child", 2],
-    ["fork = parallel rail", 2],
-    ["distill to 1–3 durable bullets", 2],
-    ["Open questions", 1],
-    ["split panes vs. one camera", 2],
-    ["motion fatigue / reduced-motion path", 2],
-    ["map mode culling past ~200 nodes", 2],
-  ];
+  // ---- the tree: one person's notes, 4 levels deep (~36 nodes) ----
+  let _id = 0;
+  function T(title, kids) { return { id: ++_id, title, children: kids || [] }; }
+  const root = T("notes", [
+    T("Projects", [
+      T("session-notes", [
+        T("ship web outline v1"),
+        T("fix down-arrow bug"),
+        T("SSE presence protocol"),
+      ]),
+      T("camera-zoom demo", [
+        T("FLIP vs reflow risk"),
+        T("semantic zoom thresholds"),
+      ]),
+      T("invoicing automation", [
+        T("Contasimple skill"),
+        T("PDF download flow"),
+      ]),
+    ]),
+    T("Reading", [
+      T("The Timeless Way of Building", [
+        T("quality without a name"),
+        T("patterns as a living language"),
+      ]),
+      T("Notes on the Synthesis of Form", [
+        T("misfit variables"),
+      ]),
+      T("Seeing Like a State", [
+        T("legibility vs metis"),
+      ]),
+    ]),
+    T("Ideas", [
+      T("zoom is a camera, not a filter", [
+        T("semantic zoom = distance"),
+        T("breadcrumb as spatial memory"),
+      ]),
+      T("agents as cursors with a hue", [
+        T("wet ink proposals"),
+        T("attention as footprints"),
+      ]),
+      T("threads are scaffolding", [
+        T("distill to durable bullets"),
+      ]),
+    ]),
+    T("Life", [
+      T("garden", [
+        T("prune the olive tree"),
+        T("order compost"),
+      ]),
+      T("trip to Portugal", [
+        T("book flights via Kiwi"),
+        T("Lisbon vs Porto base"),
+      ]),
+    ]),
+  ]);
 
-  // build node objects + parent links from depth stack
-  const nodes = RAW.map(([title, depth], i) => ({ i, title, depth }));
-  const stack = [];
-  for (const n of nodes) {
-    stack[n.depth] = n;
-    n.parent = n.depth === 0 ? null : stack[n.depth - 1];
-    n.children = [];
-    if (n.parent) n.parent.children.push(n);
-    n.t = 0;        // current morph value (per node, for the stagger)
-    n.target = 0;   // where it's animating to
+  // flatten + parent links + depth
+  const nodes = [];
+  const parent = new Map();
+  (function walk(n, depth, p) {
+    n.depth = depth; n.parent = p || null;
+    n.t = 0; n.target = 0;
+    if (p) parent.set(n.id, p);
+    nodes.push(n);
+    for (const k of n.children) walk(k, depth + 1, n);
+  })(root, 0, null);
+
+  const pathTo = (node) => { const p = [node]; let c = node.parent; while (c) { p.unshift(c); c = c.parent; } return p; };
+
+  // ---- focus-relative layout: recomputed whenever the camera lands ----
+  // We only ever show three depths from the focus:
+  //   rel 0  the focus itself (the hub / outline header)
+  //   rel 1  its children      — fully visible, cursor targets
+  //   rel 2  its grandchildren — faint hints (ghost lines / satellite dots)
+  // deeper is fog, invisible until you dive.
+  const MAXREL = 2;
+  let layout = new Map();   // id -> { rel, order, angle }
+
+  function buildLayout(focus) {
+    const map = new Map();
+    // count the leaves of the truncated subtree so the radial slices are even
+    const leaves = [];
+    (function count(n, rel) {
+      if (rel === MAXREL || n.children.length === 0) { leaves.push(n); return; }
+      n.children.forEach((c) => count(c, rel + 1));
+    })(focus, 0);
+    const nLeaves = leaves.length || 1;
+    let order = 0, leafSlot = 0;
+    (function assign(n, rel) {
+      const entry = { rel, order: order++, angle: 0 };
+      map.set(n.id, entry);
+      if (rel === MAXREL || n.children.length === 0) {
+        entry.angle = ((leafSlot + 0.5) / nLeaves) * Math.PI * 2;
+        leafSlot++;
+      } else {
+        n.children.forEach((c) => assign(c, rel + 1));
+        const cs = n.children.map((c) => map.get(c.id).angle);
+        entry.angle = cs.reduce((s, a) => s + a, 0) / cs.length;
+      }
+    })(focus, 0);
+    return map;
   }
-  const maxDepth = Math.max(...nodes.map((n) => n.depth));
 
-  // ---- radial angles: leaves get equal slices, parents sit at the mean ----
-  let leafSeen = 0;
-  const leaves = nodes.filter((n) => n.children.length === 0).length;
-  (function assign(n) {
-    if (n.children.length === 0) {
-      n.angle = ((leafSeen + 0.5) / leaves) * Math.PI * 2;
-      leafSeen++;
-    } else {
-      n.children.forEach(assign);
-      n.angle = n.children.reduce((s, c) => s + c.angle, 0) / n.children.length;
-    }
-  })(nodes[0]);
+  // ---- two focus-relative position functions (top-left px) ----
+  const PAD_X = 40, PAD_Y = 96, INDENT = 28, ROW = 30;
 
-  // ---- two position functions returning the node's top-left in px ----
-  const PAD_X = 40, PAD_Y = 46, INDENT = 28, ROW = 30;
-
-  function outlinePos(n) {
-    return { x: PAD_X + n.depth * INDENT, y: PAD_Y + n.i * ROW };
+  function outlinePos(n, L) {
+    return { x: PAD_X + L.rel * INDENT, y: PAD_Y + L.order * ROW };
   }
-  function radialPos(n) {
-    const cx = innerWidth / 2, cy = innerHeight / 2;
-    const levelR = Math.min(innerWidth, innerHeight) * 0.42 / maxDepth;
-    const r = n.depth * levelR;
+  function radialPos(n, L) {
+    const cx = innerWidth / 2, cy = 70 + (innerHeight - 70) / 2;
+    const levelR = Math.min(innerWidth, innerHeight - 90) * 0.40 / MAXREL;
+    const r = L.rel * levelR;
     return {
-      x: cx + r * Math.cos(n.angle) - n.w / 2,
-      y: cy + r * Math.sin(n.angle) - n.h / 2,
+      x: cx + r * Math.cos(L.angle) - n.w / 2,
+      y: cy + r * Math.sin(L.angle) - n.h / 2,
     };
   }
 
-  const ease = (t) => t * t * (3 - 2 * t); // smoothstep
+  const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
+  const ease = (t) => t * t * (3 - 2 * t);       // smoothstep
   const lerp = (a, b, t) => a + (b - a) * t;
-
-  // node center point for a given interpolation (used by connectors)
-  function pos(n) {
-    const o = outlinePos(n), m = radialPos(n), e = ease(n.t);
-    return { x: lerp(o.x, m.x, e), y: lerp(o.y, m.y, e) };
-  }
   const center = (n) => ({ x: n._x + n.w / 2, y: n._y + n.h / 2 });
 
-  // ---- build DOM ----
+  // ---- build DOM once ----
   const stage = document.getElementById("stage");
   const wires = document.getElementById("wires");
   const slider = document.getElementById("slider");
+  const crumbBar = document.getElementById("crumbs");
+  const ptitle = document.getElementById("ptitle");
 
   for (const n of nodes) {
     const el = document.createElement("div");
-    el.className = "node" + (n.depth === 0 ? " root" : "");
+    el.className = "node";
+    el.dataset.id = n.id;
     el.innerHTML = (n.depth > 0 ? '<span class="bullet">•</span> ' : "") + n.title;
     stage.appendChild(el);
     n.el = el;
     n.w = el.offsetWidth;
     n.h = el.offsetHeight;
-  }
-
-  // connectors, one path per parent→child edge
-  for (const n of nodes) {
-    if (!n.parent) continue;
     const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
     wires.appendChild(p);
     n.wire = p;
   }
 
-  // ---- cursor ----
-  let cursor = nodes[0];
+  // ---- state ----
+  let focus = root;
+  let cursor = 0;                    // index into focus.children (the rel-1 nodes)
+  layout = buildLayout(focus);
+
+  const visKids = () => focus.children;
+
   function paintCursor() {
-    for (const n of nodes) n.el.classList.toggle("cursor", n === cursor);
+    for (const n of nodes) n.el.classList.toggle("cursor", n === focus.children[cursor]);
   }
 
-  // ---- render every frame from each node's t ----
+  // ---- render every frame from each node's t + the current focus layout ----
   function render() {
     for (const n of nodes) {
-      const p = pos(n);
-      n._x = p.x; n._y = p.y;
-      const e = ease(n.t);
-      n.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
-      n.el.style.textAlign = e > 0.5 ? "center" : "left";
-      n.el.style.background = `rgba(128,128,128,${0.05 * e})`;
-      n.el.style.borderColor = n === cursor
-        ? "" // let .cursor class win
-        : `rgba(128,128,128,${0.18 * e})`;
+      const L = layout.get(n.id);
+      const el = n.el;
+      if (!L) {                       // fogged out: collapse toward centre, hidden
+        el.style.opacity = "0";
+        el.style.pointerEvents = "none";
+        continue;
+      }
+      const o = outlinePos(n, L), m = radialPos(n, L), e = ease(n.t);
+      const x = lerp(o.x, m.x, e), y = lerp(o.y, m.y, e);
+      n._x = x; n._y = y;
+
+      // rel-2 grandchildren shrink into faint satellites as we enter map mode
+      const sat = L.rel === MAXREL ? lerp(1, 0.62, e) : 1;
+      el.style.transform = `translate(${x}px, ${y}px) scale(${sat})`;
+      el.style.textAlign = e > 0.5 ? "center" : "left";
+      el.style.pointerEvents = L.rel <= 1 ? "auto" : "none";
+      el.classList.toggle("root", L.rel === 0);
+
+      // fog of war: children full, grandchildren faint hints, hub steady
+      const fog = L.rel === MAXREL ? 0.3 : 1;
+      el.style.opacity = String(fog);
+      el.style.background = `rgba(128,128,128,${0.05 * e * (L.rel === 0 ? 0 : 1)})`;
+      el.style.borderColor = n === focus.children[cursor]
+        ? "" // let .cursor win
+        : `rgba(128,128,128,${0.18 * e * (L.rel === 1 ? 1 : 0)})`;
     }
+
+    // connectors: invisible in the outline (indentation carries structure),
+    // fading in as t rises, fully present by ~t=0.4 in the map.
     for (const n of nodes) {
-      if (!n.parent) continue;
+      const L = layout.get(n.id), PL = n.parent && layout.get(n.parent.id);
+      if (!L || !PL || L.rel === 0) { n.wire.style.opacity = "0"; continue; }
+      const wireVis = clamp01(ease(n.t) / 0.4);
+      const fog = L.rel === MAXREL ? 0.3 : 1;
+      n.wire.style.opacity = String(wireVis * fog);
       const a = center(n.parent), b = center(n), e = ease(n.t);
-      // t=0: L-shaped indent guide (down parent's column, then across)
-      // t=1: smooth radial curve (controls pulled toward the midpoint)
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
       const c1x = lerp(a.x, mx, e), c1y = lerp(b.y, my, e);
       const c2x = lerp(a.x, mx, e), c2y = lerp(b.y, my, e);
-      n.wire.setAttribute(
-        "d",
-        `M ${a.x} ${a.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${b.x} ${b.y}`
-      );
+      n.wire.setAttribute("d", `M ${a.x} ${a.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${b.x} ${b.y}`);
     }
   }
 
-  // ---- animation loop: each node eases toward its target, staggered by depth ----
-  let anim = null; // {start, per-depth begin, active}
+  function renderChrome(prevLen) {
+    // in-page title + document title
+    ptitle.textContent = focus === root ? "notes" : focus.title;
+    document.title = (focus === root ? "notes" : focus.title) + " — morph";
+    // breadcrumb
+    const path = pathTo(focus);
+    crumbBar.innerHTML = "";
+    path.forEach((n, i) => {
+      const isCur = i === path.length - 1;
+      const c = document.createElement("span");
+      c.className = "crumb" + (isCur ? " cur" : "");
+      if (i > 0) { const s = document.createElement("span"); s.className = "sep"; s.textContent = "›"; c.appendChild(s); }
+      const lab = document.createElement("span");
+      lab.textContent = i === 0 ? "notes" : n.title;
+      c.appendChild(lab);
+      if (!isCur) c.onclick = () => zoomTo(n);
+      if (prevLen != null && isCur && path.length > prevLen) c.classList.add("enter");
+      crumbBar.appendChild(c);
+    });
+  }
+
+  // ---- morph animation: each node eases toward target, staggered by depth ----
+  let anim = null;
   function startMorph(target) {
     const now = performance.now();
     for (const n of nodes) {
+      const L = layout.get(n.id);
       n._from = n.t;
-      n._begin = now + n.depth * 8;   // children bloom after parents
+      n._begin = now + (L ? L.rel : 0) * 8;   // children bloom after parents
       n.target = target;
     }
     if (!anim) tick();
@@ -232,7 +357,7 @@
     const now = performance.now();
     let moving = false;
     for (const n of nodes) {
-      if (n._from === undefined) continue; // node has settled
+      if (n._from === undefined) continue;
       const dt = (now - n._begin) / 300;
       if (dt <= 0) { moving = true; continue; }
       if (dt >= 1) { n.t = n.target; n._from = undefined; continue; }
@@ -245,54 +370,110 @@
     else anim = null;
   }
   function syncSlider() {
-    // reflect the average t so the slider tracks the animation
-    const avg = nodes.reduce((s, n) => s + n.t, 0) / nodes.length;
+    const vis = nodes.filter((n) => layout.get(n.id));
+    const avg = vis.reduce((s, n) => s + n.t, 0) / (vis.length || 1);
     slider.value = Math.round(avg * 1000);
   }
+  const inMap = () => ease(focus.children.length ? focus.children[0].t : root.t) >= 0.5;
 
-  // ---- slider: hold any t (e.g. the 0.5 "staircase") ----
+  // ---- slider: hold any t ----
   slider.addEventListener("input", () => {
     const v = +slider.value / 1000;
-    anim = null; // interrupt any morph
+    anim = null;
     for (const n of nodes) { n.t = v; n.target = v; n._from = undefined; }
     render();
   });
 
-  // ---- keyboard ----
-  const sibs = (n) => (n.parent ? n.parent.children : [nodes[0]]);
-  function move(nn) { if (nn) { cursor = nn; paintCursor(); render(); } }
+  // ---- zoom camera: re-focus the layout, glide nodes, pop the stage ----
+  const DUR = 250, EASE = "cubic-bezier(0.2,0,0.2,1)";
+  const reduce = matchMedia("(prefers-reduced-motion:reduce)").matches;
+  let zoomTimer = null;
 
+  function zoomTo(newFocus, restoreCursor) {
+    if (newFocus === focus || newFocus.children.length === 0) return;
+    const prevLen = pathTo(focus).length;
+    const wasMap = inMap();
+    const t0 = wasMap ? 1 : 0;
+    const dir = pathTo(newFocus).length > prevLen ? 1 : -1;
+
+    focus = newFocus;
+    layout = buildLayout(focus);
+    // preserve the current projection through the dive
+    for (const n of nodes) { n.t = t0; n.target = t0; n._from = undefined; }
+    cursor = restoreCursor != null
+      ? Math.max(0, Math.min(restoreCursor, focus.children.length - 1))
+      : 0;
+
+    stage.classList.add("zooming");
+    render();
+    renderChrome(prevLen);
+    paintCursor();
+
+    // camera pop
+    if (!reduce) {
+      stage.style.transition = "none";
+      stage.style.transform = dir > 0 ? "scale(1.04)" : "scale(0.965)";
+      requestAnimationFrame(() => {
+        stage.style.transition = `transform ${DUR}ms ${EASE}`;
+        stage.style.transform = "none";
+      });
+    }
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => {
+      stage.classList.remove("zooming");
+      stage.style.transition = "";
+    }, DUR + 30);
+  }
+
+  function zoomIn() {
+    const target = focus.children[cursor];
+    if (target && target.children.length) zoomTo(target);
+  }
+  function zoomOut() {
+    if (!focus.parent) return;
+    const came = focus;
+    const idx = focus.parent.children.indexOf(came);
+    zoomTo(focus.parent, idx);
+  }
+  function move(delta) {
+    const k = focus.children.length;
+    if (!k) return;
+    cursor = Math.max(0, Math.min(cursor + delta, k - 1));
+    paintCursor(); render();
+  }
+
+  // ---- keyboard ----
   addEventListener("keydown", (ev) => {
-    if (ev.target === slider) return;
-    const graph = ease(cursor.t) >= 0.5; // are we (mostly) in map mode?
+    const tag = ev.target && ev.target.tagName;
+    if (ev.target === slider || tag === "INPUT" || tag === "TEXTAREA") return;
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
     switch (ev.key) {
       case "m":
-        startMorph(nodes[0].target > 0.5 ? 0 : 1);
-        break;
-      case "ArrowUp":
-        ev.preventDefault();
-        move(graph ? cursor.parent : nodes[cursor.i - 1]);
-        break;
-      case "ArrowDown":
-        ev.preventDefault();
-        move(graph ? cursor.children[0] : nodes[cursor.i + 1]);
-        break;
-      case "ArrowLeft": {
-        ev.preventDefault();
-        const s = sibs(cursor), k = s.indexOf(cursor);
-        move(s[k - 1] || cursor.parent);
-        break;
-      }
-      case "ArrowRight": {
-        ev.preventDefault();
-        const s = sibs(cursor), k = s.indexOf(cursor);
-        move(s[k + 1] || cursor.children[0]);
-        break;
-      }
+        startMorph(inMap() ? 0 : 1); break;
+      case "j": case "ArrowDown":
+        ev.preventDefault(); move(1); break;
+      case "k": case "ArrowUp":
+        ev.preventDefault(); move(-1); break;
+      case "Enter": case "ArrowRight":
+        ev.preventDefault(); zoomIn(); break;
+      case "Escape": case "ArrowLeft":
+        ev.preventDefault(); zoomOut(); break;
     }
   });
 
+  // ---- click: park cursor on a rel-1 node; dive if it has children ----
+  stage.addEventListener("click", (e) => {
+    const el = e.target.closest(".node");
+    if (!el) return;
+    const id = +el.dataset.id;
+    const idx = focus.children.findIndex((c) => c.id === id);
+    if (idx < 0) return;                 // only direct children are targets
+    cursor = idx; paintCursor(); render();
+    if (focus.children[idx].children.length) zoomIn();
+  });
+
   addEventListener("resize", render);
+  renderChrome();
   paintCursor();
   render();
 </script>

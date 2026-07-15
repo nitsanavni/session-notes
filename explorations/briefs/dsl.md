@@ -10,7 +10,7 @@
 
 **P4 — Status glyph doubles as the spawn verb.** `[ ]` todo → flip to `[>]` and the node *becomes* an agent task. Running `[~]` (animated in UI, plain char on disk), done `[x]` with results as children. One character is the whole lifecycle API — unifies GTD checkboxes with agent dispatch.
 
-**P5 — Node references make results composable.** Every node has a short id (`^a3f`); `[[^a3f]]` transcludes that node's subtree (its result). A pipeline is node B referencing node A. Wiki-links are the wires.
+**P5 — Node references make results composable.** `[[slug]]` transcludes another node's subtree (its result). References are human-friendly slugs derived from node text (`[[playful]]`, `[[intro/technical]]` to disambiguate), auto-completed by a picker when you type `[[`; stable node ids exist only behind the scenes (nitsan: "not using IDs but slugs maybe, can do it w ids behind the scenes"). A pipeline is node B referencing node A. Wiki-links are the wires.
 
 **Killed:** fenced ```agent blocks (Jupyter's mistake in an outliner); `?` question-prefix (addressing *is* asking); required YAML attributes; explicit `parallel{}`/`loop{}` keywords.
 

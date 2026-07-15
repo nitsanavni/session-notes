@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>harness shape — the outline is the harness</title>
-<meta name="blurb" content="Split-screen outline↔graph: a fan-out runs three siblings concurrently, then a [[ref]] pipeline snakes edges from the done nodes into a synthesis.">
+<meta name="blurb" content="Split-screen outline↔graph: a fan-out runs three siblings concurrently, then a [[slug]] pipeline — human-friendly refs autocompleted from siblings — snakes edges from the done nodes into a synthesis.">
 <style>
   :root {
     --ink: #1a1a1a;
@@ -91,6 +91,55 @@
   }
   .id { color: var(--soft); font-family: ui-monospace, monospace; font-size: 0.78em; opacity: 0.7; margin-left: 0.4ch; }
   .ref { color: var(--accent); font-family: ui-monospace, monospace; font-size: 0.86em; }
+  /* slug pill: same family as @claude pill, neutral ink + hairline border */
+  .slug {
+    display: inline-block;
+    border: 1px solid var(--hair2);
+    color: var(--ink);
+    background: transparent;
+    border-radius: 999px;
+    padding: 0 0.7ch;
+    font-size: 0.9em;
+    font-weight: 500;
+    cursor: default;
+    transition: border-color 160ms, background 160ms;
+  }
+  .slug:hover { border-color: var(--accent); background: var(--accent-soft); }
+  /* soft one-shot pulse on the referenced row + graph node */
+  .row.flash { animation: rowflash 720ms ease-out; }
+  @keyframes rowflash {
+    0% { background: transparent; }
+    22% { background: var(--accent-soft); }
+    100% { background: transparent; }
+  }
+  .gnode.flash rect { animation: gflash 720ms ease-out; }
+  @keyframes gflash {
+    0% {}
+    22% { fill: var(--accent-soft); stroke: var(--accent); }
+    100% {}
+  }
+  /* autocomplete picker */
+  #picker {
+    position: fixed; z-index: 20;
+    background: var(--bg);
+    border: 1px solid var(--hair2);
+    border-radius: 8px;
+    padding: 3px;
+    min-width: 8.5rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    font-size: 13px;
+    animation: pkin 120ms ease-out;
+  }
+  @keyframes pkin { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; } }
+  .pk-item {
+    display: flex; align-items: baseline; gap: 0.5ch;
+    padding: 3px 8px; border-radius: 5px;
+    color: var(--soft);
+  }
+  .pk-item .pk-mark { font-family: ui-monospace, monospace; font-size: 0.82em; opacity: 0.6; }
+  .pk-item .pk-slug { color: var(--ink); }
+  .pk-item.sel { background: var(--accent-soft); }
+  .pk-item.sel .pk-slug { color: var(--accent); }
   .reply .who { color: var(--accent); font-family: ui-monospace, monospace; font-size: 0.82em; margin-right: 0.4ch; }
   .reply .body { font-weight: 450; color: var(--soft); }
   .cursor {
@@ -278,19 +327,62 @@
     }
   }
 
+  // ---- autocomplete picker + slug refs ----
+  // siblings addressable by human slug; ids kept internally (invisible)
+  const SIBS = [
+    { slug: "playful", key: "i1", id: "^i1" },
+    { slug: "technical", key: "i2", id: "^i2" },
+    { slug: "narrative", key: "i3", id: "^i3" },
+  ];
+  const picker = document.createElement("div");
+  picker.id = "picker";
+  picker.hidden = true;
+  document.body.appendChild(picker);
+
+  function positionPicker(caret) {
+    const r = caret.getBoundingClientRect();
+    picker.style.left = r.left + "px";
+    picker.style.top = r.bottom + 6 + "px";
+  }
+  function renderPicker(filter) {
+    const f = filter.toLowerCase();
+    const matches = SIBS.filter((s) => s.slug.startsWith(f));
+    picker.innerHTML = "";
+    matches.forEach((s, i) => {
+      const it = document.createElement("div");
+      it.className = "pk-item" + (i === 0 ? " sel" : "");
+      it.innerHTML = '<span class="pk-mark">[[</span><span class="pk-slug">' + s.slug + "</span>";
+      picker.appendChild(it);
+    });
+    return matches;
+  }
+
+  // pulse a referenced node on both sides once
+  function flashRef(key) {
+    const r = kidRows && kidRows[key];
+    if (r) { r.classList.remove("flash"); void r.offsetWidth; r.classList.add("flash"); }
+    const e = els[key];
+    if (e) { e.g.classList.remove("flash"); void e.g.getBBox(); e.g.classList.add("flash"); }
+  }
+  let kidRows = null;
+  function attachHover(pill, key) {
+    pill.addEventListener("mouseenter", () => flashRef(key));
+  }
+
   async function run() {
     cancelled = false;
     replay.hidden = true;
+    picker.hidden = true;
     doc.innerHTML = "";
     drawGraph();
     caption.textContent = "fan-out isn't a keyword — it's what N children mean";
 
     // root context bullet
     const head = row();
-    head.innerHTML = '<span class="bullet">•</span><span class="txt" style="font-weight:600">Launch blog post</span><span class="id">^p1</span>';
+    head.innerHTML = '<span class="bullet">•</span><span class="txt" style="font-weight:600">Launch blog post</span>';
     await sleep(600);
     const draft = row("d1");
-    draft.innerHTML = '<span class="bullet">•</span><span class="txt">draft angle: "outline as harness"</span><span class="id">^p2</span>';
+    draft.innerHTML = '<span class="bullet">•</span><span class="txt">draft angle: "outline as harness"</span>';
     await sleep(700);
 
     // fan-out dispatch line
@@ -311,11 +403,11 @@
       { key: "i2", label: "technical", id: "^i2", reply: "Each node carries its ancestor path as context." },
       { key: "i3", label: "narrative", id: "^i3", reply: "She indented once, and the outline began to think." },
     ];
-    const kidRows = {};
+    kidRows = {};
     for (const k of kids) {
       guard();
       const r = row("d2 stream");
-      r.innerHTML = '<span class="bullet">•</span><span class="status">[ ]</span><span class="txt">' + k.label + '</span><span class="id">' + k.id + '</span>';
+      r.innerHTML = '<span class="bullet">•</span><span class="status">[ ]</span><span class="txt">' + k.label + '</span>';
       kidRows[k.key] = r;
       await sleep(220);
     }
@@ -371,14 +463,81 @@
     // --- pipeline: synthesis sibling referencing the three ---
     const synth = row("d1");
     synth.innerHTML = '<span class="bullet">•</span>';
+    caption.textContent = "pipeline = reference the done nodes — by name, not id";
+
+    // type & snap the @claude address
     const sh = document.createElement("span");
     synth.appendChild(sh);
-    caption.textContent = "pipeline = a node that references done nodes via [[^id]]";
-    await ghostType(sh, "@claude: pick the best of [[^i1]] [[^i2]] [[^i3]]");
+    await ghostType(sh, "@claude:", { speed: 34 });
     guard();
     sh.remove();
-    synth.innerHTML = '<span class="bullet">•</span><span class="status">[ ]</span><span class="pill">@claude</span><span class="txt"> pick the best of </span>' +
-      '<span class="ref">[[^i1]]</span> <span class="ref">[[^i2]]</span> <span class="ref">[[^i3]]</span>';
+    synth.innerHTML = '<span class="bullet">•</span><span class="status">[ ]</span><span class="pill">@claude</span>';
+
+    // live composition span with a trailing caret; refs snap into slug pills
+    const comp = document.createElement("span");
+    comp.className = "txt";
+    synth.appendChild(comp);
+    const caret = document.createElement("span");
+    caret.className = "cursor";
+    comp.appendChild(caret);
+    let tail = null;
+    const newTail = () => { tail = document.createElement("span"); comp.insertBefore(tail, caret); };
+    async function typeStr(s, base) {
+      if (!tail) newTail();
+      for (const ch of s) {
+        guard();
+        tail.textContent += ch;
+        let d = base + Math.random() * 40;
+        if (ch === " ") d += 20;
+        if (",".includes(ch)) d += 90;
+        await sleep(d);
+      }
+    }
+    // type "[[", open picker, type the filter, Enter-commit into a slug pill
+    async function autoRef(sib, filter, opts) {
+      newTail();
+      await typeStr("[[", opts.brace);
+      guard();
+      picker.hidden = false;
+      renderPicker("");
+      positionPicker(caret);
+      await sleep(opts.open);
+      let typed = "";
+      for (const ch of filter) {
+        guard();
+        typed += ch;
+        tail.textContent = "[[" + typed;
+        renderPicker(typed);
+        positionPicker(caret);
+        await sleep(opts.key);
+      }
+      await sleep(opts.dwell); // highlight settles on the match
+      guard();
+      picker.hidden = true;
+      tail.remove();             // drop the "[[pl" scaffold
+      tail = null;
+      const pill = document.createElement("span");
+      pill.className = "slug";
+      pill.textContent = sib.slug;
+      pill.dataset.key = sib.key;
+      attachHover(pill, sib.key);
+      comp.insertBefore(pill, caret);
+    }
+
+    caption.textContent = "type [[ → pick a sibling by name, autocompleted";
+    newTail();
+    await typeStr(" pick the best of ", 40);
+    // first ref: full autocomplete beat
+    await autoRef(SIBS[0], "pl", { brace: 70, open: 320, key: 150, dwell: 640 });
+    newTail(); await typeStr(" ", 40);
+    // next two complete faster — picker just flashes
+    await autoRef(SIBS[1], "te", { brace: 34, open: 90, key: 70, dwell: 150 });
+    newTail(); await typeStr(" ", 40);
+    await autoRef(SIBS[2], "na", { brace: 34, open: 90, key: 70, dwell: 150 });
+    newTail(); await typeStr(", explain why", 40);
+    guard();
+    caret.remove();
+    caption.textContent = "hover a pill → both sides light up the same node";
     await sleep(500);
 
     // graph: dotted edges snake from the three done nodes into synth
@@ -411,7 +570,7 @@
     const rl = row("d1 stream");
     rl.style.marginLeft = "4.6ch";
     rl.innerHTML = '<span class="bullet">↳</span><span class="reply"><span class="who">claude:</span><span class="body"></span></span>';
-    await streamWords(rl.querySelector(".body"), "^i3 wins — the narrative tone earns the read.");
+    await streamWords(rl.querySelector(".body"), "narrative wins — its tone earns the read.");
     caption.textContent = "outline ↔ graph are one thing: shape is the harness";
     await sleep(2800);
 
@@ -430,6 +589,7 @@
     }
   }
   function clearAll() {
+    picker.hidden = true;
     // stop any marching intervals lingering
     gEdges.querySelectorAll("path").forEach((p) => { if (p._march) clearInterval(p._march); });
   }
