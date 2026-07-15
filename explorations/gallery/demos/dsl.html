@@ -1,0 +1,307 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsl — type it alive</title>
+<meta name="blurb" content="Ghost-typed @claude: dispatch snaps into a pill, context glows, replies stream as child bullets — the outline is the harness.">
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fbfbfa;
+    --hair: rgba(26, 26, 26, 0.08);
+    --soft: rgba(26, 26, 26, 0.55);
+    --accent: #6c8eef;
+    --accent-soft: rgba(108, 142, 239, 0.14);
+    --glow: rgba(108, 142, 239, 0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e8e6;
+      --bg: #141413;
+      --hair: rgba(232, 232, 230, 0.08);
+      --soft: rgba(232, 232, 230, 0.5);
+      --accent-soft: rgba(108, 142, 239, 0.2);
+      --glow: rgba(108, 142, 239, 0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.6 system-ui, -apple-system, sans-serif;
+    display: flex;
+    justify-content: center;
+    -webkit-font-smoothing: antialiased;
+  }
+  #stage {
+    width: 100%;
+    max-width: 44rem;
+    padding: 8vh 2rem 4rem;
+  }
+  #doc { list-style: none; margin: 0; padding: 0; }
+  .row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5ch;
+    padding: 1px 6px;
+    margin: 1px 0;
+    border-radius: 6px;
+    position: relative;
+    transition: background 200ms ease-out;
+  }
+  .row.child { margin-left: 2.2ch; }
+  .row.glow { background: var(--glow); }
+  .bullet { color: var(--soft); flex: 0 0 auto; user-select: none; }
+  .txt { white-space: pre-wrap; word-break: break-word; }
+  .status {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.86em;
+    color: var(--soft);
+    flex: 0 0 auto;
+    transition: transform 200ms ease-out, color 200ms ease-out;
+  }
+  .status.pop { animation: pop 220ms ease-out; }
+  @keyframes pop {
+    0% { transform: scale(0.4); opacity: 0; }
+    60% { transform: scale(1.18); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .status.run { color: var(--accent); }
+  .status.spin { display: inline-block; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pill {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 0 0.7ch;
+    font-weight: 500;
+    font-size: 0.92em;
+    animation: snap 200ms ease-out;
+  }
+  @keyframes snap {
+    0% { transform: scale(1.25); background: transparent; }
+    100% { transform: scale(1); }
+  }
+  .reply { color: var(--ink); }
+  .reply .who {
+    color: var(--accent);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.82em;
+    margin-right: 0.4ch;
+  }
+  .reply .body { font-weight: 450; color: var(--soft); }
+  .row.stream { animation: fadein 200ms ease-out; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; } }
+  .cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    background: var(--accent);
+    margin-left: 1px;
+    vertical-align: text-bottom;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .id { color: var(--soft); font-family: ui-monospace, monospace; font-size: 0.78em; opacity: 0.7; }
+  #hint {
+    position: fixed;
+    left: 50%;
+    bottom: 1.4rem;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: var(--soft);
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+  #replay {
+    border: 1px solid var(--hair);
+    background: transparent;
+    color: var(--soft);
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: color 160ms, border-color 160ms;
+  }
+  #replay:hover { color: var(--accent); border-color: var(--accent); }
+</style>
+
+<div id="stage">
+  <ul id="doc"></ul>
+</div>
+<div id="hint">
+  <span id="caption">the note is the prompt</span>
+  <button id="replay" hidden>↻ replay</button>
+</div>
+
+<script>
+(() => {
+  const doc = document.getElementById("doc");
+  const caption = document.getElementById("caption");
+  const replay = document.getElementById("replay");
+
+  const seed = [
+    "Retro: shipping the outline engine",
+    "Zoom is a camera, not a filter — nothing vanishes without a spatial reason.",
+    "Context is the path from root; the agent sees what you see up the tree.",
+    "Agents append replies as children, never edits — the transcript reads as notes.",
+  ];
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let cancelled = false;
+  const guard = () => { if (cancelled) throw "cancel"; };
+
+  function row(cls) {
+    const li = document.createElement("li");
+    li.className = "row" + (cls ? " " + cls : "");
+    doc.appendChild(li);
+    return li;
+  }
+
+  function seedDoc() {
+    doc.innerHTML = "";
+    const head = row();
+    head.innerHTML = '<span class="bullet">•</span><span class="txt" style="font-weight:600">' + seed[0] + '</span>';
+    for (let i = 1; i < seed.length; i++) {
+      const li = row("child");
+      li.innerHTML = '<span class="bullet">•</span><span class="txt">' + seed[i] + '</span>';
+    }
+  }
+
+  // human-ish typing into a target element's text node, with a live cursor
+  async function ghostType(el, text, opts = {}) {
+    const base = opts.speed || 42;
+    const txt = document.createElement("span");
+    txt.className = "txt";
+    const cur = document.createElement("span");
+    cur.className = "cursor";
+    el.appendChild(txt);
+    el.appendChild(cur);
+    for (const ch of text) {
+      guard();
+      txt.textContent += ch;
+      let d = base + Math.random() * 55;
+      if (ch === " ") d += 30;
+      if (".,:".includes(ch)) d += 120;
+      await sleep(d);
+    }
+    if (opts.keepCursor) return { txt, cur };
+    cur.remove();
+    return { txt, cur: null };
+  }
+
+  async function streamWords(bodyEl, text) {
+    const words = text.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      guard();
+      bodyEl.textContent += (i ? " " : "") + words[i];
+      await sleep(55 + Math.random() * 60);
+    }
+  }
+
+  async function run() {
+    cancelled = false;
+    replay.hidden = true;
+    seedDoc();
+    caption.textContent = "the note is the prompt";
+    await sleep(1100);
+
+    // --- Beat 1: ghost-type the dispatch line ---
+    const line = row("child");
+    line.innerHTML = '<span class="bullet">•</span>';
+    const holder = document.createElement("span");
+    line.appendChild(holder);
+    caption.textContent = "@name: spawns an agent, context = ancestor path";
+    const { txt, cur } = await ghostType(holder, "@claude: summarize the three points above", { keepCursor: true });
+    await sleep(360);
+
+    // --- Enter: snap the token into a pill, bloom the spinner ---
+    cur.remove();
+    guard();
+    const rest = txt.textContent.replace(/^@claude:\s*/, "");
+    txt.remove();
+    const status = document.createElement("span");
+    status.className = "status run spin";
+    status.textContent = "[~]";
+    const pill = document.createElement("span");
+    pill.className = "pill";
+    pill.textContent = "@claude";
+    const body = document.createElement("span");
+    body.className = "txt";
+    body.textContent = " " + rest;
+    line.insertBefore(status, line.children[1]);
+    line.appendChild(pill);
+    line.appendChild(body);
+    caption.textContent = "[~] running — the ancestor path is the context";
+
+    // context glow up the tree
+    await sleep(120);
+    const kids = [...doc.querySelectorAll(".row")];
+    for (const k of kids.slice(0, 4)) k.classList.add("glow");
+    await sleep(1200);
+    for (const k of kids) k.classList.remove("glow");
+
+    // --- Replies stream in as children ---
+    const replies = [
+      "Zoom is spatial motion, so nothing hides — collapse is just distance.",
+      "Because context is the visible path, agents inherit exactly what you see.",
+    ];
+    for (const r of replies) {
+      guard();
+      const rl = row("child stream");
+      rl.style.marginLeft = "4.4ch";
+      rl.innerHTML = '<span class="bullet">↳</span><span class="reply"><span class="who">claude:</span><span class="body"></span></span>';
+      await streamWords(rl.querySelector(".body"), r);
+      await sleep(180);
+    }
+
+    // status ticks to done with a pop
+    guard();
+    status.classList.remove("spin", "run");
+    status.classList.add("pop");
+    status.textContent = "[x]";
+    caption.textContent = "[x] done — replies are children, never edits";
+    await sleep(1600);
+
+    // --- Beat 2: >> steering ---
+    const steer = row("child");
+    steer.innerHTML = '<span class="bullet">•</span>';
+    const sh = document.createElement("span");
+    steer.appendChild(sh);
+    caption.textContent = ">> steers the agent already attached above";
+    await ghostType(sh, ">> shorter", { speed: 55 });
+    await sleep(500);
+
+    // rewrite the first reply, streaming
+    guard();
+    const firstReply = doc.querySelectorAll(".reply .body")[0];
+    firstReply.textContent = "";
+    firstReply.parentElement.parentElement.classList.add("glow");
+    await streamWords(firstReply, "Zoom is a camera — nothing hides.");
+    await sleep(200);
+    firstReply.parentElement.parentElement.classList.remove("glow");
+    caption.textContent = "same bytes: notes with agents off, a harness with them on";
+    await sleep(2600);
+
+    replay.hidden = false;
+  }
+
+  async function loop() {
+    while (true) {
+      try { await run(); } catch (e) { if (e === "cancel") return; }
+      // auto-loop after a pause unless user is reading
+      let waited = 0;
+      while (waited < 3200 && !cancelled) { await sleep(160); waited += 160; }
+      if (cancelled) return;
+    }
+  }
+
+  replay.addEventListener("click", () => {
+    cancelled = true;
+    setTimeout(() => { loop(); }, 60);
+  });
+
+  loop();
+})();
+</script>

@@ -1,0 +1,601 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>context lens — see what the agent sees</title>
+<meta name="blurb" content="An agent's context is its location in the tree. Move the cursor and watch the ancestor path + subtree fly into a 'what the agent sees' panel; quote a distant node to splice two paths together with a drawn connector." />
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fbfbfa;
+    --hair: rgba(26, 26, 26, 0.08);
+    --dim: rgba(26, 26, 26, 0.45);
+    --accent: #6c8eef;
+    --panel: rgba(26, 26, 26, 0.025);
+    --chip: rgba(108, 142, 239, 0.1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e8e6;
+      --bg: #141413;
+      --hair: rgba(232, 232, 230, 0.08);
+      --dim: rgba(232, 232, 230, 0.45);
+      --accent: #6c8eef;
+      --panel: rgba(232, 232, 230, 0.03);
+      --chip: rgba(108, 142, 239, 0.16);
+    }
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+  }
+  body {
+    font: 15px/1.6 system-ui, -apple-system, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  #wrap {
+    display: flex;
+    height: 100vh;
+  }
+  #left {
+    flex: 0 0 60%;
+    position: relative;
+    overflow: auto;
+    padding: 34px 30px 80px;
+  }
+  #right {
+    flex: 1;
+    border-left: 1px solid var(--hair);
+    padding: 34px 26px;
+    overflow: auto;
+    background: var(--panel);
+  }
+  h2 {
+    margin: 0 0 20px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  /* ---- outline ---- */
+  #outline {
+    position: relative;
+    z-index: 2;
+  }
+  .node {
+    position: relative;
+    padding: 3px 8px;
+    border-radius: 6px;
+    cursor: default;
+    transition:
+      background 0.16s ease-out,
+      opacity 0.2s ease-out;
+  }
+  .node .tw {
+    display: inline-block;
+    transition: transform 0.16s ease-out;
+  }
+  .node.cursor {
+    background: var(--chip);
+  }
+  .node.cursor .tw {
+    transform: translateX(2px);
+  }
+  .node.cursor::before {
+    content: "";
+    position: absolute;
+    left: -2px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--accent);
+  }
+  .node .dot {
+    color: var(--dim);
+    margin-right: 8px;
+    font-size: 12px;
+  }
+  .node.d0 {
+    font-weight: 600;
+  }
+  .node.dimmed {
+    opacity: 0.28;
+  }
+
+  /* embedded quote on the left */
+  .embed {
+    margin: 4px 0 4px 18px;
+    padding: 8px 12px;
+    border-left: 2px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    background: var(--panel);
+    box-shadow: inset 0 1px 0 var(--hair);
+    transform-origin: top left;
+    animation: embedIn 0.22s ease-out;
+  }
+  @keyframes embedIn {
+    from {
+      opacity: 0;
+      transform: scale(0.97) translateY(-4px);
+    }
+  }
+  .embed .mini {
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 2px;
+  }
+  .embed .mini b {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* connector overlay */
+  #svg {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    overflow: visible;
+  }
+  #svg path {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.6;
+    opacity: 0.7;
+  }
+
+  /* ---- right: lens ---- */
+  #chips {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 22px;
+  }
+  .chip {
+    position: relative;
+    align-self: flex-start;
+    max-width: 100%;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--chip);
+    font-size: 13.5px;
+    transition:
+      opacity 0.2s ease-out,
+      transform 0.2s ease-out;
+  }
+  .chip.crumb {
+    margin-left: calc(var(--depth) * 16px);
+  }
+  .chip.leaf {
+    background: var(--accent);
+    color: #fff;
+    font-weight: 500;
+  }
+  .chip.spliced {
+    background: rgba(108, 142, 239, 0.22);
+    outline: 1px solid var(--accent);
+  }
+  .chip.enter {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+  .chip.out {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  .chip.off {
+    opacity: 0.22;
+    text-decoration: line-through;
+  }
+  .chip .x {
+    display: none;
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 15px;
+    height: 15px;
+    line-height: 14px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 11px;
+    background: rgba(0, 0, 0, 0.18);
+    color: inherit;
+    cursor: pointer;
+  }
+  .chip:hover .x {
+    display: block;
+  }
+  .chip:hover {
+    padding-right: 24px;
+  }
+  .sep {
+    align-self: flex-start;
+    color: var(--accent);
+    font-weight: 600;
+    margin: 2px 0 2px 2px;
+    animation: embedIn 0.2s ease-out;
+  }
+  #subhead {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  #subtree {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .sub {
+    padding: 2px 4px;
+    color: var(--dim);
+    font-size: 14px;
+    transition:
+      opacity 0.2s ease-out,
+      transform 0.2s ease-out;
+  }
+  .sub.self {
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .sub.enter {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  #hint {
+    position: fixed;
+    left: 16px;
+    bottom: 14px;
+    font-size: 12px;
+    color: var(--dim);
+    z-index: 5;
+  }
+  #hint kbd {
+    font: inherit;
+    color: var(--ink);
+    background: var(--chip);
+    border-radius: 4px;
+    padding: 0 5px;
+  }
+</style>
+
+<div id="wrap">
+  <div id="left">
+    <h2>outline</h2>
+    <svg id="svg"></svg>
+    <div id="outline"></div>
+  </div>
+  <div id="right">
+    <h2>what the agent sees</h2>
+    <div id="chips"></div>
+    <div id="subhead">subtree · in focus</div>
+    <div id="subtree"></div>
+  </div>
+</div>
+<div id="hint">
+  <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>q</kbd> quote-splice the other subtree ·
+  <kbd>×</kbd> (hover a chip) drop from context
+</div>
+
+<script>
+  // ---- data: two visually distant subtrees + a filler root ----
+  // depth-encoded flat outline; ancestors derived from a depth stack.
+  const RAW = [
+    ["product", 0, "Product"],
+    ["pricing", 1, "Pricing"],
+    ["tiers", 2, "Tiers & seats"],
+    ["trial", 2, "Free-trial length"],
+    ["ent", 2, "Enterprise contracts"],
+    ["onboard", 1, "Onboarding"],
+    ["welcome", 2, "Welcome email"],
+    ["checklist", 2, "First-run checklist"],
+    ["research", 0, "Research"],
+    ["competitors", 1, "Competitors"],
+    ["linear", 2, "Linear pricing model"],
+    ["notion", 2, "Notion tiers"],
+    ["figma", 2, "Figma seats"],
+    ["interviews", 1, "Interviews"],
+    ["churned", 2, "Churned users"],
+    ["power", 2, "Power users"],
+    ["roadmap", 0, "Roadmap"],
+    ["q3", 1, "Q3 goals"],
+    ["q4", 1, "Q4 goals"],
+  ];
+
+  const nodes = RAW.map(([id, depth, title]) => ({ id, depth, title }));
+  const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+
+  // ancestor path (root -> node) via depth stack
+  const stack = [];
+  for (const n of nodes) {
+    stack[n.depth] = n;
+    stack.length = n.depth + 1;
+    n.path = stack.slice(0, n.depth + 1).map((x) => x.id);
+  }
+  // subtree = following nodes with greater depth, until depth <= n.depth
+  nodes.forEach((n, i) => {
+    const kids = [];
+    for (let j = i + 1; j < nodes.length; j++) {
+      if (nodes[j].depth <= n.depth) break;
+      kids.push(nodes[j].id);
+    }
+    n.subtree = kids;
+    // which distant node this one quotes (pre-marked, always the other side)
+    n.quoteRoot = n.path[0];
+  });
+  function quoteTargetFor(n) {
+    const root = n.path[0];
+    if (root === "product") return "linear";
+    if (root === "research") return "ent";
+    return "notion"; // roadmap reaches into research
+  }
+
+  // ---- state ----
+  let cursor = 3; // start on "Free-trial length"
+  let spliced = null; // target node id when a quote is active
+  const dropped = new Set(); // chip ids removed from context (visual)
+  let renderedChips = new Map(); // id -> element, for keyed diffing
+
+  // ---- render outline (once) ----
+  const outline = document.getElementById("outline");
+  const nodeEls = {};
+  nodes.forEach((n, i) => {
+    const el = document.createElement("div");
+    el.className = "node d" + n.depth;
+    el.style.paddingLeft = 8 + n.depth * 22 + "px";
+    el.dataset.i = i;
+    const dot = n.subtree.length ? "▸" : "·";
+    el.innerHTML = `<span class="dot">${dot}</span><span class="tw"></span>`;
+    el.querySelector(".tw").textContent = n.title;
+    outline.appendChild(el);
+    nodeEls[n.id] = el;
+  });
+
+  function currentNode() {
+    return nodes[cursor];
+  }
+
+  function paintOutline() {
+    nodes.forEach((n, i) => {
+      const el = nodeEls[n.id];
+      el.classList.toggle("cursor", i === cursor);
+      // dim nodes whose chip was dropped from context
+      el.classList.toggle("dimmed", dropped.has(n.id));
+    });
+    // embedded quote block under the cursor node
+    document.querySelectorAll(".embed").forEach((e) => e.remove());
+    if (spliced) {
+      const t = byId[spliced];
+      const em = document.createElement("div");
+      em.className = "embed";
+      const crumb = t.path.map((id) => byId[id].title).join(" › ");
+      em.innerHTML = `<div class="mini">quoted · <b>${crumb}</b></div>`;
+      const body = document.createElement("div");
+      body.textContent = t.title;
+      em.appendChild(body);
+      const cur = nodeEls[currentNode().id];
+      cur.after(em);
+    }
+  }
+
+  // ---- right panel: keyed chip diffing for fly in/out ----
+  const chipsBox = document.getElementById("chips");
+
+  function desiredChips() {
+    // ancestor path of cursor, then (if spliced) a separator + the quoted path
+    const list = [];
+    const cn = currentNode();
+    cn.path.forEach((id, idx) => {
+      list.push({
+        key: id,
+        id,
+        depth: idx,
+        title: byId[id].title,
+        leaf: idx === cn.path.length - 1 && !spliced,
+        spliced: false,
+      });
+    });
+    if (spliced) {
+      list.push({ key: "__sep", sep: true });
+      const t = byId[spliced];
+      t.path.forEach((id, idx) => {
+        list.push({
+          key: "q:" + id,
+          id,
+          depth: idx,
+          title: byId[id].title,
+          leaf: false,
+          spliced: idx === t.path.length - 1,
+        });
+      });
+    }
+    return list;
+  }
+
+  function makeChip(spec) {
+    if (spec.sep) {
+      const s = document.createElement("div");
+      s.className = "sep";
+      s.textContent = "+";
+      return s;
+    }
+    const c = document.createElement("div");
+    c.className = "chip crumb enter" + (spec.leaf ? " leaf" : "") + (spec.spliced ? " spliced" : "");
+    c.style.setProperty("--depth", spec.depth);
+    const label = document.createElement("span");
+    label.textContent = spec.title;
+    c.appendChild(label);
+    const x = document.createElement("span");
+    x.className = "x";
+    x.textContent = "×";
+    x.title = "drop from context";
+    x.onclick = (e) => {
+      e.stopPropagation();
+      if (dropped.has(spec.id)) dropped.delete(spec.id);
+      else dropped.add(spec.id);
+      c.classList.toggle("off", dropped.has(spec.id));
+      paintOutline();
+    };
+    c.appendChild(x);
+    if (dropped.has(spec.id)) c.classList.add("off");
+    return c;
+  }
+
+  function renderChips() {
+    const want = desiredChips();
+    const wantKeys = new Set(want.map((w) => w.key));
+    // exit chips no longer wanted
+    for (const [key, el] of renderedChips) {
+      if (!wantKeys.has(key)) {
+        el.classList.add("out");
+        const rem = el;
+        setTimeout(() => rem.remove(), 200);
+        renderedChips.delete(key);
+      }
+    }
+    // add / reorder wanted chips, staggered
+    let delay = 0;
+    want.forEach((spec) => {
+      let el = renderedChips.get(spec.key);
+      if (!el) {
+        el = makeChip(spec);
+        renderedChips.set(spec.key, el);
+        chipsBox.appendChild(el);
+        const d = delay;
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() =>
+            setTimeout(() => el.classList.remove("enter"), d)
+          )
+        );
+        delay += 45;
+      } else {
+        chipsBox.appendChild(el); // keep DOM order in sync
+      }
+    });
+  }
+
+  // ---- right panel: subtree list ----
+  const subBox = document.getElementById("subtree");
+  function renderSubtree() {
+    subBox.innerHTML = "";
+    const cn = currentNode();
+    const self = document.createElement("div");
+    self.className = "sub self enter";
+    self.textContent = cn.title;
+    subBox.appendChild(self);
+    cn.subtree.forEach((id) => {
+      const n = byId[id];
+      const d = document.createElement("div");
+      d.className = "sub enter";
+      d.style.paddingLeft = (n.depth - cn.depth) * 14 + "px";
+      d.textContent = n.title;
+      subBox.appendChild(d);
+    });
+    if (!cn.subtree.length) {
+      const e = document.createElement("div");
+      e.className = "sub enter";
+      e.style.opacity = 0.4;
+      e.textContent = "— leaf, no children —";
+      subBox.appendChild(e);
+    }
+    let delay = 30;
+    [...subBox.children].forEach((el) => {
+      const d = delay;
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => setTimeout(() => el.classList.remove("enter"), d))
+      );
+      delay += 30;
+    });
+  }
+
+  // ---- connector between the two outline locations ----
+  const svg = document.getElementById("svg");
+  function drawConnector() {
+    svg.innerHTML = "";
+    if (!spliced) return;
+    const left = document.getElementById("left");
+    const base = left.getBoundingClientRect();
+    const a = nodeEls[currentNode().id].getBoundingClientRect();
+    const b = nodeEls[spliced].getBoundingClientRect();
+    // anchor on the right edge of each node, in #left coordinates (account for scroll)
+    const x1 = a.right - base.left + left.scrollLeft;
+    const y1 = a.top + a.height / 2 - base.top + left.scrollTop;
+    const x2 = b.right - base.left + left.scrollLeft;
+    const y2 = b.top + b.height / 2 - base.top + left.scrollTop;
+    const bow = Math.max(60, Math.abs(y2 - y1) * 0.45);
+    const cx = Math.max(x1, x2) + bow;
+    const d = `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`;
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", d);
+    svg.appendChild(p);
+    const len = p.getTotalLength();
+    p.style.strokeDasharray = len;
+    p.style.strokeDashoffset = len;
+    p.style.transition = "stroke-dashoffset 0.6s ease-out";
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => (p.style.strokeDashoffset = "0"))
+    );
+  }
+
+  // ---- update everything ----
+  function update(moved) {
+    paintOutline();
+    renderChips();
+    if (moved) renderSubtree();
+    drawConnector();
+    nodeEls[currentNode().id].scrollIntoView({ block: "nearest" });
+  }
+
+  function move(delta) {
+    const next = Math.min(nodes.length - 1, Math.max(0, cursor + delta));
+    if (next === cursor) return;
+    cursor = next;
+    if (spliced) {
+      spliced = null; // moving unsplices — context follows the cursor
+    }
+    update(true);
+  }
+
+  function toggleQuote() {
+    if (spliced) {
+      spliced = null;
+    } else {
+      spliced = quoteTargetFor(currentNode());
+    }
+    update(false);
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = document.activeElement.tagName;
+    if (t === "INPUT" || t === "TEXTAREA") return;
+    if (e.key === "j" || e.key === "ArrowDown") {
+      e.preventDefault();
+      move(1);
+    } else if (e.key === "k" || e.key === "ArrowUp") {
+      e.preventDefault();
+      move(-1);
+    } else if (e.key === "q") {
+      e.preventDefault();
+      toggleQuote();
+    }
+    // NOTE: 'c' intentionally left unbound (comment rail owns it).
+  });
+
+  window.addEventListener("resize", drawConnector);
+  document.getElementById("left").addEventListener("scroll", drawConnector);
+
+  // first paint
+  renderSubtree();
+  update(false);
+</script>

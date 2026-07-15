@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>threads — talk to the tree</title>
+<meta name="blurb" content="Conversation lives at a place in the outline: reply in-place, fork like a subway map, distill into durable notes.">
+<style>
+  :root{
+    --bg:#fbfbfa; --ink:#1a1a1a; --hair:rgba(26,26,26,.08);
+    --soft:rgba(26,26,26,.55); --agent:#6c8eef; --user:#8a8a8a;
+    --forkA:#6c8eef; --forkB:#c48ae0;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#141413; --ink:#e8e8e6; --hair:rgba(232,232,230,.1);
+      --soft:rgba(232,232,230,.5); --user:#7a7a7a;}
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg); color:var(--ink);
+    font:15px/1.6 system-ui,-apple-system,Segoe UI,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  #wrap{max-width:44rem; margin:0 auto; padding:8vh 24px 40vh;}
+  h1{font-size:15px; font-weight:600; opacity:.55; margin:0 0 24px; letter-spacing:.02em;}
+
+  .row{position:relative; padding:2px 0 2px 0; outline:none;}
+  .node{position:relative; padding:2px 6px 2px 12px; border-radius:5px;
+    transition:background .16s ease-out;}
+  .row.cursor > .node{background:var(--hair);}
+  .row .bullet{color:var(--soft); margin-right:.5ch;}
+  .depth1{margin-left:1.6rem}
+  .depth2{margin-left:3.2rem}
+
+  /* thread messages */
+  .msg{position:relative; margin-left:1.6rem; padding:3px 6px 3px 14px;
+    border-left:2px solid var(--user); border-radius:0 5px 5px 0;
+    opacity:0; transform:translateY(4px);
+    animation:msgin .2s ease-out forwards;}
+  @keyframes msgin{to{opacity:1; transform:none}}
+  .msg.user{border-color:var(--user);}
+  .msg.agent{border-color:var(--agent); color:var(--soft); font-weight:450;}
+  .msg.agent .who{color:var(--agent); font-weight:500; margin-right:.4ch;}
+  .msg.forkroot{margin-left:1.6rem;}
+  .msg.forkA{border-color:var(--forkA);}
+  .msg.forkB{border-color:var(--forkB); margin-left:2.0rem;}
+  .inherits{font-size:11px; color:var(--soft); opacity:.6; margin-left:14px;
+    padding:1px 0;}
+
+  /* reply input */
+  .replybox{margin-left:1.6rem; padding:3px 6px 3px 14px;
+    border-left:2px solid var(--user); border-radius:0 5px 5px 0;
+    animation:msgin .18s ease-out;}
+  .replybox.forkB{border-color:var(--forkB); margin-left:2.0rem;}
+  .replybox input{width:100%; background:transparent; border:none; outline:none;
+    color:var(--ink); font:inherit; padding:0;}
+  .replybox input::placeholder{color:var(--soft); opacity:.7;}
+
+  /* context lens chip */
+  .lens{margin-left:1.6rem; margin-bottom:2px; font-size:11.5px;
+    color:var(--soft); display:flex; gap:.3ch; align-items:center; flex-wrap:wrap;}
+  .lens .crumb{opacity:0; transform:translateX(-4px);
+    animation:crumbin .22s ease-out forwards;
+    padding:1px 7px; border-radius:10px; background:var(--hair);}
+  .lens .sep{opacity:.4;}
+  @keyframes crumbin{to{opacity:1; transform:none}}
+
+  /* streaming word */
+  .w{opacity:0; animation:win .18s ease-out forwards;}
+  @keyframes win{to{opacity:1}}
+  .caret{display:inline-block; width:6px; color:var(--agent);
+    animation:blink 1s steps(1) infinite;}
+  @keyframes blink{50%{opacity:0}}
+
+  /* fork spring entrance */
+  .spring{animation:spring .2s cubic-bezier(.34,1.56,.64,1);}
+  @keyframes spring{from{opacity:0; transform:translateX(-8px) scale(.96)} to{opacity:1; transform:none}}
+
+  /* distill */
+  .thread{transition:none;}
+  .thread.collapsing{animation:scrunch .3s ease-out forwards;}
+  @keyframes scrunch{to{opacity:0; transform:scaleY(.4) translateY(-6px); }}
+  .distilled{margin-left:1.6rem; padding:3px 6px 3px 12px;
+    animation:msgin .24s ease-out;}
+  .distilled .bull{color:var(--agent); margin-right:.5ch;}
+  .remnant{font-size:12px; color:var(--soft); cursor:pointer; opacity:.65;
+    margin-left:.6ch; user-select:none;}
+  .remnant:hover{opacity:1;}
+
+  #hint{position:fixed; bottom:14px; left:16px; font-size:11.5px;
+    color:var(--soft); opacity:.75; line-height:1.7; pointer-events:none;}
+  #hint b{font-weight:600; color:var(--ink); opacity:.8;}
+  @media (max-width:640px){#hint{display:none}}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>notes · a tree you and agents inhabit together</h1>
+  <div id="tree"></div>
+</div>
+<div id="hint">
+  <b>j/k</b> move &nbsp; <b>r</b> reply &nbsp; <b>f</b> fork (on agent msg) &nbsp; <b>d</b> distill thread
+</div>
+
+<script>
+(() => {
+  // ---- hardcoded 12-node outline ----
+  const OUTLINE = [
+    {id:'n0', d:0, text:'Product'},
+    {id:'n1', d:1, text:'Pricing'},
+    {id:'n2', d:2, text:'usage-based tiers'},
+    {id:'n3', d:2, text:'enterprise seat model'},
+    {id:'n4', d:1, text:'Onboarding'},
+    {id:'n5', d:2, text:'first-run empty state'},
+    {id:'n6', d:0, text:'Engineering'},
+    {id:'n7', d:1, text:'Sync protocol'},
+    {id:'n8', d:2, text:'append-only events over SSE'},
+    {id:'n9', d:1, text:'Storage'},
+    {id:'n10',d:2, text:'one nodes table, typed edges'},
+    {id:'n11',d:0, text:'Open questions'},
+  ];
+
+  // canned agent replies, keyed by turn count within a thread
+  const CANNED = [
+    "Usage-based rewards low-friction adoption, but revenue lags value — cap the tier ceiling so a heavy month can't spike churn. Seat-based is predictable but punishes the exact teams you want expanding.",
+    "A hybrid works: a small platform fee anchors predictability, metered overage captures the whales. The lens here is just this node's ancestors plus the two sibling models — nothing leaks in from Engineering.",
+  ];
+  const FORK_CANNED = "Fork B, different premise: what if pricing is free and you monetize the org graph instead? Inherits everything above the split, then diverges — fork A never sees this.";
+
+  const tree = document.getElementById('tree');
+  let rows = [];          // {el, node, depth, kind, threadEl?}
+  let cursor = 0;
+  let busy = false;       // during streaming, block movement
+
+  // ---- render base outline ----
+  function renderOutline(){
+    OUTLINE.forEach((n,i) => {
+      const row = document.createElement('div');
+      row.className = 'row depth'+n.d;
+      row.dataset.id = n.id;
+      row.innerHTML = `<div class="node"><span class="bullet">•</span>${n.text}</div>`;
+      tree.appendChild(row);
+      rows.push({el:row, node:n});
+    });
+  }
+  renderOutline();
+
+  function setCursor(i){
+    if(i<0||i>=rows.length) return;
+    rows[cursor]?.el.classList.remove('cursor');
+    cursor = i;
+    rows[cursor].el.classList.add('cursor');
+    rows[cursor].el.scrollIntoView({block:'nearest', behavior:'smooth'});
+  }
+  setCursor(0);
+
+  // ancestor path for a given row index
+  function ancestorPath(idx){
+    const path = [];
+    let depth = rows[idx].node ? rows[idx].node.d : 99;
+    // walk upward through original outline nodes only
+    for(let i=idx; i>=0; i--){
+      const n = rows[i].node;
+      if(!n) continue;
+      if(n.d < depth){ path.unshift(n.text); depth = n.d; }
+      if(n.d === 0){ break; }
+    }
+    // include the node itself
+    const self = rows[idx].node;
+    if(self) path.push(self.text);
+    return path;
+  }
+
+  // ---- context lens chip ----
+  function flashLens(afterEl, path){
+    const lens = document.createElement('div');
+    lens.className = 'lens';
+    path.forEach((p,i) => {
+      if(i>0){ const s=document.createElement('span'); s.className='sep'; s.textContent='›'; s.style.animationDelay=(i*90-20)+'ms'; s.classList.add('crumb'); lens.appendChild(s); }
+      const c = document.createElement('span');
+      c.className='crumb'; c.textContent=p; c.style.animationDelay=(i*90)+'ms';
+      lens.appendChild(c);
+    });
+    afterEl.after(lens);
+    return lens;
+  }
+
+  // ---- reply flow ----
+  // A "thread" is a container appended right after the outline node row.
+  function threadFor(idx){
+    let t = rows[idx].threadEl;
+    if(!t){
+      t = document.createElement('div');
+      t.className = 'thread';
+      rows[idx].el.after(t);
+      rows[idx].threadEl = t;
+      rows[idx].turns = 0;
+      rows[idx].forked = false;
+    }
+    return t;
+  }
+
+  function startReply(idx, forkTint){
+    if(busy) return;
+    const t = threadFor(idx);
+    const path = ancestorPath(idx);
+    const lens = flashLens(rows[idx].el, path);
+
+    const box = document.createElement('div');
+    box.className = 'replybox' + (forkTint==='B' ? ' forkB' : '');
+    const input = document.createElement('input');
+    input.placeholder = forkTint==='B' ? 'reply in fork B…' : 'reply here…';
+    box.appendChild(input);
+    t.appendChild(box);
+    input.focus();
+
+    // keep demo keys from firing while typing
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if(e.key === 'Enter'){
+        const val = input.value.trim() || 'What tradeoff should we pick?';
+        box.remove();
+        // user message stays
+        const um = document.createElement('div');
+        um.className = 'msg user' + (forkTint==='B'?' forkB':'');
+        um.textContent = val;
+        t.appendChild(um);
+        setTimeout(()=>{ if(lens.parentNode) lens.style.transition='opacity .3s', lens.style.opacity='.28'; }, 400);
+        // agent streams in after 600ms
+        setTimeout(()=> streamAgent(idx, t, forkTint), 600);
+      } else if(e.key === 'Escape'){
+        box.remove(); lens.remove(); busy=false;
+      }
+    });
+    busy = true;
+  }
+
+  function streamAgent(idx, t, forkTint){
+    let text;
+    if(forkTint==='B'){ text = FORK_CANNED; }
+    else {
+      const turn = rows[idx].turns || 0;
+      text = CANNED[Math.min(turn, CANNED.length-1)];
+      rows[idx].turns = turn + 1;
+    }
+    const msg = document.createElement('div');
+    msg.className = 'msg agent' + (forkTint==='B'?' forkB':'') + (forkTint==='A'?' forkA':'');
+    msg.innerHTML = '<span class="who">↳ claude:</span>';
+    const caret = document.createElement('span');
+    caret.className='caret'; caret.textContent='▍';
+    msg.appendChild(caret);
+    t.appendChild(msg);
+    msg.scrollIntoView({block:'nearest', behavior:'smooth'});
+
+    const words = text.split(' ');
+    let wi = 0;
+    (function tick(){
+      if(wi >= words.length){
+        caret.remove();
+        busy = false;
+        return;
+      }
+      const w = document.createElement('span');
+      w.className='w';
+      w.textContent = words[wi] + ' ';
+      msg.insertBefore(w, caret);
+      wi++;
+      setTimeout(tick, 45 + Math.random()*45);
+    })();
+  }
+
+  // ---- fork flow ----
+  function forkFrom(idx){
+    if(busy) return;
+    const t = rows[idx].threadEl;
+    if(!t) return;
+    // must have at least one agent message to fork from
+    const agentMsgs = t.querySelectorAll('.msg.agent');
+    if(!agentMsgs.length) return;
+    if(rows[idx].forked) return;
+    rows[idx].forked = true;
+
+    // mark two parallel rails: existing thread becomes fork A, new rail = fork B
+    const inhA = document.createElement('div');
+    inhA.className='inherits'; inhA.textContent='inherits ↑ · fork A';
+    inhA.classList.add('spring');
+    t.appendChild(inhA);
+
+    const inhB = document.createElement('div');
+    inhB.className='inherits'; inhB.textContent='inherits ↑ · fork B';
+    inhB.style.marginLeft='2.4rem';
+    inhB.classList.add('spring');
+    t.appendChild(inhB);
+
+    // auto-open a reply in fork B
+    setTimeout(()=> startReply(idx, 'B'), 220);
+  }
+
+  // ---- distill flow ----
+  function distill(idx){
+    if(busy) return;
+    const t = rows[idx].threadEl;
+    if(!t || !t.children.length) return;
+    if(t.dataset.distilled) return;
+
+    t.classList.add('collapsing');
+    setTimeout(()=>{
+      const buried = t.innerHTML;
+      t.classList.remove('collapsing');
+      t.dataset.distilled='1';
+      t.innerHTML = '';
+      const d = document.createElement('div');
+      d.className='distilled';
+      d.innerHTML = '<span class="bull">◆</span>Decision: hybrid pricing — platform fee + metered overage; revisit ceiling per quarter.'
+        + '<span class="remnant" title="re-expand transcript">⌄</span>';
+      t.appendChild(d);
+      const stash = document.createElement('div');
+      stash.style.display='none';
+      stash.innerHTML = buried;
+      t.appendChild(stash);
+      d.querySelector('.remnant').addEventListener('click', e=>{
+        e.stopPropagation();
+        if(stash.style.display==='none'){
+          stash.style.display='';
+          stash.classList.add('spring');
+          e.target.textContent='⌃';
+        } else {
+          stash.style.display='none';
+          e.target.textContent='⌄';
+        }
+      });
+    }, 300);
+  }
+
+  // ---- key handling ----
+  document.addEventListener('keydown', e => {
+    if(e.metaKey||e.ctrlKey||e.altKey) return;
+    const k = e.key;
+    if(k==='j'||k==='ArrowDown'){ if(!busy) setCursor(cursor+1); e.preventDefault(); }
+    else if(k==='k'||k==='ArrowUp'){ if(!busy) setCursor(cursor-1); e.preventDefault(); }
+    else if(k==='r'){ startReply(cursor); e.preventDefault(); }
+    else if(k==='f'){ forkFrom(cursor); e.preventDefault(); }
+    else if(k==='d'){ distill(cursor); e.preventDefault(); }
+    // NOTE: 'c' intentionally left unbound (comment rail owns it)
+  });
+})();
+</script>
+</body>
+</html>

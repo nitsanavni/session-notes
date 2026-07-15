@@ -1,0 +1,445 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness shape — the outline is the harness</title>
+<meta name="blurb" content="Split-screen outline↔graph: a fan-out runs three siblings concurrently, then a [[ref]] pipeline snakes edges from the done nodes into a synthesis.">
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fbfbfa;
+    --hair: rgba(26, 26, 26, 0.08);
+    --hair2: rgba(26, 26, 26, 0.14);
+    --soft: rgba(26, 26, 26, 0.55);
+    --accent: #6c8eef;
+    --accent-soft: rgba(108, 142, 239, 0.14);
+    --node: rgba(26, 26, 26, 0.04);
+    --edge: rgba(26, 26, 26, 0.25);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e8e6;
+      --bg: #141413;
+      --hair: rgba(232, 232, 230, 0.08);
+      --hair2: rgba(232, 232, 230, 0.16);
+      --soft: rgba(232, 232, 230, 0.5);
+      --accent-soft: rgba(108, 142, 239, 0.2);
+      --node: rgba(232, 232, 230, 0.05);
+      --edge: rgba(232, 232, 230, 0.28);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.6 system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    height: 100%;
+  }
+  #split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    height: 100%;
+  }
+  @media (max-width: 720px) { #split { grid-template-columns: 1fr; } }
+  #left {
+    padding: 6vh 2rem 4rem 2.5rem;
+    overflow: hidden;
+    border-right: 1px solid var(--hair);
+  }
+  #right { position: relative; }
+  #graph { width: 100%; height: 100%; display: block; }
+
+  #doc { list-style: none; margin: 0; padding: 0; max-width: 30rem; }
+  .row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5ch;
+    padding: 1px 6px;
+    margin: 1px 0;
+    border-radius: 6px;
+    transition: background 200ms ease-out;
+  }
+  .row.d1 { margin-left: 2.2ch; }
+  .row.d2 { margin-left: 4.6ch; }
+  .row.stream { animation: fadein 200ms ease-out; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; } }
+  .bullet { color: var(--soft); flex: 0 0 auto; user-select: none; }
+  .txt { white-space: pre-wrap; }
+  .status {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.86em;
+    color: var(--soft);
+    flex: 0 0 auto;
+    transition: transform 200ms ease-out, color 200ms ease-out;
+  }
+  .status.run { color: var(--accent); }
+  .status.spin { display: inline-block; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status.pop { animation: pop 220ms ease-out; }
+  @keyframes pop {
+    0% { transform: scale(0.4); opacity: 0.2; }
+    60% { transform: scale(1.18); }
+    100% { transform: scale(1); }
+  }
+  .pill {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 0 0.7ch;
+    font-weight: 500;
+    font-size: 0.92em;
+  }
+  .id { color: var(--soft); font-family: ui-monospace, monospace; font-size: 0.78em; opacity: 0.7; margin-left: 0.4ch; }
+  .ref { color: var(--accent); font-family: ui-monospace, monospace; font-size: 0.86em; }
+  .reply .who { color: var(--accent); font-family: ui-monospace, monospace; font-size: 0.82em; margin-right: 0.4ch; }
+  .reply .body { font-weight: 450; color: var(--soft); }
+  .cursor {
+    display: inline-block; width: 2px; height: 1.05em; background: var(--accent);
+    margin-left: 1px; vertical-align: text-bottom; animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* graph */
+  .gnode rect {
+    fill: var(--node);
+    stroke: var(--hair2);
+    stroke-width: 1;
+    transition: stroke 200ms, fill 200ms;
+  }
+  .gnode.run rect { stroke: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { stroke-opacity: 0.4; }
+    50% { stroke-opacity: 1; }
+  }
+  .gnode.done rect { stroke: var(--accent); fill: var(--accent-soft); }
+  .gnode text { fill: var(--ink); font-size: 11px; font-family: system-ui, sans-serif; }
+  .gnode .gstat { fill: var(--soft); font-family: ui-monospace, monospace; font-size: 10px; }
+  .gnode.run .gstat, .gnode.done .gstat { fill: var(--accent); }
+  .gedge { stroke: var(--edge); stroke-width: 1.2; fill: none; opacity: 0; transition: opacity 200ms; }
+  .gedge.show { opacity: 1; }
+  .gedge.dotted { stroke: var(--accent); stroke-dasharray: 3 4; stroke-width: 1.4; opacity: 0.9; }
+
+  #hint {
+    position: fixed; left: 1.4rem; bottom: 1.2rem;
+    font-size: 12px; color: var(--soft); display: flex; gap: 1rem; align-items: center;
+    background: var(--bg); padding: 2px 4px; border-radius: 6px;
+  }
+  #replay {
+    border: 1px solid var(--hair); background: transparent; color: var(--soft);
+    font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px; cursor: pointer;
+    transition: color 160ms, border-color 160ms;
+  }
+  #replay:hover { color: var(--accent); border-color: var(--accent); }
+  #glabel {
+    position: absolute; top: 1rem; right: 1.2rem; font-size: 11px;
+    color: var(--soft); font-family: ui-monospace, monospace; letter-spacing: 0.04em;
+  }
+</style>
+
+<div id="split">
+  <div id="left"><ul id="doc"></ul></div>
+  <div id="right">
+    <span id="glabel">shape ↔ graph</span>
+    <svg id="graph" viewBox="0 0 400 520" preserveAspectRatio="xMidYMid meet">
+      <g id="edges"></g>
+      <g id="nodes"></g>
+    </svg>
+  </div>
+</div>
+<div id="hint">
+  <span id="caption">fan-out = siblings · pipeline = [[refs]]</span>
+  <button id="replay" hidden>↻ replay</button>
+</div>
+
+<script>
+(() => {
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const doc = document.getElementById("doc");
+  const gEdges = document.getElementById("edges");
+  const gNodes = document.getElementById("nodes");
+  const caption = document.getElementById("caption");
+  const replay = document.getElementById("replay");
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let cancelled = false;
+  const guard = () => { if (cancelled) throw "cancel"; };
+
+  // ---- graph model (simple tidy layout, fixed coords) ----
+  // parent fan node, three children, then synth sibling
+  const NODES = {
+    fan:  { x: 200, y: 70,  w: 150, h: 34, label: "@claude fan-out", stat: "[~]" },
+    i1:   { x: 90,  y: 190, w: 96,  h: 30, label: "playful", id: "^i1", stat: "[ ]" },
+    i2:   { x: 200, y: 190, w: 96,  h: 30, label: "technical", id: "^i2", stat: "[ ]" },
+    i3:   { x: 310, y: 190, w: 96,  h: 30, label: "narrative", id: "^i3", stat: "[ ]" },
+    synth:{ x: 200, y: 340, w: 168, h: 34, label: "@claude pick best", stat: "[ ]" },
+  };
+  const TREE_EDGES = [["fan","i1"],["fan","i2"],["fan","i3"]];
+  const els = {};
+
+  function drawGraph() {
+    gEdges.innerHTML = ""; gNodes.innerHTML = "";
+    // tree edges (parent -> child, drawn from node bottom to child top)
+    for (const [a, b] of TREE_EDGES) {
+      const p = NODES[a], c = NODES[b];
+      const path = document.createElementNS(SVGNS, "path");
+      const x1 = p.x, y1 = p.y + p.h / 2, x2 = c.x, y2 = c.y - c.h / 2;
+      const my = (y1 + y2) / 2;
+      path.setAttribute("d", `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
+      path.setAttribute("class", "gedge show");
+      gEdges.appendChild(path);
+    }
+    for (const key in NODES) {
+      const n = NODES[key];
+      const g = document.createElementNS(SVGNS, "g");
+      g.setAttribute("class", "gnode");
+      g.setAttribute("transform", `translate(${n.x},${n.y})`);
+      const rect = document.createElementNS(SVGNS, "rect");
+      rect.setAttribute("x", -n.w / 2); rect.setAttribute("y", -n.h / 2);
+      rect.setAttribute("width", n.w); rect.setAttribute("height", n.h);
+      rect.setAttribute("rx", 7);
+      g.appendChild(rect);
+      const st = document.createElementNS(SVGNS, "text");
+      st.setAttribute("class", "gstat");
+      st.setAttribute("x", -n.w / 2 + 9); st.setAttribute("y", 4);
+      st.textContent = n.stat;
+      g.appendChild(st);
+      const lab = document.createElementNS(SVGNS, "text");
+      lab.setAttribute("x", -n.w / 2 + 32); lab.setAttribute("y", 4);
+      lab.textContent = n.label;
+      g.appendChild(lab);
+      gNodes.appendChild(g);
+      els[key] = { g, st };
+    }
+  }
+
+  function setNode(key, state, stat) {
+    const e = els[key];
+    if (!e) return;
+    e.g.classList.remove("run", "done");
+    if (state) e.g.classList.add(state);
+    if (stat) e.st.textContent = stat;
+  }
+
+  // dotted pipeline edge from a done node into synth, animated snake
+  async function snakeEdge(fromKey) {
+    const f = NODES[fromKey], t = NODES.synth;
+    const path = document.createElementNS(SVGNS, "path");
+    const x1 = f.x, y1 = f.y + f.h / 2, x2 = t.x, y2 = t.y - t.h / 2;
+    const my = (y1 + y2) / 2 + 20;
+    path.setAttribute("d", `M${x1},${y1} C${x1},${my} ${x2},${my - 30} ${x2},${y2}`);
+    path.setAttribute("class", "gedge dotted");
+    const len = path.getTotalLength ? 260 : 260;
+    path.style.strokeDasharray = "3 4";
+    path.style.strokeDashoffset = "0";
+    gEdges.appendChild(path);
+    // subtle draw-in via opacity + march
+    path.style.opacity = "0";
+    await sleep(20);
+    path.style.transition = "opacity 200ms";
+    path.style.opacity = "0.9";
+    // animate marching dashes
+    let off = 0;
+    const march = setInterval(() => { off -= 1.4; path.style.strokeDashoffset = off + "px"; }, 40);
+    path._march = march;
+    return path;
+  }
+
+  // ---- outline helpers ----
+  function row(cls) {
+    const li = document.createElement("li");
+    li.className = "row" + (cls ? " " + cls : "");
+    doc.appendChild(li);
+    return li;
+  }
+  async function ghostType(el, text, opts = {}) {
+    const base = opts.speed || 40;
+    const txt = document.createElement("span");
+    txt.className = "txt";
+    const cur = document.createElement("span");
+    cur.className = "cursor";
+    el.appendChild(txt); el.appendChild(cur);
+    for (const ch of text) {
+      guard();
+      txt.textContent += ch;
+      let d = base + Math.random() * 50;
+      if (ch === " ") d += 24;
+      if (".,:".includes(ch)) d += 100;
+      await sleep(d);
+    }
+    cur.remove();
+    return txt;
+  }
+  async function streamWords(bodyEl, text) {
+    const words = text.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      guard();
+      bodyEl.textContent += (i ? " " : "") + words[i];
+      await sleep(48 + Math.random() * 50);
+    }
+  }
+
+  async function run() {
+    cancelled = false;
+    replay.hidden = true;
+    doc.innerHTML = "";
+    drawGraph();
+    caption.textContent = "fan-out isn't a keyword — it's what N children mean";
+
+    // root context bullet
+    const head = row();
+    head.innerHTML = '<span class="bullet">•</span><span class="txt" style="font-weight:600">Launch blog post</span><span class="id">^p1</span>';
+    await sleep(600);
+    const draft = row("d1");
+    draft.innerHTML = '<span class="bullet">•</span><span class="txt">draft angle: "outline as harness"</span><span class="id">^p2</span>';
+    await sleep(700);
+
+    // fan-out dispatch line
+    const fan = row("d1");
+    fan.innerHTML = '<span class="bullet">•</span>';
+    const fh = document.createElement("span");
+    fan.appendChild(fh);
+    await ghostType(fh, "@claude: write three intro paragraphs, different tones");
+    guard();
+    fh.remove();
+    fan.innerHTML = '<span class="bullet">•</span><span class="status run spin">[~]</span><span class="pill">@claude</span><span class="txt"> write three intro paragraphs, different tones</span>';
+    setNode("fan", "run", "[~]");
+    caption.textContent = "one @claude, three [ ] children → three parallel agents";
+
+    // three children appear as [ ]
+    const kids = [
+      { key: "i1", label: "playful", id: "^i1", reply: "What if your to-do list could do itself?" },
+      { key: "i2", label: "technical", id: "^i2", reply: "Each node carries its ancestor path as context." },
+      { key: "i3", label: "narrative", id: "^i3", reply: "She indented once, and the outline began to think." },
+    ];
+    const kidRows = {};
+    for (const k of kids) {
+      guard();
+      const r = row("d2 stream");
+      r.innerHTML = '<span class="bullet">•</span><span class="status">[ ]</span><span class="txt">' + k.label + '</span><span class="id">' + k.id + '</span>';
+      kidRows[k.key] = r;
+      await sleep(220);
+    }
+    await sleep(500);
+
+    // dispatch: all three go running CONCURRENTLY
+    guard();
+    for (const k of kids) {
+      const st = kidRows[k.key].querySelector(".status");
+      st.classList.add("run", "spin");
+      st.textContent = "[~]";
+      setNode(k.key, "run", "[~]");
+    }
+    caption.textContent = "[~] [~] [~] running concurrently — siblings are parallel";
+
+    // staggered finishes
+    const order = [
+      { key: "i1", at: 900 },
+      { key: "i3", at: 1500 },
+      { key: "i2", at: 2200 },
+    ];
+    const start = performance.now();
+    for (const step of order) {
+      const wait = step.at - (performance.now() - start);
+      if (wait > 0) await sleep(wait);
+      guard();
+      const k = kids.find((x) => x.key === step.key);
+      const st = kidRows[step.key].querySelector(".status");
+      st.classList.remove("spin", "run");
+      st.classList.add("pop");
+      st.textContent = "[x]";
+      setNode(step.key, "done", "[x]");
+      // streamed result line under the child
+      const rl = row("d2 stream");
+      rl.style.marginLeft = "6.8ch";
+      rl.innerHTML = '<span class="bullet">↳</span><span class="reply"><span class="who">claude:</span><span class="body"></span></span>';
+      // insert right after its kid row for reading order
+      kidRows[step.key].after(rl);
+      streamWords(rl.querySelector(".body"), k.reply);
+    }
+    await sleep(700);
+
+    // fan node itself done
+    guard();
+    const fanStat = fan.querySelector(".status");
+    fanStat.classList.remove("spin", "run");
+    fanStat.classList.add("pop");
+    fanStat.textContent = "[x]";
+    setNode("fan", "done", "[x]");
+    caption.textContent = "all children done → the fan-out resolves";
+    await sleep(1000);
+
+    // --- pipeline: synthesis sibling referencing the three ---
+    const synth = row("d1");
+    synth.innerHTML = '<span class="bullet">•</span>';
+    const sh = document.createElement("span");
+    synth.appendChild(sh);
+    caption.textContent = "pipeline = a node that references done nodes via [[^id]]";
+    await ghostType(sh, "@claude: pick the best of [[^i1]] [[^i2]] [[^i3]]");
+    guard();
+    sh.remove();
+    synth.innerHTML = '<span class="bullet">•</span><span class="status">[ ]</span><span class="pill">@claude</span><span class="txt"> pick the best of </span>' +
+      '<span class="ref">[[^i1]]</span> <span class="ref">[[^i2]]</span> <span class="ref">[[^i3]]</span>';
+    await sleep(500);
+
+    // graph: dotted edges snake from the three done nodes into synth
+    caption.textContent = "the refs are wires — edges snake in before it can run";
+    const snakes = [];
+    for (const key of ["i1", "i2", "i3"]) {
+      guard();
+      snakes.push(await snakeEdge(key));
+      await sleep(280);
+    }
+    await sleep(700);
+
+    // now synth runs
+    guard();
+    const synthStat = synth.querySelector(".status");
+    synthStat.classList.add("run", "spin");
+    synthStat.textContent = "[~]";
+    setNode("synth", "run", "[~]");
+    caption.textContent = "[~] synthesis running on the transcluded results";
+    await sleep(1600);
+
+    // synth done
+    guard();
+    synthStat.classList.remove("spin", "run");
+    synthStat.classList.add("pop");
+    synthStat.textContent = "[x]";
+    setNode("synth", "done", "[x]");
+    // settle the dotted edges
+    for (const s of snakes) { if (s._march) clearInterval(s._march); s.classList.remove("dotted"); s.classList.add("show"); }
+    const rl = row("d1 stream");
+    rl.style.marginLeft = "4.6ch";
+    rl.innerHTML = '<span class="bullet">↳</span><span class="reply"><span class="who">claude:</span><span class="body"></span></span>';
+    await streamWords(rl.querySelector(".body"), "^i3 wins — the narrative tone earns the read.");
+    caption.textContent = "outline ↔ graph are one thing: shape is the harness";
+    await sleep(2800);
+
+    // cleanup marching intervals
+    for (const s of snakes) { if (s._march) clearInterval(s._march); }
+    replay.hidden = false;
+  }
+
+  async function loop() {
+    while (true) {
+      try { await run(); }
+      catch (e) { if (e === "cancel") { clearAll(); return; } }
+      let waited = 0;
+      while (waited < 3200 && !cancelled) { await sleep(160); waited += 160; }
+      if (cancelled) { clearAll(); return; }
+    }
+  }
+  function clearAll() {
+    // stop any marching intervals lingering
+    gEdges.querySelectorAll("path").forEach((p) => { if (p._march) clearInterval(p._march); });
+  }
+
+  replay.addEventListener("click", () => {
+    cancelled = true;
+    clearAll();
+    setTimeout(() => loop(), 60);
+  });
+
+  loop();
+})();
+</script>

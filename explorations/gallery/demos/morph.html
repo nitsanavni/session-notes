@@ -1,0 +1,298 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>morph — outline ⇄ mind-map</title>
+<meta name="blurb" content="One tree, one layout, a single scalar t morphs the outline into a radial mind-map — and back." />
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fbfbfa;
+    --hair: rgba(26, 26, 26, 0.15);
+    --card: rgba(26, 26, 26, 0.04);
+    --accent: #6c8eef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e8e6;
+      --bg: #141413;
+      --hair: rgba(232, 232, 230, 0.15);
+      --card: rgba(232, 232, 230, 0.05);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.6 system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+  #stage { position: fixed; inset: 0; }
+  #wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #wires path { fill: none; stroke: var(--hair); stroke-width: 1.25; }
+  .node {
+    position: absolute; top: 0; left: 0;
+    max-width: 15rem; padding: 3px 9px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border-radius: 8px; border: 1px solid transparent;
+    will-change: transform; cursor: default;
+    transition: color .15s ease;
+  }
+  .node.root { font-weight: 600; }
+  .node.cursor {
+    color: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(108, 142, 239, 0.14);
+  }
+  .bullet { opacity: .4; }
+  #hud {
+    position: fixed; left: 16px; bottom: 14px; z-index: 5;
+    font-size: 12px; line-height: 1.5; opacity: .55;
+    display: flex; flex-direction: column; gap: 8px; max-width: 60vw;
+  }
+  #hud .keys b { font-weight: 600; opacity: .85; }
+  #slider {
+    -webkit-appearance: none; appearance: none;
+    width: 190px; height: 3px; border-radius: 3px;
+    background: var(--hair); outline: none;
+  }
+  #slider::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%;
+    background: var(--accent); cursor: pointer;
+  }
+  #slider::-moz-range-thumb {
+    width: 13px; height: 13px; border: none; border-radius: 50%;
+    background: var(--accent); cursor: pointer;
+  }
+</style>
+
+<div id="stage">
+  <svg id="wires"></svg>
+</div>
+
+<div id="hud">
+  <input id="slider" type="range" min="0" max="1000" value="0" aria-label="morph amount" />
+  <div class="keys"><b>m</b> morph · <b>drag</b> hold t=0.5 · <b>↑↓←→</b> move cursor</div>
+</div>
+
+<script>
+  window.__demo = window.__demo || "morph";
+
+  // ---- the tree: one hardcoded ~25-node outline of the project's own notes ----
+  // [title, depth]; order is DFS visit order (== outline row order).
+  const RAW = [
+    ["session-notes", 0],
+    ["Vision", 1],
+    ["Zoom is a camera, not a filter", 2],
+    ["Context is the path", 2],
+    ["The agent is a cursor, not a chat window", 2],
+    ["Architecture", 1],
+    ["Go + SQLite core", 2],
+    ["one nodes table", 3],
+    ["typed edges (child / reply / quote)", 3],
+    ["append-only events, streamed over SSE", 3],
+    ["SSE sync + presence protocol", 2],
+    ["MCP server agents attach to", 2],
+    ["Agents in the outline", 1],
+    ["@name: spawns with path as context", 2],
+    [">> steers an attached agent", 2],
+    ["wet-ink proposals — Tab to accept", 2],
+    ["presence renders as fading heat", 2],
+    ["Threads", 1],
+    ["reply = child", 2],
+    ["fork = parallel rail", 2],
+    ["distill to 1–3 durable bullets", 2],
+    ["Open questions", 1],
+    ["split panes vs. one camera", 2],
+    ["motion fatigue / reduced-motion path", 2],
+    ["map mode culling past ~200 nodes", 2],
+  ];
+
+  // build node objects + parent links from depth stack
+  const nodes = RAW.map(([title, depth], i) => ({ i, title, depth }));
+  const stack = [];
+  for (const n of nodes) {
+    stack[n.depth] = n;
+    n.parent = n.depth === 0 ? null : stack[n.depth - 1];
+    n.children = [];
+    if (n.parent) n.parent.children.push(n);
+    n.t = 0;        // current morph value (per node, for the stagger)
+    n.target = 0;   // where it's animating to
+  }
+  const maxDepth = Math.max(...nodes.map((n) => n.depth));
+
+  // ---- radial angles: leaves get equal slices, parents sit at the mean ----
+  let leafSeen = 0;
+  const leaves = nodes.filter((n) => n.children.length === 0).length;
+  (function assign(n) {
+    if (n.children.length === 0) {
+      n.angle = ((leafSeen + 0.5) / leaves) * Math.PI * 2;
+      leafSeen++;
+    } else {
+      n.children.forEach(assign);
+      n.angle = n.children.reduce((s, c) => s + c.angle, 0) / n.children.length;
+    }
+  })(nodes[0]);
+
+  // ---- two position functions returning the node's top-left in px ----
+  const PAD_X = 40, PAD_Y = 46, INDENT = 28, ROW = 30;
+
+  function outlinePos(n) {
+    return { x: PAD_X + n.depth * INDENT, y: PAD_Y + n.i * ROW };
+  }
+  function radialPos(n) {
+    const cx = innerWidth / 2, cy = innerHeight / 2;
+    const levelR = Math.min(innerWidth, innerHeight) * 0.42 / maxDepth;
+    const r = n.depth * levelR;
+    return {
+      x: cx + r * Math.cos(n.angle) - n.w / 2,
+      y: cy + r * Math.sin(n.angle) - n.h / 2,
+    };
+  }
+
+  const ease = (t) => t * t * (3 - 2 * t); // smoothstep
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  // node center point for a given interpolation (used by connectors)
+  function pos(n) {
+    const o = outlinePos(n), m = radialPos(n), e = ease(n.t);
+    return { x: lerp(o.x, m.x, e), y: lerp(o.y, m.y, e) };
+  }
+  const center = (n) => ({ x: n._x + n.w / 2, y: n._y + n.h / 2 });
+
+  // ---- build DOM ----
+  const stage = document.getElementById("stage");
+  const wires = document.getElementById("wires");
+  const slider = document.getElementById("slider");
+
+  for (const n of nodes) {
+    const el = document.createElement("div");
+    el.className = "node" + (n.depth === 0 ? " root" : "");
+    el.innerHTML = (n.depth > 0 ? '<span class="bullet">•</span> ' : "") + n.title;
+    stage.appendChild(el);
+    n.el = el;
+    n.w = el.offsetWidth;
+    n.h = el.offsetHeight;
+  }
+
+  // connectors, one path per parent→child edge
+  for (const n of nodes) {
+    if (!n.parent) continue;
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    wires.appendChild(p);
+    n.wire = p;
+  }
+
+  // ---- cursor ----
+  let cursor = nodes[0];
+  function paintCursor() {
+    for (const n of nodes) n.el.classList.toggle("cursor", n === cursor);
+  }
+
+  // ---- render every frame from each node's t ----
+  function render() {
+    for (const n of nodes) {
+      const p = pos(n);
+      n._x = p.x; n._y = p.y;
+      const e = ease(n.t);
+      n.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
+      n.el.style.textAlign = e > 0.5 ? "center" : "left";
+      n.el.style.background = `rgba(128,128,128,${0.05 * e})`;
+      n.el.style.borderColor = n === cursor
+        ? "" // let .cursor class win
+        : `rgba(128,128,128,${0.18 * e})`;
+    }
+    for (const n of nodes) {
+      if (!n.parent) continue;
+      const a = center(n.parent), b = center(n), e = ease(n.t);
+      // t=0: L-shaped indent guide (down parent's column, then across)
+      // t=1: smooth radial curve (controls pulled toward the midpoint)
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const c1x = lerp(a.x, mx, e), c1y = lerp(b.y, my, e);
+      const c2x = lerp(a.x, mx, e), c2y = lerp(b.y, my, e);
+      n.wire.setAttribute(
+        "d",
+        `M ${a.x} ${a.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${b.x} ${b.y}`
+      );
+    }
+  }
+
+  // ---- animation loop: each node eases toward its target, staggered by depth ----
+  let anim = null; // {start, per-depth begin, active}
+  function startMorph(target) {
+    const now = performance.now();
+    for (const n of nodes) {
+      n._from = n.t;
+      n._begin = now + n.depth * 8;   // children bloom after parents
+      n.target = target;
+    }
+    if (!anim) tick();
+    anim = true;
+  }
+  function tick() {
+    const now = performance.now();
+    let moving = false;
+    for (const n of nodes) {
+      if (n._from === undefined) continue; // node has settled
+      const dt = (now - n._begin) / 300;
+      if (dt <= 0) { moving = true; continue; }
+      if (dt >= 1) { n.t = n.target; n._from = undefined; continue; }
+      n.t = lerp(n._from, n.target, dt);
+      moving = true;
+    }
+    render();
+    syncSlider();
+    if (moving) requestAnimationFrame(tick);
+    else anim = null;
+  }
+  function syncSlider() {
+    // reflect the average t so the slider tracks the animation
+    const avg = nodes.reduce((s, n) => s + n.t, 0) / nodes.length;
+    slider.value = Math.round(avg * 1000);
+  }
+
+  // ---- slider: hold any t (e.g. the 0.5 "staircase") ----
+  slider.addEventListener("input", () => {
+    const v = +slider.value / 1000;
+    anim = null; // interrupt any morph
+    for (const n of nodes) { n.t = v; n.target = v; n._from = undefined; }
+    render();
+  });
+
+  // ---- keyboard ----
+  const sibs = (n) => (n.parent ? n.parent.children : [nodes[0]]);
+  function move(nn) { if (nn) { cursor = nn; paintCursor(); render(); } }
+
+  addEventListener("keydown", (ev) => {
+    if (ev.target === slider) return;
+    const graph = ease(cursor.t) >= 0.5; // are we (mostly) in map mode?
+    switch (ev.key) {
+      case "m":
+        startMorph(nodes[0].target > 0.5 ? 0 : 1);
+        break;
+      case "ArrowUp":
+        ev.preventDefault();
+        move(graph ? cursor.parent : nodes[cursor.i - 1]);
+        break;
+      case "ArrowDown":
+        ev.preventDefault();
+        move(graph ? cursor.children[0] : nodes[cursor.i + 1]);
+        break;
+      case "ArrowLeft": {
+        ev.preventDefault();
+        const s = sibs(cursor), k = s.indexOf(cursor);
+        move(s[k - 1] || cursor.parent);
+        break;
+      }
+      case "ArrowRight": {
+        ev.preventDefault();
+        const s = sibs(cursor), k = s.indexOf(cursor);
+        move(s[k + 1] || cursor.children[0]);
+        break;
+      }
+    }
+  });
+
+  addEventListener("resize", render);
+  paintCursor();
+  render();
+</script>

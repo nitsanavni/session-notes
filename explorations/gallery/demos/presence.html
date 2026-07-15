@@ -1,0 +1,344 @@
+<meta charset="utf-8">
+<title>presence — heat & wet ink</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="blurb" content="A live agent inhabits your outline — its attention reads as heat, its output as wet ink.">
+<style>
+  :root{
+    --ink:#1a1a1a; --bg:#fbfbfa; --hair:rgba(26,26,26,.08);
+    --moss-h:223; --moss-s:78%; --moss-l:68%;   /* from #6c8eef */
+    --warm-h:33;  --warm-s:62%;  --warm-l:59%;   /* from #d9a057 */
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --ink:#e8e8e6; --bg:#141413; --hair:rgba(232,232,230,.09); }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:44rem; margin:0 auto; padding:64px 28px 96px}
+  header{display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:28px}
+  h1{font-size:15px; font-weight:600; margin:0; letter-spacing:.01em}
+  h1 .sub{font-weight:400; opacity:.5; margin-left:.5em}
+  .controls{display:flex; gap:18px; flex-shrink:0}
+  .controls button{
+    background:none; border:none; padding:0; color:inherit; cursor:pointer;
+    font:inherit; font-size:13px; opacity:.5; transition:opacity 180ms ease-out;
+  }
+  .controls button:hover{opacity:.9}
+  .controls button:disabled{opacity:.2; cursor:default}
+
+  ul{list-style:none; margin:0; padding:0}
+  li > ul{margin-left:20px}
+  .node{
+    position:relative; display:flex; gap:8px; align-items:flex-start;
+    padding:2px 8px; border-radius:6px; margin:1px 0;
+    border-left:2px solid transparent;
+    transition:background-color 200ms ease-out, box-shadow 200ms ease-out;
+  }
+  .gutter{
+    flex-shrink:0; width:1.1em; text-align:center; line-height:1.6;
+    opacity:.32; user-select:none;
+  }
+  .text{flex:1; min-width:0}
+  .meta{opacity:.45; font-size:13px}
+
+  /* heat — footprints, decays via JS-driven opacity on a pseudo layer */
+  .node.heat{ background:var(--heat-color); }
+
+  /* agent glyph in gutter */
+  .glyph{
+    display:inline-flex; align-items:center; gap:4px;
+    font-size:12.5px; font-weight:500; padding:0 5px; border-radius:20px;
+    cursor:default; user-select:none;
+    color:var(--gcolor);
+    background:color-mix(in srgb, var(--gcolor) 12%, transparent);
+    transition:background-color 180ms ease-out, box-shadow 180ms ease-out;
+  }
+  .glyph .dot{font-size:11px; line-height:1}
+  /* pulse = writing */
+  .glyph.writing{ animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse{
+    0%,100%{ box-shadow:0 0 0 0 color-mix(in srgb,var(--gcolor) 45%,transparent); }
+    50%    { box-shadow:0 0 0 4px color-mix(in srgb,var(--gcolor) 0%,transparent); }
+  }
+
+  /* pen tint on hover — faint wash over subtree */
+  li.pen-lit > .node,
+  li.pen-lit li > .node{ background:var(--pen-color); }
+  li.pen-lit > .node{ transition:background-color 200ms ease-out; }
+
+  /* wet ink — freshly written, translucent, colored border, weight 450 */
+  .node.wet{
+    border-left-color:var(--wet-color);
+    opacity:.78; font-weight:450;
+    color:color-mix(in srgb, var(--wet-color) 55%, var(--ink));
+  }
+  .caret{
+    display:inline-block; width:.5em; margin-left:1px;
+    border-right:2px solid var(--wet-color);
+    animation:blink 1s steps(1) infinite;
+  }
+  @keyframes blink{50%{opacity:0}}
+
+  .hint{
+    position:fixed; left:16px; bottom:14px; font-size:12px; opacity:.4;
+    pointer-events:none;
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>trip planning <span class="sub">shared outline</span></h1>
+    <div class="controls">
+      <button id="spawn">spawn second agent</button>
+      <button id="replay">replay</button>
+    </div>
+  </header>
+  <ul id="tree"></ul>
+</div>
+<div class="hint">pulse = writing · trail = reading · steady = idle</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---- outline data ---------------------------------------------------------
+  // agent:"moss" marks the node moss attaches to; kids nest.
+  const OUTLINE = [
+    { t:"Kyoto, 6 days in November", kids:[
+      { t:"Logistics", kids:[
+        { t:"Fly into Osaka (KIX), train in", meta:"— Haruka express, ~75min" },
+        { t:"JR pass — worth it for day trips", meta:"— confirm 7-day math" },
+      ]},
+      { t:"Neighborhoods to base in", agent:"moss", kids:[
+        { t:"Higashiyama — temples, quiet mornings" },
+        { t:"Gion — atmospheric but pricey" },
+        { t:"Downtown / Nishiki — food, central" },
+        { t:"Arashiyama — beautiful, feels far out" },
+      ]},
+      { t:"Food", kids:[
+        { t:"Nishiki market crawl" },
+        { t:"Kaiseki, one splurge dinner" },
+        { t:"Coffee — Weekenders, %Arabica" },
+      ]},
+      { t:"Day trips", kids:[
+        { t:"Nara — deer park + Todai-ji" },
+        { t:"Uji — matcha & the Byodo-in" },
+      ]},
+    ]},
+  ];
+
+  const mossC = "hsl(223 78% 62%)";
+  const warmC = "hsl(33 62% 52%)";
+
+  // ---- render ---------------------------------------------------------------
+  const tree = document.getElementById("tree");
+  const byId = {};   // id -> {li, node, textEl}
+  let uid = 0;
+
+  function build(items, parentUl){
+    for (const it of items){
+      const id = "n" + (uid++);
+      const li = document.createElement("li");
+      const node = document.createElement("div");
+      node.className = "node";
+      const gutter = document.createElement("span");
+      gutter.className = "gutter";
+      gutter.textContent = "•";
+      const text = document.createElement("span");
+      text.className = "text";
+      text.textContent = it.t;
+      if (it.meta){
+        const m = document.createElement("span");
+        m.className = "meta";
+        m.textContent = " " + it.meta;
+        text.appendChild(m);
+      }
+      node.append(gutter, text);
+      li.appendChild(node);
+      byId[id] = { li, node, gutter, text, agent:it.agent };
+      it._id = id;
+      parentUl.appendChild(li);
+      if (it.kids){
+        const ul = document.createElement("ul");
+        li.appendChild(ul);
+        build(it.kids, ul);
+      }
+    }
+  }
+  build(OUTLINE, tree);
+
+  // locate node object matching a predicate
+  function findNode(items, pred){
+    for (const n of items){
+      if (pred(n)) return n;
+      if (n.kids){ const r = findNode(n.kids, pred); if (r) return r; }
+    }
+    return null;
+  }
+
+  // ---- agent machinery ------------------------------------------------------
+  const timers = [];
+  function later(fn, ms){ const t = setTimeout(fn, ms); timers.push(t); return t; }
+  function clearAll(){ timers.forEach(clearTimeout); timers.length = 0; }
+
+  // decaying heat: set background, fade opacity via a wrapper alpha over ~10s
+  function heat(id, color){
+    const rec = byId[id];
+    if (!rec) return;
+    rec.node.style.setProperty("--heat-color", color.replace(")", " / .30)").replace("hsl","hsla"));
+    rec.node.classList.add("heat");
+    // decay: step the alpha down over ~10s
+    let a = 0.30;
+    const step = () => {
+      a -= 0.30 / 40;              // ~10s at 250ms steps
+      if (a <= 0){
+        rec.node.classList.remove("heat");
+        rec.node.style.removeProperty("--heat-color");
+        return;
+      }
+      rec.node.style.setProperty("--heat-color",
+        color.replace("hsl","hsla").replace(")", " / " + a.toFixed(3) + ")"));
+      later(step, 250);
+    };
+    later(step, 250);
+  }
+
+  // attach a glyph in the gutter of the agent's home node
+  function attachGlyph(rootNode, name, color){
+    const rec = byId[rootNode._id];
+    const g = document.createElement("span");
+    g.className = "glyph";
+    g.style.setProperty("--gcolor", color);
+    g.innerHTML = '<span class="dot">⟡</span>' + name;
+    rec.gutter.textContent = "";
+    rec.gutter.style.opacity = 1;
+    rec.gutter.appendChild(g);
+    rec.glyph = g;
+    // hover reveals the pen (faint tint over whole subtree)
+    const li = rec.li;
+    li.style.setProperty("--pen-color", color.replace("hsl","hsla").replace(")"," / .07)"));
+    g.addEventListener("mouseenter", () => li.classList.add("pen-lit"));
+    g.addEventListener("mouseleave", () => li.classList.remove("pen-lit"));
+    return g;
+  }
+
+  // stream a wet-ink bullet under a parent node
+  function wetBullet(parentNode, str, color, done){
+    const li = document.createElement("li");
+    const node = document.createElement("div");
+    node.className = "node wet";
+    node.style.setProperty("--wet-color", color);
+    const gutter = document.createElement("span");
+    gutter.className = "gutter";
+    gutter.textContent = "•";
+    gutter.style.color = color;
+    const text = document.createElement("span");
+    text.className = "text";
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    node.append(gutter, text, caret);
+    li.appendChild(node);
+    // append into (or create) the parent's child ul
+    let ul = byId[parentNode._id].li.querySelector(":scope > ul");
+    if (!ul){ ul = document.createElement("ul"); byId[parentNode._id].li.appendChild(ul); }
+    ul.appendChild(li);
+
+    let i = 0;
+    const type = () => {
+      if (i < str.length){
+        text.textContent += str[i++];
+        later(type, 22 + Math.random()*40);
+      } else {
+        caret.remove();
+        done && done();
+      }
+    };
+    later(type, 120);
+    return node;
+  }
+
+  // ---- scripted agent runs --------------------------------------------------
+  function runMoss(){
+    const home = findNode(OUTLINE, n => n.agent === "moss");
+    const g = attachGlyph(home, "⟡ moss", mossC);
+    const trail = home.kids.map(k => k._id);   // the 4 neighborhoods
+
+    let d = 400;
+    // sweep attention across descendants
+    trail.forEach((id, k) => { later(() => heat(id, mossC), d + k*900); });
+    d += trail.length*900 + 500;
+
+    // then write proposals (wet ink) under the home node
+    const props = [
+      "→ recommend Higashiyama as base — quiet, walkable to temples",
+      "→ 1 night in Gion for the atmosphere, then move",
+      "→ skip Arashiyama as a base; do it as a half-day",
+    ];
+    later(() => g.classList.add("writing"), d);
+    const writeAt = (k) => {
+      if (k >= props.length){
+        g.classList.remove("writing");   // go idle: steady glyph, nothing animates
+        return;
+      }
+      heat(home._id, mossC);
+      wetBullet(home, props[k], mossC, () => later(() => writeAt(k+1), 500));
+    };
+    later(() => writeAt(0), d + 200);
+  }
+
+  function runWarm(){
+    // second agent attaches to the "Food" subtree, runs concurrently
+    const home = findNode(OUTLINE, n => n.t === "Food");
+    home.agent = "sol";
+    const g = attachGlyph(home, "⟡ sol", warmC);
+    const trail = home.kids.map(k => k._id);
+    let d = 300;
+    trail.forEach((id,k) => later(() => heat(id, warmC), d + k*850));
+    d += trail.length*850 + 400;
+    const props = [
+      "→ book the kaiseki splurge for night 2, near Pontocho",
+      "→ Nishiki crawl best late morning before the crowds",
+    ];
+    later(() => g.classList.add("writing"), d);
+    const writeAt = (k) => {
+      if (k >= props.length){ g.classList.remove("writing"); return; }
+      heat(home._id, warmC);
+      wetBullet(home, props[k], warmC, () => later(() => writeAt(k+1), 500));
+    };
+    later(() => writeAt(0), d + 200);
+  }
+
+  // ---- controls -------------------------------------------------------------
+  const spawnBtn = document.getElementById("spawn");
+  const replayBtn = document.getElementById("replay");
+
+  function reset(){
+    clearAll();
+    // wipe wet bullets + heat + glyphs by full rebuild
+    uid = 0;
+    for (const k in byId) delete byId[k];
+    tree.innerHTML = "";
+    // strip runtime agent flags added by spawn
+    const clean = findNode(OUTLINE, n => n.t === "Food");
+    if (clean) delete clean.agent;
+    build(OUTLINE, tree);
+    spawnBtn.disabled = false;
+  }
+
+  spawnBtn.addEventListener("click", () => {
+    spawnBtn.disabled = true;
+    runWarm();
+  });
+  replayBtn.addEventListener("click", () => {
+    reset();
+    runMoss();
+  });
+
+  // ---- go -------------------------------------------------------------------
+  runMoss();
+})();
+</script>

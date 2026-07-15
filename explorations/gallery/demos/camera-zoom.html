@@ -1,0 +1,442 @@
+<title>camera zoom — the tree is a place</title>
+<meta name="blurb" content="Zoom is a camera, not a filter — dive through a note tree; agents glow amber in the deep.">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --ink:#1a1a1a; --bg:#fbfbfa; --hair:rgba(26,26,26,.08);
+    --dim:rgba(26,26,26,.5); --agent:#6c8eef; --ember:#e0912f;
+  }
+  @media(prefers-color-scheme:dark){
+    :root{ --ink:#e8e8e6; --bg:#141413; --hair:rgba(232,232,230,.08);
+      --dim:rgba(232,232,230,.5); --ember:#f0b45a; }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font:15px/1.6 system-ui,-apple-system,sans-serif;
+    color:var(--ink); background:var(--bg);
+    overflow:hidden; -webkit-font-smoothing:antialiased;
+  }
+  #crumbs{
+    position:fixed; top:0; left:0; right:0; height:44px; z-index:20;
+    display:flex; align-items:center; gap:2px; padding:0 22px;
+    font-size:13px; color:var(--dim); user-select:none;
+  }
+  .crumb{
+    display:inline-flex; align-items:center; gap:6px; cursor:pointer;
+    padding:3px 7px; border-radius:6px; white-space:nowrap;
+    transition:color .18s, background .18s;
+  }
+  .crumb:hover{ color:var(--ink); background:var(--hair); }
+  .crumb.cur{ color:var(--ink); cursor:default; }
+  .crumb.cur:hover{ background:none; }
+  .crumb .sep{ opacity:.4; }
+  .crumb.enter{ animation:crumbIn .25s cubic-bezier(0.2,0,0.2,1); }
+  @keyframes crumbIn{ from{ opacity:0; transform:translateX(-6px) } to{ opacity:1; transform:none } }
+  .crumb .ember-dot{ width:6px; height:6px; border-radius:50%; background:var(--ember);
+    box-shadow:0 0 6px var(--ember); animation:pulse 2.4s ease-in-out infinite; }
+
+  #frame{ position:absolute; inset:44px 0 0 0; overflow:hidden; }
+  #stage{
+    position:absolute; top:22px; left:0; right:0;
+    max-width:46rem; margin:0 auto; padding:0 22px;
+    transform-origin:0 0;
+  }
+  #ghost{ position:absolute; top:22px; left:0; right:0;
+    max-width:46rem; margin:0 auto; padding:0 22px;
+    transform-origin:50% 30%; pointer-events:none; z-index:5; }
+
+  .node{ position:relative; }
+  .node > .kids{ margin-left:20px; border-left:1px solid var(--hair); padding-left:16px; }
+
+  .row{ display:flex; align-items:baseline; gap:8px; padding:3px 8px;
+    border-radius:7px; cursor:pointer; transition:background .15s; }
+  .row:hover{ background:var(--hair); }
+  .bullet{ flex:none; width:6px; height:6px; border-radius:50%;
+    background:var(--dim); transform:translateY(-2px); transition:background .2s; }
+  .title{ font-weight:450; }
+  .gist{ color:var(--dim); font-size:.92em; }
+  .dots{ display:inline-flex; gap:3px; margin-left:2px; }
+  .dot{ width:5px; height:5px; border-radius:50%; background:var(--agent); opacity:.55; }
+  .full{ margin:2px 0 8px 22px; color:var(--dim); font-size:.95em; max-width:38rem; }
+  .full .ink{ color:var(--agent); }
+
+  /* semantic zoom levels */
+  .lvl-full > .row .title{ font-size:1.14em; font-weight:500; }
+  .lvl-full > .row{ padding-top:6px; }
+  .lvl-full > .full{ display:block; }
+  .lvl-gist > .full{ display:none; }
+  .lvl-gist > .row .title{ font-size:1em; }
+  .lvl-chip > .full{ display:none; }
+  .lvl-chip > .row .gist{ display:none; }
+  .lvl-chip > .row{ padding:2px 8px; }
+  .lvl-chip > .row .title{ font-size:.9em; color:var(--dim); }
+  .lvl-chip > .row .bullet{ width:4px; height:4px; }
+
+  /* cursor */
+  .node.cursor > .row{ background:var(--hair); box-shadow:inset 2px 0 0 var(--agent); }
+
+  /* embers */
+  .node.ember > .row .bullet{ background:var(--ember); box-shadow:0 0 8px var(--ember); }
+  .node.ember > .row{ animation:emberRow 2.4s ease-in-out infinite; }
+  @keyframes emberRow{ 0%,100%{ box-shadow:none } 50%{ box-shadow:inset 2px 0 0 var(--ember) } }
+  .node.ember-anc > .row .bullet{
+    background:var(--ember); opacity:.9;
+    box-shadow:0 0 5px color-mix(in srgb, var(--ember) 60%, transparent);
+    animation:pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse{ 0%,100%{ opacity:.55 } 50%{ opacity:1 } }
+  .ember-badge{ margin-left:6px; font-size:10px; color:var(--ember);
+    border:1px solid color-mix(in srgb,var(--ember) 50%,transparent);
+    border-radius:4px; padding:0 4px; vertical-align:1px; opacity:.85; }
+
+  #hint{
+    position:fixed; bottom:14px; left:16px; z-index:20;
+    font-size:11.5px; color:var(--dim); user-select:none; line-height:1.7;
+  }
+  #hint b{ font-weight:600; color:var(--ink); opacity:.85; }
+  #hint .live{ color:var(--ember); }
+  @media(prefers-reduced-motion:reduce){ *{ animation-duration:.001ms !important } }
+</style>
+
+<div id="crumbs"></div>
+<div id="frame"><div id="stage"></div></div>
+<div id="hint">
+  <b>j/k</b> move · <b>Enter</b> zoom in · <b>Esc</b> zoom out ·
+  <b>click</b> a node or crumb · <b>g</b> then <b>1</b>/<b>2</b> dive to a <span class="live">● live</span> agent
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---- data: one person's notes, 4 levels deep ----
+  let _id = 0;
+  const parent = new Map();
+  function T(title, gist, full, kids, opts) {
+    const n = { id: ++_id, title, gist, full: full || "", kids: kids || [], ...(opts||{}) };
+    for (const k of n.kids) parent.set(k.id, n);
+    return n;
+  }
+  const root = T("notes", "everything", "", [
+    T("Projects", "3 active", "", [
+      T("session-notes", "Go TUI + web board for shared session notes", "The spine: outline as a single continuous place where notes and agents both live.", [
+        T("ship web outline v1", "keyboard nav, SSE, markdown links", "Down-arrow bug is fixed; links open with the keyboard now."),
+        T("fix down-arrow bug", "cursor stuck on duplicate lines", "Reproduced: identical sibling titles collide on lookup. Patching the match to use node id, adding an e2e walk to the bottom of a busy board.", null, { ember: 1, stream: 1 }),
+        T("SSE presence protocol", "append-only events streamed as sync", "events table → SSE; last-write-wins + fractional ranks, no CRDTs in v0."),
+      ]),
+      T("camera-zoom demo", "prove zoom-as-camera feels like a place", "Dancing skeleton, fake data. One world div, CSS-transform camera.", [
+        T("FLIP vs reflow risk", "scale text in flight, reflow on settle", "Transforms during motion, real layout only when the camera lands."),
+        T("semantic zoom thresholds", "chip / gist / full crossfade", "Render level is a function of apparent size, not a collapse triangle."),
+      ]),
+      T("invoicing automation", "monthly, via Contasimple", "Duplicate last month's invoice, swap the client, download the PDF.", [
+        T("Contasimple skill", "login + copy-previous flow", "Watch the período-selector trap."),
+        T("PDF download flow", "after save, grab the pdf", ""),
+      ]),
+    ]),
+    T("Reading", "slow, on building & legibility", "", [
+      T("The Timeless Way of Building", "Alexander — the quality without a name", "A building or a town is alive when it lets the forces in it resolve themselves.", [
+        T("quality without a name", "alive, whole, free, exact", "Nameless but recognizable; you feel it before you can define it."),
+        T("patterns as a living language", "words you build sentences with", "Each pattern a rule of thumb; combine them into a space."),
+      ]),
+      T("Notes on the Synthesis of Form", "the early, harder Alexander", "Fit between form and context; decompose by minimizing misfit coupling.", [
+        T("misfit variables", "cluster what interacts", "Design = removing misfits; group the tightly-coupled requirements."),
+      ]),
+      T("Seeing Like a State", "Scott — legibility vs metis", "States simplify to see; the map erases the local knowledge that made it work.", [
+        T("legibility vs metis", "the map erases the metis", "Practical, situated know-how resists being written down — and gets bulldozed."),
+      ]),
+    ]),
+    T("Ideas", "for the notes+agents thing", "", [
+      T("zoom is a camera, not a filter", "the tree is a place you navigate", "Kill the re-render. Model one surface + a camera; nothing appears without a spatial reason.", [
+        T("semantic zoom = distance", "far = title, close = full + threads", "Distance is the summarization level; collapse is just 'far away'."),
+        T("breadcrumb as spatial memory", "the compressed remains of the dive", "A scrubber: click a crumb and the camera flies back through the levels."),
+      ]),
+      T("agents as cursors with a hue", "a position, a pen, a colour", "An attached agent has a spot in the tree; its attention renders as fading heat.", [
+        T("wet ink proposals", "translucent appends you accept or reject", "The agent never edits your text — it appends wet ink; Tab to keep it.", null, { ember: 2, stream: 1 }),
+        T("attention as footprints", "heat that fades where it worked", "From the root you see where the tree is alive, like lit windows at night."),
+      ]),
+      T("threads are scaffolding", "notes are the product", "Reply = child, fork = parallel rail; any thread can be distilled to durable bullets.", [
+        T("distill to durable bullets", "one keystroke collapses the exchange", "1–3 bullets kept, the transcript archived beneath."),
+      ]),
+    ]),
+    T("Life", "outside the screen", "", [
+      T("garden", "spring list", "The olive wants pruning before it wakes up.", [
+        T("prune the olive tree", "before bud-break", ""),
+        T("order compost", "two bags, the coarse one", ""),
+      ]),
+      T("trip to Portugal", "September, ~10 days", "Fly into Lisbon, decide Porto later.", [
+        T("book flights via Kiwi", "flexible dates, one stop ok", ""),
+        T("Lisbon vs Porto base", "or split the stay", ""),
+      ]),
+    ]),
+  ]);
+
+  // ancestors of embers glow
+  const emberAnc = new Set();
+  function collectEmbers(n, out){ if (n.ember) out.push(n); for (const k of n.kids) collectEmbers(k, out); return out; }
+  const embers = collectEmbers(root, []).sort((a,b)=>a.ember-b.ember);
+  for (const e of embers){ let p = parent.get(e.id); while (p){ emberAnc.add(p.id); p = parent.get(p.id); } }
+
+  // ---- state ----
+  let focusPath = [root];         // ancestors incl. focus (root always first)
+  let cursor = 0;                 // index into focus's kids
+  const stage = document.getElementById("stage");
+  const crumbBar = document.getElementById("crumbs");
+  const frame = document.getElementById("frame");
+  const reduce = matchMedia("(prefers-reduced-motion:reduce)").matches;
+  const EASE = "cubic-bezier(0.2,0,0.2,1)";
+  let animating = false;
+  let streamTimer = null;
+
+  const focus = () => focusPath[focusPath.length - 1];
+  const pathTo = (node) => { const p = [node]; let c = parent.get(node.id); while (c){ p.unshift(c); c = parent.get(c.id); } return p; };
+
+  // ---- render ----
+  function levelClass(rel){ return rel === 0 ? "lvl-full" : rel === 1 ? "lvl-gist" : "lvl-chip"; }
+
+  function nodeEl(n, rel){
+    const d = document.createElement("div");
+    d.className = "node " + levelClass(rel);
+    if (n.ember) d.classList.add("ember");
+    else if (emberAnc.has(n.id)) d.classList.add("ember-anc");
+    d.dataset.fid = n.id;
+
+    const row = document.createElement("div"); row.className = "row";
+    const b = document.createElement("span"); b.className = "bullet"; row.appendChild(b);
+    const t = document.createElement("span"); t.className = "title"; t.textContent = n.title; row.appendChild(t);
+    if (n.gist){ const g = document.createElement("span"); g.className = "gist"; g.textContent = "— " + n.gist; row.appendChild(g); }
+    if (n.ember){ const eb = document.createElement("span"); eb.className = "ember-badge"; eb.textContent = "● live " + n.ember; row.appendChild(eb); }
+    else if (n.kids.length && rel <= 1){
+      const dd = document.createElement("span"); dd.className = "dots";
+      for (let i=0;i<Math.min(3,n.kids.length);i++){ const o=document.createElement("span"); o.className="dot"; dd.appendChild(o); }
+      row.appendChild(dd);
+    }
+    d.appendChild(row);
+
+    if (rel === 0 && (n.full || n.stream)){
+      const f = document.createElement("div"); f.className = "full";
+      if (n.stream) f.dataset.stream = "1";
+      f.textContent = n.full;
+      d.appendChild(f);
+    }
+    if (rel < 2 && n.kids.length){
+      const kids = document.createElement("div"); kids.className = "kids";
+      for (const k of n.kids) kids.appendChild(nodeEl(k, rel + 1));
+      d.appendChild(kids);
+    }
+    return d;
+  }
+
+  function render(){
+    const f = focus();
+    stage.innerHTML = "";
+    f.kids.forEach((k, i) => {
+      const el = nodeEl(k, 0);
+      if (i === cursor) el.classList.add("cursor");
+      stage.appendChild(el);
+    });
+    renderCrumbs();
+    startStream();
+  }
+
+  function renderCrumbs(prevLen){
+    crumbBar.innerHTML = "";
+    focusPath.forEach((n, i) => {
+      const isCur = i === focusPath.length - 1;
+      const c = document.createElement("span");
+      c.className = "crumb" + (isCur ? " cur" : "");
+      c.dataset.fid = n.id;
+      if (i > 0){ const s = document.createElement("span"); s.className = "sep"; s.textContent = "›"; c.appendChild(s); }
+      const lab = document.createElement("span");
+      lab.textContent = i === 0 ? "notes" : n.title;
+      c.appendChild(lab);
+      if (emberAnc.has(n.id) || n.ember){ const e = document.createElement("span"); e.className = "ember-dot"; c.appendChild(e); }
+      if (!isCur) c.onclick = () => crumbClick(i);
+      if (prevLen != null && i === focusPath.length - 1 && focusPath.length > prevLen) c.classList.add("enter");
+      crumbBar.appendChild(c);
+    });
+  }
+
+  // ---- streaming "wet ink" ----
+  function startStream(){
+    if (streamTimer){ clearInterval(streamTimer); streamTimer = null; }
+    const el = stage.querySelector('.full[data-stream]');
+    if (!el) return;
+    const done = el.textContent;
+    const tail = " Re-running the e2e walk now…";
+    el.innerHTML = "";
+    const base = document.createTextNode(done);
+    el.appendChild(base);
+    const ink = document.createElement("span"); ink.className = "ink"; el.appendChild(ink);
+    if (reduce){ ink.textContent = tail; return; }
+    let i = 0;
+    streamTimer = setInterval(() => {
+      ink.textContent = tail.slice(0, ++i);
+      if (i >= tail.length){ clearInterval(streamTimer); streamTimer = null;
+        setTimeout(() => { if (stage.contains(el)) { i = 0; startStream(); } }, 1800); }
+    }, 42);
+  }
+
+  // ---- FLIP camera navigation ----
+  function capture(){
+    const m = new Map();
+    document.querySelectorAll("#stage [data-fid], #crumbs [data-fid]").forEach(el => {
+      m.set(el.dataset.fid, el.getBoundingClientRect());
+    });
+    return m;
+  }
+
+  function navigate(newPath, dur){
+    if (animating) return;
+    dur = dur == null ? 250 : dur;
+    if (reduce) dur = 0;
+    const prevLen = focusPath.length;
+    const olds = capture();
+
+    // ghost layer for exiting content
+    const ghost = stage.cloneNode(true);
+    ghost.id = "ghost";
+    frame.appendChild(ghost);
+
+    focusPath = newPath;
+    cursor = 0;
+    render();
+    // keep the crumb that just grew flagged as 'enter' when zooming out isn't wanted; redo crumbs with prevLen
+    renderCrumbs(prevLen);
+
+    const news = capture();
+    // hide persisters in ghost so only truly-leaving nodes remain visible
+    ghost.querySelectorAll("[data-fid]").forEach(g => { if (news.has(g.dataset.fid)) g.style.visibility = "hidden"; });
+
+    const zoomingIn = newPath.length > prevLen;
+    if (dur === 0){ ghost.remove(); return; }
+
+    animating = true;
+    // animate ghost (leaving siblings) out
+    ghost.style.transition = `transform ${dur}ms ${EASE}, opacity ${dur}ms ${EASE}`;
+    requestAnimationFrame(() => {
+      ghost.style.opacity = "0";
+      ghost.style.transform = zoomingIn ? "scale(1.28)" : "scale(0.8)";
+    });
+
+    // FLIP the survivors + entrances
+    document.querySelectorAll("#stage [data-fid], #crumbs [data-fid]").forEach(el => {
+      const fid = el.dataset.fid, last = news.get(fid), first = olds.get(fid);
+      if (first && last){
+        const dx = first.left - last.left, dy = first.top - last.top;
+        const sx = last.width ? first.width / last.width : 1;
+        const sy = last.height ? first.height / last.height : 1;
+        el.style.transformOrigin = "0 0";
+        el.style.transform = `translate(${dx}px,${dy}px) scale(${sx},${sy})`;
+        el.style.transition = "none";
+        el.getBoundingClientRect();
+        el.style.transition = `transform ${dur}ms ${EASE}`;
+        el.style.transform = "";
+      } else if (!first){
+        el.style.opacity = "0";
+        el.style.transform = zoomingIn ? "translateY(8px) scale(.96)" : "translateY(-8px) scale(1.04)";
+        el.style.transition = "none"; el.getBoundingClientRect();
+        el.style.transition = `opacity ${dur}ms ${EASE}, transform ${dur}ms ${EASE}`;
+        el.style.opacity = ""; el.style.transform = "";
+      }
+    });
+
+    setTimeout(() => {
+      ghost.remove();
+      document.querySelectorAll("#stage [data-fid], #crumbs [data-fid]").forEach(el => {
+        el.style.transition = ""; el.style.transform = ""; el.style.transformOrigin = ""; el.style.opacity = "";
+      });
+      animating = false;
+    }, dur + 20);
+  }
+
+  // ---- actions ----
+  function zoomInto(node, dur){
+    if (!node.kids.length) return;           // leaves are already fully shown
+    navigate([...pathTo(node)], dur);
+  }
+  function zoomOut(dur){
+    if (focusPath.length <= 1) return;
+    const wasFocus = focus();
+    navigate(focusPath.slice(0, -1), dur);
+    // restore cursor onto the node we came from
+    const idx = focus().kids.indexOf(wasFocus);
+    if (idx >= 0){ cursor = idx; markCursor(); }
+  }
+  function markCursor(){
+    stage.querySelectorAll(".node").forEach((el, i) => el.classList.toggle("cursor", i === cursor));
+  }
+  function crumbClick(targetIndex){
+    // animate back THROUGH intermediate levels, ~80ms each
+    const steps = focusPath.length - 1 - targetIndex;
+    if (steps <= 0) return;
+    let remaining = steps;
+    const step = () => { zoomOut(80); remaining--; if (remaining > 0) setTimeout(step, 90); };
+    step();
+  }
+
+  // ---- ember dive ----
+  let pendingG = false;
+  function diveTo(ember){
+    if (!ember) return;
+    const path = pathTo(ember);           // root ... emberParent, ember
+    // land focus on the ember's parent so the ember node is a full, streaming child
+    const targetLen = path.length - 1;    // path minus the ember itself
+    focusPath = [root]; cursor = 0; render();
+    let len = 2;
+    const step = () => {
+      if (len > targetLen){
+        const idx = focus().kids.indexOf(ember);
+        if (idx >= 0){ cursor = idx; markCursor(); }
+        return;
+      }
+      navigate(path.slice(0, len), 70);
+      len++;
+      setTimeout(step, 95);
+    };
+    setTimeout(step, 30);
+  }
+
+  // ---- input ----
+  document.addEventListener("keydown", (e) => {
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "TEXTAREA" || tag === "INPUT") return;   // let the comment rail type
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    if (pendingG){
+      if (e.key === "1" || e.key === "2"){ e.preventDefault(); pendingG = false; diveTo(embers[+e.key - 1]); return; }
+      if (e.key !== "g"){ pendingG = false; }
+    }
+    switch (e.key){
+      case "j": case "ArrowDown":
+        e.preventDefault(); cursor = Math.min(cursor + 1, focus().kids.length - 1); markCursor(); break;
+      case "k": case "ArrowUp":
+        e.preventDefault(); cursor = Math.max(cursor - 1, 0); markCursor(); break;
+      case "Enter": case "ArrowRight":
+        e.preventDefault();
+        if (e.shiftKey) zoomOut(); else zoomInto(focus().kids[cursor]); break;
+      case "Escape": case "ArrowLeft":
+        e.preventDefault(); zoomOut(); break;
+      case "g":
+        e.preventDefault(); pendingG = true; setTimeout(() => pendingG = false, 1200); break;
+      case "[":
+        e.preventDefault(); zoomOut(); break;
+    }
+  });
+
+  // click a node to zoom in; clicking a leaf just parks the cursor
+  stage.addEventListener("click", (e) => {
+    const el = e.target.closest(".node[data-fid]");
+    if (!el) return;
+    // only direct children (rel 0) are zoom targets
+    const top = stage.querySelectorAll(":scope > .node");
+    let idx = -1; top.forEach((t, i) => { if (t === el || t.contains(el)) idx = i; });
+    if (idx < 0) return;
+    const target = focus().kids[idx];
+    if (target.kids.length){ cursor = idx; zoomInto(target); }
+    else { cursor = idx; markCursor(); }
+  });
+
+  render();
+})();
+</script>

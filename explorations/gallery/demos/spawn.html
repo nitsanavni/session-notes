@@ -1,0 +1,648 @@
+<title>spawn — agents in seconds</title>
+<meta name="blurb" content="Spawn, address, and re-scope an agent with gestures on the outline — no dialogs, no chat panel. Press a to bloom an agent; type a bullet in its pen; drag the glyph to re-attach or detach.">
+<style>
+  :root{
+    --bg:#fbfbfa; --ink:#1a1a1a; --hair:rgba(26,26,26,.08);
+    --agent:#6c8eef; --agent-tint:rgba(108,142,239,.07);
+    --agent-tint-strong:rgba(108,142,239,.14);
+    --muted:rgba(26,26,26,.5); --faint:rgba(26,26,26,.28);
+  }
+  @media(prefers-color-scheme:dark){
+    :root{
+      --bg:#141413; --ink:#e8e8e6; --hair:rgba(232,232,230,.09);
+      --agent-tint:rgba(108,142,239,.1); --agent-tint-strong:rgba(108,142,239,.18);
+      --muted:rgba(232,232,230,.5); --faint:rgba(232,232,230,.3);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:15px/1.6 system-ui,-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  #stage{max-width:44rem; margin:0 auto; padding:64px 32px 140px 24px;}
+  h1{font-size:15px; font-weight:600; opacity:.55; margin:0 0 4px; letter-spacing:.01em;}
+  .sub{font-size:13px; color:var(--faint); margin:0 0 36px;}
+
+  .node{
+    position:relative; display:flex; align-items:flex-start;
+    padding:1px 0 1px 0; border-radius:6px;
+    transition:background .18s ease-out;
+  }
+  .node .indent{flex:0 0 auto;}
+  .gutter{
+    flex:0 0 22px; text-align:center; color:var(--faint);
+    font-size:13px; user-select:none; position:relative;
+    transition:color .18s ease-out;
+  }
+  .bullet{
+    display:inline-block; width:6px; height:6px; margin-top:9px;
+    border-radius:50%; background:var(--faint);
+    transition:transform .2s ease-out, box-shadow .2s ease-out, background .2s ease-out;
+  }
+  .label{flex:1 1 auto; padding:1px 6px; outline:none; white-space:pre-wrap;}
+  .node.cursor{background:var(--hair);}
+  .node.cursor > .gutter{color:var(--muted);}
+
+  /* subtree tint = the pen */
+  .node.penned{background:var(--agent-tint);}
+  .node.penned.cursor{background:var(--agent-tint-strong);}
+  .pen-lens{background:var(--agent-tint-strong)!important;}
+
+  /* spawn ring bloom */
+  .bullet.ring{
+    width:14px; height:14px; margin-top:5px; background:transparent;
+    border:2px solid var(--agent); box-shadow:0 0 0 4px var(--agent-tint-strong);
+    animation:bloom .3s ease-out;
+  }
+  @keyframes bloom{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
+
+  /* the agent glyph */
+  .glyph{
+    display:inline-block; margin-top:2px; color:var(--agent);
+    font-size:14px; cursor:grab; line-height:1;
+    transition:transform .2s ease-out, opacity .2s ease-out;
+  }
+  .glyph:active{cursor:grabbing;}
+  .glyph.booting{animation:pulse 1s ease-out infinite;}
+  .glyph.thinking{animation:ripple 1.2s ease-out infinite;}
+  .glyph.dragging{opacity:.4;}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.35);opacity:1}}
+  @keyframes ripple{0%{transform:scale(1)}30%{transform:scale(1.25)}100%{transform:scale(1)}}
+
+  /* ghost spawn row */
+  .ghost{
+    display:flex; align-items:center; gap:8px; margin:2px 0 2px 0;
+    padding:5px 8px; border-radius:8px;
+    border:1px dashed var(--agent); background:var(--agent-tint);
+    font-size:13px; color:var(--muted); animation:bloom .2s ease-out;
+  }
+  .ghost .g-glyph{color:var(--agent); font-size:14px;}
+  .ghost .leash{color:var(--agent); opacity:.85;}
+  .ghost input{
+    flex:1 1 auto; border:none; background:transparent; color:var(--ink);
+    font:inherit; outline:none; min-width:80px;
+    border-bottom:1px solid var(--hair); padding:2px 0;
+  }
+  .ghost input::placeholder{color:var(--faint);}
+
+  /* routing affordance */
+  .route{
+    font-size:11px; color:var(--agent); opacity:0; margin-left:6px;
+    white-space:nowrap; transition:opacity .18s ease-out;
+  }
+  .route.show{opacity:.9;}
+  .flash{animation:flash .5s ease-out;}
+  @keyframes flash{0%{box-shadow:0 0 0 3px var(--agent)}100%{box-shadow:0 0 0 3px transparent}}
+
+  /* wet ink bullets */
+  .node.wet > .gutter > .bullet{background:var(--agent); opacity:.6;}
+  .node.wet > .label{
+    color:var(--agent); opacity:.72;
+    border-left:2px solid var(--agent); margin-left:-2px;
+    background:var(--agent-tint);
+  }
+  .node.wet{transition:opacity .2s ease-out;}
+  .node.drying{
+    animation:dry .5s ease-out forwards;
+  }
+  @keyframes dry{to{}}
+  .node.rejecting{opacity:0; transform:translateX(-8px); transition:opacity .22s ease-out, transform .22s ease-out;}
+  .caret{display:inline-block; width:2px; height:1em; background:var(--agent); vertical-align:-2px; animation:blink 1s steps(1) infinite;}
+  @keyframes blink{50%{opacity:0}}
+
+  /* dock strip */
+  #dock{
+    position:fixed; top:0; right:0; width:26px; height:100%;
+    border-left:1px dashed var(--hair); background:transparent;
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    padding-top:80px; z-index:50; transition:background .18s ease-out, border-color .18s;
+  }
+  #dock .dlabel{
+    writing-mode:vertical-rl; font-size:10px; letter-spacing:.15em;
+    text-transform:uppercase; color:var(--faint); user-select:none; margin-top:6px;
+  }
+  #dock.hot{background:var(--agent-tint-strong); border-color:var(--agent);}
+  #dock .parked{color:var(--agent); font-size:14px; opacity:.4; cursor:grab;}
+
+  /* floating drag glyph */
+  #floater{
+    position:fixed; pointer-events:none; color:var(--agent); font-size:16px;
+    z-index:200; opacity:0; transition:opacity .12s;
+    text-shadow:0 1px 3px rgba(0,0,0,.2);
+  }
+
+  /* hint line */
+  #hint{
+    position:fixed; bottom:14px; left:18px; z-index:60;
+    font-size:11.5px; color:var(--faint); user-select:none;
+    max-width:60vw; line-height:1.5;
+  }
+  #hint b{color:var(--muted); font-weight:600;}
+  #hint kbd{
+    font:inherit; font-size:11px; color:var(--muted);
+    border:1px solid var(--hair); border-radius:4px; padding:0 4px; background:var(--hair);
+  }
+</style>
+
+<div id="stage">
+  <h1>project outline</h1>
+  <p class="sub">press <kbd>a</kbd> on a line to spawn an agent · everything is a gesture on the tree</p>
+  <div id="tree"></div>
+</div>
+
+<div id="dock"><span class="dlabel">detach dock</span></div>
+<div id="floater">⟡</div>
+<div id="hint"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---- outline data (~15 nodes) ----
+  const OUTLINE = [
+    {id:"n1",  d:0, t:"Redesign the onboarding flow"},
+    {id:"n2",  d:1, t:"Goals for Q3"},
+    {id:"n3",  d:2, t:"cut first-run steps from 6 to 3"},
+    {id:"n4",  d:2, t:"instrument the drop-off funnel"},
+    {id:"n5",  d:1, t:"Open questions"},
+    {id:"n6",  d:2, t:"do we keep the sample workspace?"},
+    {id:"n7",  d:2, t:"where does account creation move to?"},
+    {id:"n8",  d:1, t:"Draft the new welcome screen"},
+    {id:"n9",  d:2, t:"one sentence of value, then a single CTA"},
+    {id:"n10", d:2, t:"defer the tour until after first save"},
+    {id:"n11", d:1, t:"Risks"},
+    {id:"n12", d:2, t:"empty-state feels barren without seed data"},
+    {id:"n13", d:2, t:"migration for existing half-onboarded users"},
+    {id:"n14", d:1, t:"Next steps"},
+    {id:"n15", d:2, t:"spike the funnel dashboard this week"},
+  ];
+
+  // canned agent output keyed by the node it's asked from
+  const CANNED = {
+    n8: [
+      "Welcome. Turn any thought into a shared outline.",
+      "Primary CTA: “Start a board” — everything else waits.",
+      "Skip the tour; surface it as a dismissible hint after first save.",
+    ],
+    default: [
+      "Here's a first pass — treat these as proposals.",
+      "I pulled context from the ancestors above.",
+      "Tab to keep a line, Shift-Tab to drop it.",
+    ],
+  };
+  const REPLY_CANNED = [
+    "Good call — three seed nodes so the canvas isn't empty.",
+    "I'd label them as examples, greyed, one-tap to clear.",
+  ];
+
+  const treeEl = document.getElementById("tree");
+  const dockEl = document.getElementById("dock");
+  const floater = document.getElementById("floater");
+  const hintEl = document.getElementById("hint");
+
+  // runtime node list (we may insert wet-ink + user bullets)
+  let nodes = OUTLINE.map(n => ({...n}));
+  let cursor = 0;
+  let uid = 100;
+
+  // agent state
+  const agent = {
+    alive:false, attachedTo:null, detached:false,
+    booting:false, thinking:false,
+  };
+
+  const HINTS = {
+    base: `<b>j / k</b> move · <kbd>a</kbd> spawn agent · <kbd>o</kbd> add bullet · drag <b>⟡</b> to re-attach or dock`,
+    ghost:`type a prompt · <b>Enter</b> to launch · <b>Esc</b> to cancel`,
+    wet:  `<b>Tab</b> accept ink · <b>Shift-Tab</b> reject · <kbd>a</kbd> spawn · <kbd>o</kbd> add bullet`,
+    penned:`inside the pen — <kbd>o</kbd> to write a bullet the agent will answer · drag <b>⟡</b> to move it`,
+  };
+  function setHint(k){ hintEl.innerHTML = HINTS[k] || HINTS.base; }
+  setHint("base");
+
+  // ---- subtree helpers ----
+  function subtreeRange(idx){
+    // returns [start,end) of node idx + its descendants
+    const base = nodes[idx].d;
+    let end = idx+1;
+    while(end < nodes.length && nodes[end].d > base) end++;
+    return [idx, end];
+  }
+  function inPen(idx){
+    if(!agent.alive || agent.detached || agent.attachedTo==null) return false;
+    const ai = nodes.findIndex(n => n.id === agent.attachedTo);
+    if(ai < 0) return false;
+    const [s,e] = subtreeRange(ai);
+    return idx >= s && idx < e;
+  }
+
+  // ---- render ----
+  function render(){
+    treeEl.innerHTML = "";
+    const ai = agent.alive ? nodes.findIndex(n => n.id === agent.attachedTo) : -1;
+    nodes.forEach((n, i) => {
+      const row = document.createElement("div");
+      row.className = "node";
+      row.dataset.i = i;
+      if(i === cursor) row.classList.add("cursor");
+      if(n.wet) row.classList.add("wet");
+      if(agent.alive && !agent.detached && inPen(i)) row.classList.add("penned");
+
+      const indent = document.createElement("span");
+      indent.className = "indent";
+      indent.style.width = (n.d * 22) + "px";
+
+      const gutter = document.createElement("span");
+      gutter.className = "gutter";
+      if(i === ai && agent.alive && !agent.detached){
+        const g = document.createElement("span");
+        g.className = "glyph";
+        if(agent.booting) g.classList.add("booting");
+        else if(agent.thinking) g.classList.add("thinking");
+        g.textContent = "⟡";
+        g.title = "moss — leash: write subtree · drag to re-scope";
+        g.addEventListener("pointerdown", startDrag);
+        gutter.appendChild(g);
+      } else {
+        const b = document.createElement("span");
+        b.className = "bullet";
+        if(n.ring) b.classList.add("ring");
+        gutter.appendChild(b);
+      }
+
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = n.t;
+      if(n.wetTyping) label.appendChild(mkCaret());
+
+      row.appendChild(indent);
+      row.appendChild(gutter);
+      row.appendChild(label);
+
+      if(n.route){
+        const r = document.createElement("span");
+        r.className = "route show";
+        r.textContent = "→ ⟡";
+        label.appendChild(r);
+      }
+
+      row.addEventListener("click", () => { cursor = i; syncCursorHint(); render(); });
+      treeEl.appendChild(row);
+    });
+  }
+  function mkCaret(){ const c=document.createElement("span"); c.className="caret"; return c; }
+
+  function syncCursorHint(){
+    const n = nodes[cursor];
+    if(n && n.wet) setHint("wet");
+    else if(inPen(cursor)) setHint("penned");
+    else setHint("base");
+  }
+
+  // ---- spawn ceremony ----
+  function spawn(){
+    if(ghostOpen) return;
+    const n = nodes[cursor];
+    n.ring = true;
+    render();
+    openGhost(cursor);
+  }
+
+  let ghostOpen = false;
+  function openGhost(idx){
+    ghostOpen = true;
+    setHint("ghost");
+    const row = treeEl.querySelector(`.node[data-i="${idx}"]`);
+    const ghost = document.createElement("div");
+    ghost.className = "ghost";
+    ghost.style.marginLeft = (nodes[idx].d * 22 + 22) + "px";
+    ghost.innerHTML = `<span class="g-glyph">⟡</span><span>new agent</span>
+      <span class="leash">leash: write subtree ▾</span>
+      <span style="opacity:.6">prompt:</span>`;
+    const input = document.createElement("input");
+    input.placeholder = "one line…";
+    input.value = "draft the welcome screen";
+    ghost.appendChild(input);
+    row.after(ghost);
+    input.focus(); input.select();
+
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation(); // keep demo keys quiet while typing
+      if(e.key === "Enter"){
+        e.preventDefault();
+        const prompt = input.value.trim() || "help with this subtree";
+        ghost.remove();
+        ghostOpen = false;
+        launchAgent(idx, prompt);
+      } else if(e.key === "Escape"){
+        e.preventDefault();
+        ghost.remove(); ghostOpen = false;
+        nodes[idx].ring = false;
+        render(); syncCursorHint();
+      }
+    });
+  }
+
+  function launchAgent(idx, prompt){
+    nodes[idx].ring = false;
+    agent.alive = true;
+    agent.detached = false;
+    agent.attachedTo = nodes[idx].id;
+    agent.booting = true;
+    agent.thinking = false;
+    render();
+    syncCursorHint();
+
+    // boot then steady, then stream wet ink
+    setTimeout(() => {
+      agent.booting = false;
+      agent.thinking = true;
+      render();
+      streamCanned(nodes[idx].id, CANNED[nodes[idx].id] || CANNED.default, () => {
+        agent.thinking = false;
+        render();
+        syncCursorHint();
+      });
+    }, 1000);
+  }
+
+  // ---- streaming wet ink ----
+  function insertAfterSubtreeHead(headId, text){
+    const hi = nodes.findIndex(n => n.id === headId);
+    if(hi < 0) return -1;
+    // insert as first child (depth+1) right under head
+    const nn = {id:"w"+(uid++), d:nodes[hi].d+1, t:"", wet:true, wetTyping:true};
+    // find insertion point: after any existing wet children we just added -> keep order after head
+    let ins = hi+1;
+    while(ins < nodes.length && nodes[ins].wetJustAdded) ins++;
+    nn.wetJustAdded = true;
+    nodes.splice(ins, 0, nn);
+    if(cursor >= ins) cursor++;
+    return ins;
+  }
+
+  function streamCanned(headId, lines, done){
+    let li = 0;
+    function nextLine(){
+      if(li >= lines.length){
+        nodes.forEach(n => delete n.wetJustAdded);
+        done && done();
+        return;
+      }
+      const idx = insertAfterSubtreeHead(headId, lines[li]);
+      typeInto(idx, lines[li], () => { li++; nextLine(); });
+    }
+    nextLine();
+  }
+
+  function typeInto(idx, text, done){
+    const node = nodes[idx];
+    let c = 0;
+    node.wetTyping = true;
+    (function tick(){
+      const cur = nodes.indexOf(node);
+      if(cur < 0) return; // removed
+      c += Math.max(1, Math.round(Math.random()*2));
+      node.t = text.slice(0, c);
+      render();
+      if(c < text.length){
+        setTimeout(tick, 16 + Math.random()*26);
+      } else {
+        node.wetTyping = false;
+        render();
+        setTimeout(done, 140);
+      }
+    })();
+  }
+
+  // ---- open a bullet (user writes in the pen) ----
+  function openBullet(){
+    if(ghostOpen || editing) return;
+    const idx = cursor;
+    const depth = nodes[idx].d + (nodes[idx].d < 2 ? 1 : 0); // child if header, else sibling
+    const nn = {id:"u"+(uid++), d: Math.min(depth,3), t:"", user:true};
+    const insAt = idx + 1;
+    nodes.splice(insAt, 0, nn);
+    cursor = insAt;
+    render();
+    editBullet(insAt);
+  }
+
+  let editing = false;
+  function editBullet(idx){
+    editing = true;
+    const row = treeEl.querySelector(`.node[data-i="${idx}"]`);
+    const label = row.querySelector(".label");
+    const input = document.createElement("input");
+    input.style.cssText = "flex:1;border:none;background:transparent;color:inherit;font:inherit;outline:none;padding:1px 6px;";
+    input.placeholder = "new bullet…";
+    label.replaceWith(input);
+    input.focus();
+
+    const willRoute = inPen(idx);
+
+    function commit(){
+      editing = false;
+      const val = input.value.trim();
+      if(!val){ // empty -> remove
+        nodes.splice(idx,1);
+        if(cursor>=idx && cursor>0) cursor--;
+        render(); syncCursorHint(); return;
+      }
+      nodes[idx].t = val;
+      if(willRoute){
+        nodes[idx].route = true;
+        render();
+        // heat/thinking moves, canned reply grows under it
+        flashRow(idx);
+        agent.thinking = true; render();
+        setTimeout(() => {
+          nodes[idx].route = false;
+          streamCanned(nodes[idx].id, REPLY_CANNED, () => {
+            agent.thinking = false; render(); syncCursorHint();
+          });
+        }, 700);
+      } else {
+        render(); syncCursorHint();
+      }
+    }
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if(e.key === "Enter"){ e.preventDefault(); commit(); }
+      else if(e.key === "Escape"){ e.preventDefault(); input.value=""; commit(); }
+    });
+    input.addEventListener("blur", () => { if(editing) commit(); });
+  }
+
+  function flashRow(idx){
+    render();
+    const row = treeEl.querySelector(`.node[data-i="${idx}"]`);
+    if(row){ row.classList.add("flash"); setTimeout(()=>row.classList.remove("flash"),500); }
+  }
+
+  // ---- accept / reject wet ink ----
+  function acceptWet(idx){
+    const n = nodes[idx];
+    if(!n || !n.wet) return;
+    delete n.wet; delete n.wetTyping;
+    render();
+    const row = treeEl.querySelector(`.node[data-i="${idx}"]`);
+    if(row){ row.classList.add("drying"); }
+    syncCursorHint();
+  }
+  function rejectWet(idx){
+    const n = nodes[idx];
+    if(!n || !n.wet) return;
+    const row = treeEl.querySelector(`.node[data-i="${idx}"]`);
+    if(row){
+      row.classList.add("rejecting");
+      setTimeout(() => {
+        const cur = nodes.indexOf(n);
+        if(cur>=0){ nodes.splice(cur,1); if(cursor>=cur && cursor>0) cursor--; }
+        render(); syncCursorHint();
+      }, 220);
+    }
+  }
+
+  // ---- drag the glyph: re-attach or detach ----
+  let dragging = false;
+  function startDrag(e){
+    if(!agent.alive || agent.detached) return;
+    e.preventDefault();
+    dragging = true;
+    const g = e.currentTarget;
+    g.classList.add("dragging");
+    floater.style.opacity = "1";
+    moveFloater(e);
+
+    function onMove(ev){
+      moveFloater(ev);
+      // lens: highlight hovered node's subtree
+      clearLens();
+      const overDock = ev.clientX > window.innerWidth - 40;
+      dockEl.classList.toggle("hot", overDock);
+      if(!overDock){
+        const row = rowAt(ev.clientX, ev.clientY);
+        if(row){
+          const i = +row.dataset.i;
+          const [s,eN] = subtreeRange(i);
+          for(let k=s;k<eN;k++){
+            const r = treeEl.querySelector(`.node[data-i="${k}"]`);
+            if(r) r.classList.add("pen-lens");
+          }
+        }
+      }
+    }
+    function onUp(ev){
+      dragging = false;
+      g.classList.remove("dragging");
+      floater.style.opacity = "0";
+      clearLens();
+      dockEl.classList.remove("hot");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+
+      if(ev.clientX > window.innerWidth - 40){
+        detachAgent();
+      } else {
+        const row = rowAt(ev.clientX, ev.clientY);
+        if(row){ reattach(+row.dataset.i); }
+        else render();
+      }
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+  function moveFloater(e){
+    floater.style.left = (e.clientX + 8) + "px";
+    floater.style.top  = (e.clientY - 8) + "px";
+  }
+  function clearLens(){
+    treeEl.querySelectorAll(".pen-lens").forEach(el => el.classList.remove("pen-lens"));
+  }
+  function rowAt(x,y){
+    const el = document.elementFromPoint(x,y);
+    return el ? el.closest(".node") : null;
+  }
+  function reattach(i){
+    agent.attachedTo = nodes[i].id;
+    agent.detached = false;
+    render();
+    flashRow(i);
+    syncCursorHint();
+  }
+  function detachAgent(){
+    agent.detached = true;
+    render();
+    // park a dimmed glyph on the dock
+    dockEl.querySelector(".parked")?.remove();
+    const p = document.createElement("span");
+    p.className = "parked";
+    p.textContent = "⟡";
+    p.title = "moss — detached · drag back onto a line to resume";
+    p.addEventListener("pointerdown", startDockDrag);
+    dockEl.appendChild(p);
+    syncCursorHint();
+  }
+  function startDockDrag(e){
+    e.preventDefault();
+    const p = e.currentTarget;
+    floater.style.opacity = "1"; moveFloater(e);
+    function onMove(ev){
+      moveFloater(ev);
+      clearLens();
+      const row = rowAt(ev.clientX, ev.clientY);
+      if(row){
+        const [s,eN] = subtreeRange(+row.dataset.i);
+        for(let k=s;k<eN;k++){
+          const r = treeEl.querySelector(`.node[data-i="${k}"]`);
+          if(r) r.classList.add("pen-lens");
+        }
+      }
+    }
+    function onUp(ev){
+      floater.style.opacity="0"; clearLens();
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const row = rowAt(ev.clientX, ev.clientY);
+      if(row){ p.remove(); reattach(+row.dataset.i); }
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  // ---- keyboard ----
+  document.addEventListener("keydown", (e) => {
+    // never touch keys while typing in an input/textarea; "c" is the rail's.
+    const tag = document.activeElement && document.activeElement.tagName;
+    if(tag === "INPUT" || tag === "TEXTAREA") return;
+    if(e.metaKey || e.ctrlKey || e.altKey) return;
+    if(ghostOpen || editing) return;
+
+    switch(e.key){
+      case "j": case "ArrowDown":
+        e.preventDefault();
+        cursor = Math.min(cursor+1, nodes.length-1);
+        syncCursorHint(); render(); break;
+      case "k": case "ArrowUp":
+        e.preventDefault();
+        cursor = Math.max(cursor-1, 0);
+        syncCursorHint(); render(); break;
+      case "a":
+        e.preventDefault(); spawn(); break;
+      case "o":
+        e.preventDefault(); openBullet(); break;
+      case "Tab":
+        if(nodes[cursor] && nodes[cursor].wet){
+          e.preventDefault();
+          if(e.shiftKey) rejectWet(cursor); else acceptWet(cursor);
+        }
+        break;
+    }
+  });
+
+  render();
+})();
+</script>
