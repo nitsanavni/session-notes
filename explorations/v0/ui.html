@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>outliner</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --bg:#fbfbfa; --agent:#6c8eef; --urgent:#d97757;
+    --hair:rgba(26,26,26,.08); --dim:rgba(26,26,26,.45);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e8e8e6; --bg:#141413; --hair:rgba(232,232,230,.08); --dim:rgba(232,232,230,.45); }
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; height:100%; }
+  body{
+    font:15px/1.6 system-ui,-apple-system,"Inter",sans-serif;
+    color:var(--ink); background:var(--bg);
+    -webkit-font-smoothing:antialiased;
+  }
+  #app{ max-width:44rem; margin:0 auto; padding:3rem 1.25rem 6rem; }
+  #crumbs{ color:var(--dim); font-size:13px; margin-bottom:1.25rem; min-height:1.2em;
+    display:flex; gap:.4rem; flex-wrap:wrap; align-items:baseline; }
+  #crumbs .c{ cursor:pointer; }
+  #crumbs .c:hover{ color:var(--ink); }
+  #crumbs .sep{ opacity:.4; }
+  #title{ font-size:1.55rem; font-weight:600; line-height:1.25; margin:0 0 1.5rem;
+    outline:none; transition:opacity .18s ease; }
+  #title[hidden]{ display:none; }
+  #list{ position:relative; }
+  .row{
+    position:relative; padding:.28rem 0 .28rem 1.1rem; border-radius:6px;
+    transition:background .18s ease, transform .18s ease, opacity .2s ease;
+    cursor:pointer;
+  }
+  .row .bullet{ position:absolute; left:.15rem; top:.62rem; width:5px; height:5px;
+    border-radius:50%; background:var(--dim); transition:transform .18s ease; }
+  .row.cursor{ background:var(--hair); }
+  .row.cursor .bullet{ transform:scale(1.5); background:var(--ink); }
+  .row .content{ outline:none; }
+  .row.enter{ animation:enter .2s ease; }
+  @keyframes enter{ from{ opacity:0; transform:translateY(4px); } to{ opacity:1; transform:none; } }
+  /* authorship */
+  .row.agent .content{ color:var(--agent); }
+  .row.agent .bullet{ background:var(--agent); }
+  .byline{ color:var(--dim); font-size:12px; margin-left:.5rem; opacity:0; transition:opacity .18s; }
+  .row:hover .byline, .row.cursor .byline{ opacity:1; }
+  .row.agent .byline{ color:var(--agent); }
+  /* reply threads */
+  .row.reply{ margin-left:.4rem; padding-left:1rem; border-left:2px solid var(--hair); }
+  .row.reply.byother{ border-left-color:var(--agent); font-weight:450; color:var(--dim); }
+  .row.reply .prefix{ color:var(--agent); margin-right:.3rem; }
+  /* quotes */
+  .quote{ margin:.2rem 0 .2rem 1.1rem; padding:.4rem .7rem; border-radius:6px;
+    background:var(--hair); color:var(--dim); font-size:14px;
+    border-left:2px solid var(--dim); }
+  .quote .q-src{ font-size:11px; opacity:.7; display:block; margin-bottom:.1rem; }
+  /* presence */
+  .presence{ display:inline-flex; align-items:center; gap:.25rem; margin-left:.5rem;
+    font-size:12px; color:var(--agent); }
+  .presence .glyph{ transition:opacity .5s ease, transform .3s ease; }
+  .presence.fresh .glyph{ animation:glow 1.4s ease; }
+  @keyframes glow{ 0%{ text-shadow:0 0 8px var(--agent); transform:scale(1.4);} 100%{ text-shadow:none; transform:none;} }
+  #hint{ position:fixed; left:1.25rem; bottom:1rem; font-size:12px; color:var(--dim);
+    opacity:0; transition:opacity .2s; }
+  body:hover #hint{ opacity:1; }
+  #hint kbd{ font-family:inherit; color:var(--ink); opacity:.7; }
+  .editing{ background:var(--bg) !important; box-shadow:0 0 0 1px var(--hair); }
+  a{ color:var(--agent); }
+  .empty{ color:var(--dim); font-style:italic; padding:.28rem 0 .28rem 1.1rem; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="crumbs"></div>
+  <h1 id="title" hidden contenteditable="false"></h1>
+  <div id="list"></div>
+</div>
+<div id="hint"></div>
+
+<script>
+const AUTHOR = "nitsan";
+const $ = s => document.querySelector(s);
+const api = {
+  async tree(){ return (await fetch('/api/tree')).json(); },
+  async create(o){ return (await fetch('/api/nodes',{method:'POST',body:JSON.stringify(o)})).json(); },
+  async patch(id,content){ return fetch('/api/nodes/'+id,{method:'PATCH',body:JSON.stringify({content})}); },
+  async presence(node){ return fetch('/api/presence',{method:'POST',body:JSON.stringify({actor:AUTHOR,node})}); },
+};
+
+// ---- state ----
+let nodes = new Map();      // id -> node
+let edges = [];             // {parent,child,kind,rank}
+let focus = "";             // "" = board root (children with no parent-in-view)
+let cursorByLevel = new Map(); // focus -> cursor id
+let cursor = "";
+let editing = false;
+const presence = new Map();  // node -> {actor, ts}
+
+function childrenOf(id){
+  return edges.filter(e=>e.parent===id).sort((a,b)=>a.rank-b.rank);
+}
+function parentEdge(id){ return edges.find(e=>e.child===id); }
+function isAgent(a){ return a && a!==AUTHOR && a!=="system"; }
+
+// roots = nodes that have no incoming edge
+function roots(){
+  const hasParent = new Set(edges.map(e=>e.child));
+  return [...nodes.values()].filter(n=>!hasParent.has(n.id))
+    .sort((a,b)=>a.created_at<b.created_at?-1:1)
+    .map(n=>({parent:"",child:n.id,kind:"child",rank:0}));
+}
+
+// visible child edges under current focus
+function visibleEdges(){
+  return focus==="" ? roots() : childrenOf(focus);
+}
+
+// ---- render ----
+function render(){
+  const crumbs = $('#crumbs'); crumbs.innerHTML='';
+  const title = $('#title');
+  const path = [];
+  for(let cur=focus; cur; ){ path.unshift(cur); const e=parentEdge(cur); cur=e?e.parent:""; }
+  // breadcrumb
+  const home = document.createElement('span'); home.className='c'; home.textContent='◆ board';
+  home.onclick=()=>zoomTo(""); crumbs.appendChild(home);
+  path.forEach(id=>{
+    const sep=document.createElement('span'); sep.className='sep'; sep.textContent='/'; crumbs.appendChild(sep);
+    const c=document.createElement('span'); c.className='c'; c.textContent=short(nodes.get(id));
+    c.onclick=()=>zoomTo(id); crumbs.appendChild(c);
+  });
+
+  if(focus){
+    const n=nodes.get(focus);
+    title.hidden=false; title.textContent=n?n.content:'';
+    document.title=(n?short(n):'')+' — outliner';
+    title.classList.toggle('agent-title', n&&isAgent(n.author));
+  } else {
+    title.hidden=true; document.title='outliner';
+  }
+
+  const list=$('#list'); list.innerHTML='';
+  const evs=visibleEdges();
+  if(evs.length===0){
+    const e=document.createElement('div'); e.className='empty';
+    e.textContent = focus? 'empty — press o to add a child, r to reply' : 'empty board — press o to add';
+    list.appendChild(e); return;
+  }
+  for(const edge of evs){
+    if(edge.kind==='quote'){ list.appendChild(quoteRow(edge)); continue; }
+    list.appendChild(nodeRow(edge));
+  }
+  paintCursor();
+}
+
+function short(n){ if(!n) return '?'; const t=(n.content||'').split('\n')[0]; return t.length>32?t.slice(0,32)+'…':t||'(empty)'; }
+
+function nodeRow(edge){
+  const n=nodes.get(edge.child); if(!n) return document.createElement('div');
+  const row=document.createElement('div');
+  row.className='row'; row.dataset.id=n.id;
+  const agent=isAgent(n.author);
+  if(agent) row.classList.add('agent');
+  if(edge.kind==='reply'){ row.classList.add('reply'); if(n.author!==AUTHOR) row.classList.add('byother'); }
+  const bullet=document.createElement('span'); bullet.className='bullet'; row.appendChild(bullet);
+  const content=document.createElement('span'); content.className='content';
+  if(edge.kind==='reply' && n.author!==AUTHOR){
+    const pre=document.createElement('span'); pre.className='prefix'; pre.textContent='↳ '+n.author+':';
+    row.appendChild(pre);
+  }
+  content.innerHTML=linkify(n.content);
+  row.appendChild(content);
+  const by=document.createElement('span'); by.className='byline'; by.textContent=n.author;
+  row.appendChild(by);
+  // child count affordance
+  const kc=childrenOf(n.id).length;
+  if(kc){ const c=document.createElement('span'); c.className='byline'; c.textContent='· '+kc; row.appendChild(c); }
+  attachPresence(row,n.id);
+  row.onclick=(e)=>{ if(editing) return; cursor=n.id; paintCursor();
+    if(e.detail===2){ startEdit(n.id); } };
+  return row;
+}
+
+function quoteRow(edge){
+  const tgt=nodes.get(edge.child);
+  const q=document.createElement('div'); q.className='quote'; q.dataset.id=edge.child;
+  const src=document.createElement('span'); src.className='q-src';
+  src.textContent='“ quote · '+(tgt?tgt.author:'?');
+  q.appendChild(src);
+  const body=document.createElement('span'); body.innerHTML= tgt? linkify(tgt.content):'(missing)';
+  q.appendChild(body);
+  return q;
+}
+
+function attachPresence(row,id){
+  const p=presence.get(id); if(!p) return;
+  const el=document.createElement('span'); el.className='presence';
+  const age=Date.now()-p.ts;
+  if(age<1600) el.classList.add('fresh');
+  const g=document.createElement('span'); g.className='glyph'; g.textContent='⟡';
+  g.style.opacity = age<3000? '1':'.5';
+  el.appendChild(g);
+  const nm=document.createElement('span'); nm.textContent=p.actor; el.appendChild(nm);
+  row.appendChild(el);
+}
+
+function paintCursor(){
+  const rows=[...document.querySelectorAll('.row')];
+  const ids=rows.map(r=>r.dataset.id);
+  if(!ids.includes(cursor)) cursor=ids[0]||"";
+  rows.forEach(r=>r.classList.toggle('cursor', r.dataset.id===cursor));
+  cursorByLevel.set(focus,cursor);
+}
+
+function linkify(t){
+  const esc=(t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return esc.replace(/(https?:\/\/[^\s]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
+}
+
+// ---- navigation ----
+function visibleIds(){ return visibleEdges().filter(e=>e.kind!=='quote').map(e=>e.child); }
+function move(delta){
+  const ids=visibleIds(); if(!ids.length) return;
+  let i=ids.indexOf(cursor); i=(i<0?0:i+delta);
+  i=Math.max(0,Math.min(ids.length-1,i));
+  cursor=ids[i]; paintCursor();
+  ensureVisible();
+  api.presence(cursor);
+}
+function ensureVisible(){
+  const el=document.querySelector('.row.cursor'); if(el) el.scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+function zoomTo(id){
+  focus=id;
+  cursor=cursorByLevel.get(id) || (visibleIds()[0]||"");
+  render();
+  if(id) api.presence(id);
+}
+function zoomIn(){ if(cursor) zoomTo(cursor); }
+function zoomOut(){
+  if(!focus) return;
+  const e=parentEdge(focus); const target=e?e.parent:"";
+  const was=focus; zoomTo(target); cursor=was; paintCursor();
+}
+
+// ---- edit ----
+function startEdit(id){
+  const row=[...document.querySelectorAll('.row')].find(r=>r.dataset.id===id);
+  if(!row) return;
+  const content=row.querySelector('.content');
+  editing=true; row.classList.add('editing'); content.contentEditable='true';
+  content.textContent=nodes.get(id).content;
+  content.focus();
+  const range=document.createRange(); range.selectNodeContents(content);
+  const sel=getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  const finish=(commit)=>{
+    content.contentEditable='false'; row.classList.remove('editing'); editing=false;
+    content.removeEventListener('keydown',onk); content.removeEventListener('blur',onblur);
+    if(commit){ const v=content.textContent; if(v!==nodes.get(id).content) api.patch(id,v); }
+    render();
+  };
+  const onk=(e)=>{
+    e.stopPropagation();
+    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); finish(true); }
+    else if(e.key==='Escape'){ e.preventDefault(); finish(false); }
+  };
+  const onblur=()=>finish(true);
+  content.addEventListener('keydown',onk); content.addEventListener('blur',onblur);
+}
+
+function startEditTitle(){
+  if(!focus) return;
+  const title=$('#title');
+  editing=true; title.contentEditable='true'; title.focus();
+  const range=document.createRange(); range.selectNodeContents(title);
+  const sel=getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  const finish=(commit)=>{
+    title.contentEditable='false'; editing=false;
+    title.removeEventListener('keydown',onk); title.removeEventListener('blur',onblur);
+    if(commit){ const v=title.textContent; if(v!==nodes.get(focus).content) api.patch(focus,v); }
+    render();
+  };
+  const onk=(e)=>{ e.stopPropagation();
+    if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); finish(true);}
+    else if(e.key==='Escape'){ e.preventDefault(); finish(false);} };
+  const onblur=()=>finish(true);
+  title.addEventListener('keydown',onk); title.addEventListener('blur',onblur);
+}
+
+// ---- mutations ----
+async function addSibling(){
+  // sibling = child of current focus (same parent as the cursor's level)
+  const n=await api.create({parent:focus,kind:'child',content:'',author:AUTHOR});
+  cursor=n.id; // SSE will render; edit once present
+  waitFor(n.id,()=>startEdit(n.id));
+}
+async function addReply(){
+  const target = cursor || focus;
+  if(!target) return;
+  const n=await api.create({parent:target,kind:'reply',content:'',author:AUTHOR});
+  // reply lives under the target; zoom in so it is visible, then edit
+  if(target!==focus) zoomTo(target);
+  waitFor(n.id,()=>startEdit(n.id));
+}
+let yanked="";
+// indent: make cursor a child of its previous sibling
+async function indent(){
+  const ids=visibleIds(); const i=ids.indexOf(cursor); if(i<=0) return;
+  const prev=ids[i-1];
+  await reparent(cursor,prev);
+}
+async function outdent(){
+  if(!focus) return;
+  const pe=parentEdge(focus);
+  await reparent(cursor, pe?pe.parent:"");
+}
+async function reparent(child,newParent){
+  await fetch('/api/reparent',{method:'POST',body:JSON.stringify({child,parent:newParent})});
+}
+
+function waitFor(id,fn){
+  if(nodes.has(id)){ fn(); return; }
+  const iv=setInterval(()=>{ if(nodes.has(id)){ clearInterval(iv); render(); fn(); } },40);
+  setTimeout(()=>clearInterval(iv),2000);
+}
+
+// ---- keys ----
+const HINT='<kbd>j/k</kbd> move · <kbd>Enter</kbd> zoom in · <kbd>Esc</kbd> out · <kbd>i</kbd> edit · <kbd>o</kbd> sibling · <kbd>r</kbd> reply · <kbd>Tab</kbd> indent · <kbd>y</kbd>/<kbd>p</kbd> quote';
+$('#hint').innerHTML=HINT;
+document.addEventListener('keydown',(e)=>{
+  if(editing) return;
+  switch(e.key){
+    case 'j': case 'ArrowDown': e.preventDefault(); move(1); break;
+    case 'k': case 'ArrowUp': e.preventDefault(); move(-1); break;
+    case 'Enter': e.preventDefault(); zoomIn(); break;
+    case 'Escape': e.preventDefault(); zoomOut(); break;
+    case 'i': e.preventDefault(); if(cursor) startEdit(cursor); break;
+    case 'o': e.preventDefault(); addSibling(); break;
+    case 'r': e.preventDefault(); addReply(); break;
+    case 'y': e.preventDefault(); yanked=cursor; flash('yanked'); break;
+    case 'p': e.preventDefault(); doPaste(); break;
+    case 'Tab': e.preventDefault(); if(e.shiftKey) outdent(); else indent(); break;
+  }
+});
+// double-Enter on title area handled via crumb click; title edit:
+$('#title').addEventListener('click',()=>{ if(!editing) startEditTitle(); });
+
+let flashT;
+function flash(msg){ const h=$('#hint'); h.style.opacity=1; h.innerHTML='<kbd>'+msg+'</kbd>';
+  clearTimeout(flashT); flashT=setTimeout(()=>{ h.innerHTML=HINT; h.style.opacity=''; },1200); }
+
+async function doPaste(){
+  if(!yanked){ flash('nothing yanked'); return; }
+  const parent=focus; // paste as quote under current focus
+  await fetch('/api/edges',{method:'POST',body:JSON.stringify({parent,child:yanked,kind:'quote'})});
+  flash('pasted quote');
+}
+
+// ---- SSE ----
+let lastSeq=0;
+function connect(){
+  const es=new EventSource('/api/events?since=0');
+  es.onmessage=(m)=>{
+    const ev=JSON.parse(m.data); lastSeq=ev.seq;
+    applyEvent(ev);
+  };
+  es.onerror=()=>{ /* browser auto-reconnects */ };
+}
+function applyEvent(ev){
+  const p=ev.payload;
+  switch(ev.kind){
+    case 'node.add': nodes.set(p.id,{id:p.id,content:p.content,author:p.author,created_at:ev.ts,updated_at:ev.ts}); scheduleRender(true); break;
+    case 'node.edit': { const n=nodes.get(p.id); if(n){ n.content=p.content; n.updated_at=ev.ts; } scheduleRender(); break; }
+    case 'node.del': delSubtree(p.id); scheduleRender(); break;
+    case 'edge.add': edges.push({parent:p.parent,child:p.child,kind:p.kind,rank:p.rank}); scheduleRender(true); break;
+    case 'edge.move':
+      edges=edges.filter(e=>!(e.child===p.child && e.kind!=='quote'));
+      edges.push({parent:p.parent,child:p.child,kind:p.kind,rank:p.rank}); scheduleRender(); break;
+    case 'presence.move':
+      // clear old position for this actor
+      for(const [k,v] of presence){ if(v.actor===p.actor) presence.delete(k); }
+      if(p.node){ presence.set(p.node,{actor:p.actor,ts:Date.now()}); }
+      scheduleRender(); break;
+  }
+}
+function delSubtree(id){
+  const doomed=new Set([id]); let grew=true;
+  while(grew){ grew=false; for(const e of edges){ if(doomed.has(e.parent)&&!doomed.has(e.child)){ doomed.add(e.child); grew=true; } } }
+  for(const d of doomed) nodes.delete(d);
+  edges=edges.filter(e=>!doomed.has(e.parent)&&!doomed.has(e.child));
+}
+
+let renderT, wantEntrance=false;
+function scheduleRender(entrance){
+  if(entrance) wantEntrance=true;
+  clearTimeout(renderT); renderT=setTimeout(()=>{
+    if(editing) return; // don't stomp an active edit
+    const ent=wantEntrance; wantEntrance=false;
+    render();
+    if(ent){ document.querySelectorAll('.row').forEach(r=>r.classList.add('enter'));
+      setTimeout(()=>document.querySelectorAll('.row.enter').forEach(r=>r.classList.remove('enter')),260); }
+  },30);
+}
+
+// presence fade tick
+setInterval(()=>{ if(presence.size && !editing) scheduleRender(); },1000);
+
+// ---- boot ----
+async function boot(){
+  const t=await api.tree();
+  nodes=new Map((t.nodes||[]).map(n=>[n.id,n]));
+  edges=t.edges||[];
+  focus=""; cursor=visibleIds()[0]||"";
+  render();
+  connect();
+}
+boot();
+</script>
+</body>
+</html>
