@@ -69,6 +69,10 @@
   .editing{ background:var(--bg) !important; box-shadow:0 0 0 1px var(--hair); }
   a{ color:var(--agent); }
   .empty{ color:var(--dim); font-style:italic; padding:.28rem 0 .28rem 1.1rem; }
+  #toast{ position:fixed; right:1.25rem; bottom:1rem; font-size:13px; color:var(--urgent);
+    background:var(--bg); border:1px solid var(--hair); border-radius:8px; padding:.4rem .7rem;
+    opacity:0; transform:translateY(4px); transition:opacity .2s ease, transform .2s ease; pointer-events:none; }
+  #toast.show{ opacity:1; transform:none; }
 </style>
 </head>
 <body>
@@ -82,10 +86,23 @@
 <script>
 const AUTHOR = "nitsan";
 const $ = s => document.querySelector(s);
+// Surface server rejections (400/404/413) instead of failing silently.
+let toastTimer;
+function toast(msg){
+  let t=document.getElementById('toast');
+  if(!t){ t=document.createElement('div'); t.id='toast'; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2600);
+}
+async function checked(p,what){
+  const r=await p;
+  if(!r.ok && r.status!==404){ toast(what+' failed: '+(await r.text()||r.status).toString().trim().slice(0,120)); }
+  return r;
+}
 const api = {
   async tree(){ return (await fetch('/api/tree')).json(); },
-  async create(o){ return (await fetch('/api/nodes',{method:'POST',body:JSON.stringify(o)})).json(); },
-  async patch(id,content){ return fetch('/api/nodes/'+id,{method:'PATCH',body:JSON.stringify({content})}); },
+  async create(o){ return (await checked(fetch('/api/nodes',{method:'POST',body:JSON.stringify(o)}),'create')).json(); },
+  async patch(id,content){ return checked(fetch('/api/nodes/'+id,{method:'PATCH',body:JSON.stringify({content})}),'save'); },
   async del(id){ return fetch('/api/nodes/'+id,{method:'DELETE'}); },
   async presence(node){ return fetch('/api/presence',{method:'POST',body:JSON.stringify({actor:AUTHOR,node})}); },
 };
