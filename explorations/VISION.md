@@ -10,8 +10,21 @@ One idea holds everything: **the outline is a single continuous place — notes,
 2. **Context is the path.** Talking to an agent at a node gives it the ancestor spine + local subtree. What the agent knows is literally the visible tree around your reply — inspectable via a "context lens" strip. Quoting another node splices its path in (transclusion, not copy).
 3. **The agent is a cursor, not a chat window.** An attached agent has a position, a hue, a "pen" (permission-scoped subtree). Its attention renders as heat that fades like footprints. Agent output streams in as "wet ink" — translucent proposals you accept (Tab) or reject; the agent never edits your text, only appends.
 4. **Structure is the harness.** Almost no DSL: `@name:` spawns with path-as-context, `>>` steers an attached agent, `[ ]/[~]/[x]/[?]` is the lifecycle, `↳ name:` marks agent replies, `[[^id]]` transcludes results. Fan-out = N children; pipeline = a node referencing done nodes; judge = a skeptic child. With agents off, the same bytes read as ordinary nested notes.
-5. **Threads are scaffolding; notes are the product.** Reply = child, fork = parallel rail, and any thread can be **distilled** — one keystroke collapses the exchange into 1–3 durable bullets with the transcript archived beneath.
+5. **Threads are scaffolding; notes are the product.** Reply = child, fork = two children, quote = a pointer edge. Behaviors like *distill* (collapse a thread into durable bullets) are **not** core — they're an agent doing ordinary operations with the primitives.
 6. **Architecture:** Go + SQLite. One `nodes` table, typed `edges` (child/reply/quote/transclude), append-only `events` table streamed over SSE as the sync/presence protocol. Agents attach via an MCP server the notes server exposes (`read_context`, `append`, `move_presence`); Claude Code hooks remain for ambient attachment. Last-write-wins + fractional ranks; no CRDTs in v0. Fresh module in this repo ("scratch with good neighbors").
+
+## Primitives, not features (working agreement, 2026-07-15)
+
+nitsan, reviewing the threads demo: "we need to create *primitives*, like threads, not encode higher level functions like 'distill'".
+
+The core is exactly four primitives:
+
+1. **Node** — one block of content.
+2. **Typed edge** — child / reply / quote (+ rank).
+3. **Position-as-context** — an actor at a node sees its path + local subtree, and can query/pin to see more (fog of war).
+4. **Authorship** — every node knows who wrote it (user or which agent); agent-authored nodes arrive as proposals.
+
+The litmus test for anything else: *could an agent build it using the primitives?* Distill = write a summary node + re-parent the thread. Fork = add a second child. Judge panel = spawn skeptic children. All derived; none belong in the core or the DSL. The product ships primitives plus great defaults built on them — the defaults are replaceable, the primitives are not.
 
 ## Aesthetic (all demos share this)
 

@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "author": "nitsan",
+    "text": "these ae in the right directio, but they're going too far; we need to create *primitives*, like threads, not encode higher level functions like 'distill'",
+    "replyTo": null,
+    "at": "2026-07-15T09:32:39.595Z"
+  },
+  {
+    "id": 2,
+    "author": "claude",
+    "text": "That lands. The primitive set is: node, typed edge (child/reply/quote), position-as-context, and attributed authorship. Distill is not a primitive — it's just an agent doing ordinary operations (write a summary node, re-parent the thread under it), which any agent could be asked to do in its own words. Same lens kills fork-as-feature: a fork is just two children. The test for the core: could an agent build distill USING the primitives? If yes, it stays out of the core. I'll re-cut the vision doc with a hard primitives/derived split.",
+    "replyTo": 1,
+    "at": "2026-07-15T09:32:59.756Z"
+  }
+]
